@@ -1,0 +1,217 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum TipoUsuario {
+  CLIENTE
+  BARBEIRO
+}
+
+enum StatusAgendamento {
+  CONFIRMADO
+  CANCELADO
+  CONCLUIDO
+  NAO_COMPARECEU
+}
+
+enum StatusListaEspera {
+  ATIVA
+  NOTIFICADA
+  ATENDIDA
+  CANCELADA
+  EXPIRADA
+}
+
+enum TipoNotificacao {
+  AGENDAMENTO
+  CANCELAMENTO
+  LEMBRETE
+  LISTA_ESPERA
+  EMERGENCIA
+  AVISO
+  ALTERACAO_HORARIO
+}
+
+enum StatusEmergencia {
+  ATIVA
+  ENCERRADA
+  CANCELADA
+}
+
+model Usuario {
+  id              Int              @id @default(autoincrement())
+  nome            String
+  telefone        String           @unique
+  email           String?          @unique
+  senhaHash       String
+  tipoUsuario     TipoUsuario
+  ativo           Boolean          @default(true)
+  dataCriacao     DateTime         @default(now())
+  dataAtualizacao DateTime         @updatedAt
+
+  cliente         Cliente?
+  barbeiro        Barbeiro?
+  notificacoes    Notificacao[]
+  mensagensEnviadas  Mensagem[]    @relation("MensagensEnviadas")
+  mensagensRecebidas Mensagem[]    @relation("MensagensRecebidas")
+}
+
+model Cliente {
+  id              Int              @id @default(autoincrement())
+  usuarioId       Int              @unique
+  dataCriacao     DateTime         @default(now())
+  dataAtualizacao DateTime         @updatedAt
+
+  usuario         Usuario          @relation(fields: [usuarioId], references: [id])
+  agendamentos    Agendamento[]
+  listaEspera     ListaEspera[]
+}
+
+model Barbeiro {
+  id                 Int                    @id @default(autoincrement())
+  usuarioId          Int                    @unique
+  ativo              Boolean                @default(true)
+  dataCriacao        DateTime               @default(now())
+  dataAtualizacao    DateTime               @updatedAt
+
+  usuario            Usuario                @relation(fields: [usuarioId], references: [id])
+  servicos           Servico[]
+  agendamentos       Agendamento[]
+  horarios           HorarioFuncionamento[]
+  bloqueios          BloqueioAgenda[]
+  emergencias        Emergencia[]
+}
+
+model Servico {
+  id              Int              @id @default(autoincrement())
+  barbeiroId      Int
+  nome            String
+  descricao       String?
+  duracaoMinutos  Int
+  preco           Decimal          @db.Decimal(10, 2)
+  ativo           Boolean          @default(true)
+  dataCriacao     DateTime         @default(now())
+  dataAtualizacao DateTime         @updatedAt
+
+  barbeiro        Barbeiro         @relation(fields: [barbeiroId], references: [id])
+  agendamentos    Agendamento[]
+  listaEspera     ListaEspera[]
+
+  @@index([barbeiroId])
+  @@index([ativo])
+}
+
+model Agendamento {
+  id              Int                @id @default(autoincrement())
+  clienteId       Int
+  barbeiroId      Int
+  servicoId       Int
+  data            DateTime           @db.Date
+  horaInicio      DateTime
+  horaFim         DateTime
+  status          StatusAgendamento  @default(CONFIRMADO)
+  observacoes     String?
+  dataCriacao     DateTime           @default(now())
+  dataAtualizacao DateTime           @updatedAt
+
+  cliente         Cliente            @relation(fields: [clienteId], references: [id])
+  barbeiro        Barbeiro           @relation(fields: [barbeiroId], references: [id])
+  servico         Servico            @relation(fields: [servicoId], references: [id])
+
+  @@index([clienteId])
+  @@index([barbeiroId, data])
+  @@index([servicoId])
+  @@index([status])
+}
+
+model ListaEspera {
+  id              Int                @id @default(autoincrement())
+  clienteId       Int
+  servicoId       Int
+  dataDesejada    DateTime           @db.Date
+  status          StatusListaEspera  @default(ATIVA)
+  dataEntrada     DateTime           @default(now())
+  dataAtualizacao DateTime           @updatedAt
+
+  cliente         Cliente            @relation(fields: [clienteId], references: [id])
+  servico         Servico            @relation(fields: [servicoId], references: [id])
+
+  @@index([clienteId])
+  @@index([servicoId, dataDesejada, status])
+}
+
+model Notificacao {
+  id          Int              @id @default(autoincrement())
+  usuarioId   Int
+  tipo        TipoNotificacao
+  titulo      String
+  mensagem    String
+  lida        Boolean          @default(false)
+  dataCriacao DateTime         @default(now())
+
+  usuario     Usuario          @relation(fields: [usuarioId], references: [id])
+
+  @@index([usuarioId, lida])
+}
+
+model Mensagem {
+  id             Int      @id @default(autoincrement())
+  remetenteId    Int
+  destinatarioId Int
+  conteudo       String   @db.VarChar(50)
+  lida           Boolean  @default(false)
+  dataCriacao    DateTime @default(now())
+
+  remetente      Usuario  @relation("MensagensEnviadas", fields: [remetenteId], references: [id])
+  destinatario   Usuario  @relation("MensagensRecebidas", fields: [destinatarioId], references: [id])
+
+  @@index([remetenteId])
+  @@index([destinatarioId, lida])
+}
+
+model HorarioFuncionamento {
+  id         Int      @id @default(autoincrement())
+  barbeiroId Int
+  diaSemana  Int
+  horaInicio String
+  horaFim    String
+  ativo      Boolean  @default(true)
+
+  barbeiro   Barbeiro @relation(fields: [barbeiroId], references: [id])
+
+  @@index([barbeiroId, diaSemana])
+}
+
+model BloqueioAgenda {
+  id          Int      @id @default(autoincrement())
+  barbeiroId  Int
+  data        DateTime @db.Date
+  horaInicio  DateTime
+  horaFim     DateTime
+  motivo      String?
+  ativo       Boolean  @default(true)
+  dataCriacao DateTime @default(now())
+
+  barbeiro    Barbeiro @relation(fields: [barbeiroId], references: [id])
+
+  @@index([barbeiroId, data])
+}
+
+model Emergencia {
+  id          Int               @id @default(autoincrement())
+  barbeiroId  Int
+  dataInicio  DateTime
+  dataFim     DateTime
+  motivo      String
+  status      StatusEmergencia  @default(ATIVA)
+  dataCriacao DateTime          @default(now())
+
+  barbeiro    Barbeiro          @relation(fields: [barbeiroId], references: [id])
+
+  @@index([barbeiroId, dataInicio, dataFim])
+}

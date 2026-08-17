@@ -44,3 +44,9 @@ test-results/
 # Prisma / banco local
 *.db
 *.db-journal
+
+# Arquivos de agentes/skills gerados por ferramentas
+backend/.agents/
+backend/.claude/
+backend/.windsurf/
+backend/skills-lock.json
