@@ -78,4 +78,64 @@ export class UsersService {
 
     return this.sanitizeUser(usuarioAtualizado) as UserResponseDto;
   }
+
+  /**
+   * MÉTODO INTERNO - NÃO EXPOR EM CONTROLLER
+   * Retorna usuário COM senhaHash para autenticação
+   * Uso exclusivo: AuthService.login()
+   */
+  async findByPhoneWithPasswordHash(telefone: string) {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { telefone },
+    });
+
+    return usuario;
+  }
+
+  /**
+   * Cria um novo usuário no banco.
+   * IMPORTANTE: Esta operação é atômica quando usada com nested create no Prisma.
+   */
+  async createUser(data: {
+    nome: string;
+    telefone: string;
+    senhaHash: string;
+    tipoUsuario: 'CLIENTE' | 'BARBEIRO';
+    email?: string | null;
+  }) {
+    // Para clients, criar usuário + cliente atomicamente
+    if (data.tipoUsuario === 'CLIENTE') {
+      const usuario = await this.prisma.usuario.create({
+        data: {
+          nome: data.nome,
+          telefone: data.telefone,
+          senhaHash: data.senhaHash,
+          tipoUsuario: data.tipoUsuario,
+          email: data.email || null,
+          ativo: true,
+          cliente: {
+            create: {},
+          },
+        },
+        select: this.publicUserSelect,
+      });
+
+      return this.sanitizeUser(usuario) as UserResponseDto;
+    }
+
+    // Para barbeiros ou outros tipos, criar apenas usuario
+    const usuario = await this.prisma.usuario.create({
+      data: {
+        nome: data.nome,
+        telefone: data.telefone,
+        senhaHash: data.senhaHash,
+        tipoUsuario: data.tipoUsuario,
+        email: data.email || null,
+        ativo: true,
+      },
+      select: this.publicUserSelect,
+    });
+
+    return this.sanitizeUser(usuario) as UserResponseDto;
+  }
 }
