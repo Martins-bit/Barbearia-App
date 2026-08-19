@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { TipoUsuario } from '../generated/prisma/enums';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 
@@ -38,6 +39,27 @@ export class UsersService {
     }
 
     return this.sanitizeUser(usuario);
+  }
+
+  async findAuthorizationStateById(userId: number): Promise<{
+    id: number;
+    ativo: boolean;
+    tipoUsuario: TipoUsuario;
+    barbeiro: { ativo: boolean } | null;
+  } | null> {
+    return this.prisma.usuario.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        ativo: true,
+        tipoUsuario: true,
+        barbeiro: {
+          select: {
+            ativo: true,
+          },
+        },
+      },
+    });
   }
 
   async findByPhone(telefone: string): Promise<UserResponseDto | null> {

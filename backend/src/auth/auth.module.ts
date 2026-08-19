@@ -5,6 +5,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { JwtGuard } from './guards/jwt.guard';
+import { RolesGuard } from './guards/roles.guard';
 import { UsersModule } from '../users/users.module';
 import { JWT_CONFIG } from '../common/config/jwt.config';
 
@@ -18,7 +19,7 @@ import { JWT_CONFIG } from '../common/config/jwt.config';
     UsersModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtGuard],
-  exports: [AuthService, JwtGuard],
+  providers: [AuthService, JwtStrategy, JwtGuard, RolesGuard],
+  exports: [AuthService, JwtGuard, RolesGuard],
 })
 export class AuthModule {}
