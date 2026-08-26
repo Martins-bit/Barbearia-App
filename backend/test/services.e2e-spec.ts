@@ -14,6 +14,8 @@ describe('Services (e2e)', () => {
   let barberAToken: string;
   let barberBToken: string;
   let inactiveBarberToken: string;
+  let disabledUserToken: string;
+  let disabledUserId: number;
   let activeServiceId: number;
   let inactiveServiceId: number;
   let barberAServiceId: number;
@@ -25,6 +27,12 @@ describe('Services (e2e)', () => {
   const password = 'services-e2e-password';
   const testPrefix = `services-e2e-${Date.now()}`;
   const phoneBase = String(Date.now()).slice(-8);
+
+  // Retorna um ID que certamente não existe no banco (máximo atual + folga).
+  const getNonExistentServiceId = async (): Promise<number> => {
+    const aggregate = await prisma.servico.aggregate({ _max: { id: true } });
+    return (aggregate._max.id ?? 0) + 1000;
+  };
 
   beforeAll(async () => {
     const moduleFixture = await Test.createTestingModule({
@@ -77,6 +85,19 @@ describe('Services (e2e)', () => {
     const barberB = await createBarber('Barbeiro B');
     const inactiveBarber = await createBarber('Barbeiro Inativo', false);
 
+    // Cliente usado para validar bloqueio de usuário com Usuario.ativo = false.
+    const deactivatableClient = await prisma.usuario.create({
+      data: {
+        nome: 'Cliente Desativavel Services E2E',
+        telefone: `${phoneBase}91`,
+        senhaHash,
+        tipoUsuario: TipoUsuario.CLIENTE,
+        cliente: { create: {} },
+      },
+    });
+    createdUserIds.push(deactivatableClient.id);
+    disabledUserId = deactivatableClient.id;
+
     const createService = async (barbeiroId: number, ativo: boolean) => {
       const service = await prisma.servico.create({
         data: {
@@ -115,6 +136,12 @@ describe('Services (e2e)', () => {
     barberAToken = await login(barberA.telefone);
     barberBToken = await login(barberB.telefone);
     inactiveBarberToken = await login(inactiveBarber.telefone);
+
+    const disabledLogin = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ telefone: deactivatableClient.telefone, senha: password })
+      .expect(200);
+    disabledUserToken = disabledLogin.body.token as string;
   });
 
   afterAll(async () => {
@@ -337,5 +364,426 @@ describe('Services (e2e)', () => {
 
   it('não expõe rota DELETE', async () => {
     await request(app.getHttpServer()).delete('/services/1').expect(404);
+  });
+
+  describe('IDs inexistentes', () => {
+    it('GET /services/:id com ID inexistente retorna 404', async () => {
+      const nonExistentId = await getNonExistentServiceId();
+
+      const response = await request(app.getHttpServer())
+        .get(`/services/${nonExistentId}`)
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(404);
+
+      expect(response.body.message).toBe('Serviço não encontrado.');
+    });
+
+    it('PATCH /services/:id com ID inexistente retorna 404', async () => {
+      const nonExistentId = await getNonExistentServiceId();
+
+      await request(app.getHttpServer())
+        .patch(`/services/${nonExistentId}`)
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ nome: 'Serviço inexistente' })
+        .expect(404);
+    });
+
+    it('PATCH /services/:id/status com ID inexistente retorna 404', async () => {
+      const nonExistentId = await getNonExistentServiceId();
+
+      await request(app.getHttpServer())
+        .patch(`/services/${nonExistentId}/status`)
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ ativo: true })
+        .expect(404);
+    });
+  });
+
+  describe('IDs malformados', () => {
+    it('GET /services/abc retorna 400', async () => {
+      await request(app.getHttpServer())
+        .get('/services/abc')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(400);
+    });
+
+    it('PATCH /services/abc retorna 400', async () => {
+      await request(app.getHttpServer())
+        .patch('/services/abc')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ nome: 'ID inválido' })
+        .expect(400);
+    });
+
+    it('PATCH /services/abc/status retorna 400', async () => {
+      await request(app.getHttpServer())
+        .patch('/services/abc/status')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ ativo: false })
+        .expect(400);
+    });
+
+    // O ParseIntPipe atual (/^-?\d+$/) aceita inteiros negativos; "-1"
+    // atravessa o pipe e cai na busca por ID inexistente -> 404.
+    it('GET /services/-1 retorna 404', async () => {
+      await request(app.getHttpServer())
+        .get('/services/-1')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(404);
+    });
+
+    it('PATCH /services/-1 retorna 404', async () => {
+      await request(app.getHttpServer())
+        .patch('/services/-1')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ nome: 'ID negativo' })
+        .expect(404);
+    });
+
+    it('PATCH /services/-1/status retorna 404', async () => {
+      await request(app.getHttpServer())
+        .patch('/services/-1/status')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ ativo: false })
+        .expect(404);
+    });
+  });
+
+  describe('campos obrigatórios ausentes', () => {
+    it.each([
+      ['sem nome', { duracaoMinutos: 30, preco: '20.00' }],
+      ['sem duracaoMinutos', { nome: 'Sem duração e2e', preco: '20.00' }],
+      ['sem preco', { nome: 'Sem preço e2e', duracaoMinutos: 30 }],
+    ])('rejeita POST /services %s', async (_name, partialPayload) => {
+      await request(app.getHttpServer())
+        .post('/services')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send(partialPayload)
+        .expect(400);
+    });
+  });
+
+  describe('limites de campos', () => {
+    it('rejeita nome com menos de 2 caracteres no POST /services', async () => {
+      await request(app.getHttpServer())
+        .post('/services')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ nome: 'A', duracaoMinutos: 30, preco: '20.00' })
+        .expect(400);
+    });
+
+    it('rejeita nome com mais de 100 caracteres no POST /services', async () => {
+      await request(app.getHttpServer())
+        .post('/services')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ nome: 'N'.repeat(101), duracaoMinutos: 30, preco: '20.00' })
+        .expect(400);
+    });
+
+    it('rejeita descricao com mais de 500 caracteres no POST /services', async () => {
+      await request(app.getHttpServer())
+        .post('/services')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          nome: `${testPrefix}-descricao-longa`,
+          descricao: 'D'.repeat(501),
+          duracaoMinutos: 30,
+          preco: '20.00',
+        })
+        .expect(400);
+    });
+
+    it('aceita preco "0" no POST /services', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/services')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          nome: `${testPrefix}-preco-zero`,
+          duracaoMinutos: 30,
+          preco: '0',
+        })
+        .expect(201);
+
+      createdServiceIds.push(response.body.id);
+      expect(response.body.preco).toBe('0.00');
+    });
+
+    it('aceita preco "99999999.99" no limite superior no POST /services', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/services')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          nome: `${testPrefix}-preco-limite`,
+          duracaoMinutos: 480,
+          preco: '99999999.99',
+        })
+        .expect(201);
+
+      createdServiceIds.push(response.body.id);
+      expect(response.body.preco).toBe('99999999.99');
+    });
+  });
+
+  describe('ciclo completo de status', () => {
+    it('serviço criado aparece, some e volta aos endpoints públicos conforme status', async () => {
+      const createResponse = await request(app.getHttpServer())
+        .post('/services')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          nome: `${testPrefix}-fluxo-status`,
+          descricao: 'Fluxo completo de status',
+          duracaoMinutos: 60,
+          preco: '50.00',
+        })
+        .expect(201);
+
+      const serviceId = createResponse.body.id as number;
+      createdServiceIds.push(serviceId);
+      expect(createResponse.body.ativo).toBe(true);
+
+      // ativo: aparece na listagem pública
+      await request(app.getHttpServer())
+        .get('/services')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200)
+        .expect((response) => {
+          expect(response.body).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ id: serviceId, ativo: true }),
+            ]),
+          );
+        });
+
+      // desativa
+      await request(app.getHttpServer())
+        .patch(`/services/${serviceId}/status`)
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ ativo: false })
+        .expect(200)
+        .expect((response) => expect(response.body.ativo).toBe(false));
+
+      // inativo: some da listagem pública
+      await request(app.getHttpServer())
+        .get('/services')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200)
+        .expect((response) => {
+          expect(response.body).not.toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: serviceId })]),
+          );
+          for (const service of response.body) {
+            expect(service.ativo).toBe(true);
+          }
+        });
+
+      // inativo: detalhe público retorna 404
+      await request(app.getHttpServer())
+        .get(`/services/${serviceId}`)
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(404);
+
+      // o dono ainda enxerga o serviço inativo na área administrativa
+      await request(app.getHttpServer())
+        .get('/services/admin')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .expect(200)
+        .expect((response) => {
+          expect(response.body).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ id: serviceId, ativo: false }),
+            ]),
+          );
+        });
+
+      // reativa
+      await request(app.getHttpServer())
+        .patch(`/services/${serviceId}/status`)
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({ ativo: true })
+        .expect(200)
+        .expect((response) => expect(response.body.ativo).toBe(true));
+
+      // reativado: volta à listagem pública
+      await request(app.getHttpServer())
+        .get('/services')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200)
+        .expect((response) => {
+          expect(response.body).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ id: serviceId, ativo: true }),
+            ]),
+          );
+        });
+
+      // reativado: detalhe público responde novamente
+      await request(app.getHttpServer())
+        .get(`/services/${serviceId}`)
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200)
+        .expect((response) => expect(response.body.ativo).toBe(true));
+    });
+  });
+
+  describe('atualização completa', () => {
+    it('PATCH atualiza todos os campos do serviço próprio e persiste as alterações', async () => {
+      const createResponse = await request(app.getHttpServer())
+        .post('/services')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          nome: `${testPrefix}-update-completo`,
+          descricao: 'Descrição original',
+          duracaoMinutos: 30,
+          preco: '10.00',
+        })
+        .expect(201);
+
+      const serviceId = createResponse.body.id as number;
+      createdServiceIds.push(serviceId);
+
+      const updatePayload = {
+        nome: 'Serviço totalmente atualizado',
+        descricao: 'Descrição atualizada',
+        duracaoMinutos: 90,
+        preco: '123.45',
+      };
+
+      const updateResponse = await request(app.getHttpServer())
+        .patch(`/services/${serviceId}`)
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send(updatePayload)
+        .expect(200);
+
+      expect(updateResponse.body).toMatchObject({
+        id: serviceId,
+        ...updatePayload,
+      });
+
+      // confirma persistência consultando novamente
+      await request(app.getHttpServer())
+        .get(`/services/${serviceId}`)
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .expect(200)
+        .expect((response) =>
+          expect(response.body).toMatchObject(updatePayload),
+        );
+    });
+  });
+
+  describe('autenticação e segurança', () => {
+    it('rejeita token inválido em rotas protegidas de Services', async () => {
+      await request(app.getHttpServer())
+        .get('/services')
+        .set('Authorization', 'Bearer token-invalido')
+        .expect(401);
+
+      await request(app.getHttpServer())
+        .get('/services/admin')
+        .set('Authorization', 'Bearer token-invalido')
+        .expect(401);
+    });
+
+    it('usuario desativado com JWT previamente emitido recebe 401 nas rotas administrativas', async () => {
+      // Estado inicial: cliente ativo autentica, mas recebe 403 por papel.
+      await request(app.getHttpServer())
+        .get('/services/admin')
+        .set('Authorization', `Bearer ${disabledUserToken}`)
+        .expect(403);
+
+      try {
+        await prisma.usuario.update({
+          where: { id: disabledUserId },
+          data: { ativo: false },
+        });
+
+        await request(app.getHttpServer())
+          .get('/services/admin')
+          .set('Authorization', `Bearer ${disabledUserToken}`)
+          .expect(401);
+
+        await request(app.getHttpServer())
+          .post('/services')
+          .set('Authorization', `Bearer ${disabledUserToken}`)
+          .send({ nome: 'Usuario desativado', duracaoMinutos: 30, preco: '20.00' })
+          .expect(401);
+      } finally {
+        // Restaura o estado para não deixar dado permanente alterado.
+        await prisma.usuario.update({
+          where: { id: disabledUserId },
+          data: { ativo: true },
+        });
+      }
+
+      // Restaurado, volta ao comportamento normal de cliente.
+      await request(app.getHttpServer())
+        .get('/services/admin')
+        .set('Authorization', `Bearer ${disabledUserToken}`)
+        .expect(403);
+    });
+
+    it('nenhuma resposta de Services expõe dados administrativos ou financeiros', async () => {
+      const createBody = (
+        await request(app.getHttpServer())
+          .post('/services')
+          .set('Authorization', `Bearer ${barberAToken}`)
+          .send({
+            nome: `${testPrefix}-sem-vazamento`,
+            descricao: 'Verificação de exposição de dados',
+            duracaoMinutos: 30,
+            preco: '25.00',
+          })
+          .expect(201)
+      ).body;
+      createdServiceIds.push(createBody.id);
+
+      const patchBody = (
+        await request(app.getHttpServer())
+          .patch(`/services/${createBody.id}`)
+          .set('Authorization', `Bearer ${barberAToken}`)
+          .send({ descricao: 'Descrição alterada' })
+          .expect(200)
+      ).body;
+
+      const statusBody = (
+        await request(app.getHttpServer())
+          .patch(`/services/${createBody.id}/status`)
+          .set('Authorization', `Bearer ${barberAToken}`)
+          .send({ ativo: false })
+          .expect(200)
+      ).body;
+
+      const publicListBody = (
+        await request(app.getHttpServer())
+          .get('/services')
+          .set('Authorization', `Bearer ${clientToken}`)
+          .expect(200)
+      ).body;
+
+      const adminListBody = (
+        await request(app.getHttpServer())
+          .get('/services/admin')
+          .set('Authorization', `Bearer ${barberAToken}`)
+          .expect(200)
+      ).body;
+
+      const responsesToCheck = [
+        createBody,
+        patchBody,
+        statusBody,
+        ...publicListBody,
+        ...adminListBody,
+      ];
+
+      for (const service of responsesToCheck) {
+        expect(service).not.toHaveProperty('barbeiroId');
+        expect(service).not.toHaveProperty('dataCriacao');
+        expect(service).not.toHaveProperty('dataAtualizacao');
+        expect(service).not.toHaveProperty('senhaHash');
+      }
+
+      expect(JSON.stringify(responsesToCheck)).not.toMatch(
+        /pagamento|pix|checkout|transaç|transac|cobranç|cobranca/i,
+      );
+    });
   });
 });
