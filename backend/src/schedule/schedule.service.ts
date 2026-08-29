@@ -7,6 +7,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma, PrismaClient } from '../generated/prisma/client';
 import { StatusAgendamento, TipoUsuario } from '../generated/prisma/enums';
 import { UsersService } from '../users/users.service';
 import { AvailabilityQueryDto } from './dto/availability-query.dto';
@@ -32,9 +33,63 @@ import {
  */
 export const SLOT_GRANULARITY_MINUTES = 15;
 
-interface MinuteInterval {
+/**
+ * Clients Prisma aceitos pelos helpers de Schedule: o client normal e o
+ * TransactionClient de uma transação interativa. Permite que TODA decisão de
+ * agenda seja executada dentro da MESMA transação que adquiriu os advisory
+ * locks (não usar this.prisma entre lock e commit).
+ */
+export type ScheduleDbClient = PrismaClient | Prisma.TransactionClient;
+
+/**
+ * Namespaces do advisory lock (forma de DUAS chaves do PostgreSQL):
+ *   1 → calendário do BARBEIRO (key2 = barbeiroId);
+ *   2 → calendário do CLIENTE (key2 = clienteId, usado pelo módulo Appointments).
+ * As formas single-key e two-key do Postgres ocupam namespaces próprios e os
+ * domínios 1/2 nunca colidem entre si. Variante XACT: o lock é liberado
+ * automaticamente no commit/rollback da transação.
+ */
+export const CALENDAR_LOCK_NS_BARBEIRO = 1;
+export const CALENDAR_LOCK_NS_CLIENTE = 2;
+
+/**
+ * Serializa decisões de agenda do barbeiro (criação de agendamentos, criação
+ * de bloqueios e substituição de horários) dentro da transação chamadora.
+ * Cada fluxo adquire exatamente UM lock → sem ciclos/deadlock.
+ */
+export async function acquireCalendarLock(
+  client: ScheduleDbClient,
+  barbeiroId: number,
+): Promise<void> {
+  // Cast ::int necessário: o Prisma vincula números JS em raw queries como
+  // numeric/double e o Postgres não resolveria pg_advisory_xact_lock(numeric).
+  // $executeRaw (e não $queryRaw): pg_advisory_xact_lock retorna void, coluna
+  // que o $queryRaw não consegue desserializar.
+  await client.$executeRaw`SELECT pg_advisory_xact_lock(
+    ${CALENDAR_LOCK_NS_BARBEIRO}::int,
+    ${barbeiroId}::int
+  )`;
+}
+
+export interface MinuteInterval {
   ini: number;
   fim: number;
+}
+
+/** Origem de uma ocupação do dia (define 400 vs 409 na criação de agendamentos). */
+export type ScheduleBusySource = 'BLOQUEIO' | 'AGENDAMENTO';
+
+export interface ScheduleBusyInterval {
+  ini: number;
+  fim: number;
+  origem: ScheduleBusySource;
+}
+
+export interface ScheduleDaySnapshot {
+  /** Janelas ATIVAS do dia, ordenadas por início. */
+  windows: MinuteInterval[];
+  /** Ocupações do dia (bloqueios ativos + agendamentos CONFIRMADOS). */
+  busy: ScheduleBusyInterval[];
 }
 
 interface BlockRow {
@@ -113,6 +168,9 @@ export class ScheduleService {
     this.validateWindowsPayload(dto.horarios);
 
     await this.prisma.$transaction(async (tx) => {
+      // Serializa contra criação de agendamentos e bloqueios concorrentes.
+      await acquireCalendarLock(tx, barberId);
+
       await tx.horarioFuncionamento.deleteMany({
         where: { barbeiroId: barberId },
       });
@@ -205,46 +263,53 @@ export class ScheduleService {
 
     const dayFilter = prismaDateFilter(dto.data);
 
-    const existingBlocks = await this.prisma.bloqueioAgenda.findMany({
-      where: { barbeiroId: barberId, data: dayFilter, ativo: true },
-    });
-    for (const block of existingBlocks) {
-      const busyIni = localMinuteOfDay(block.horaInicio);
-      const busyFim = localMinuteOfDay(block.horaFim);
-      if (startMinutes < busyFim && busyIni < endMinutes) {
-        throw new ConflictException('Já existe um bloqueio para esse período.');
+    // Transação + advisory lock: bloqueios, agendamentos CONFIRMADOS e a
+    // decisão de criar são avaliados na MESMA conexão serializada, fechando
+    // a corrida contra criações concorrentes de agendamentos/bloqueios.
+    return this.prisma.$transaction(async (tx) => {
+      await acquireCalendarLock(tx, barberId);
+
+      const existingBlocks = await tx.bloqueioAgenda.findMany({
+        where: { barbeiroId: barberId, data: dayFilter, ativo: true },
+      });
+      for (const block of existingBlocks) {
+        const busyIni = localMinuteOfDay(block.horaInicio);
+        const busyFim = localMinuteOfDay(block.horaFim);
+        if (startMinutes < busyFim && busyIni < endMinutes) {
+          throw new ConflictException('Já existe um bloqueio para esse período.');
+        }
       }
-    }
 
-    // API.md §15.1: verificar conflitos com agendamentos existentes.
-    const appointments = await this.prisma.agendamento.findMany({
-      where: {
-        barbeiroId: barberId,
-        data: dayFilter,
-        status: { in: [StatusAgendamento.CONFIRMADO] },
-      },
-    });
-    for (const appointment of appointments) {
-      const busyIni = localMinuteOfDay(appointment.horaInicio);
-      const busyFim = localMinuteOfDay(appointment.horaFim);
-      if (startMinutes < busyFim && busyIni < endMinutes) {
-        throw new ConflictException(
-          'Existe um agendamento confirmado nesse período.',
-        );
+      // API.md §15.1: verificar conflitos com agendamentos existentes.
+      const appointments = await tx.agendamento.findMany({
+        where: {
+          barbeiroId: barberId,
+          data: dayFilter,
+          status: { in: [StatusAgendamento.CONFIRMADO] },
+        },
+      });
+      for (const appointment of appointments) {
+        const busyIni = localMinuteOfDay(appointment.horaInicio);
+        const busyFim = localMinuteOfDay(appointment.horaFim);
+        if (startMinutes < busyFim && busyIni < endMinutes) {
+          throw new ConflictException(
+            'Existe um agendamento confirmado nesse período.',
+          );
+        }
       }
-    }
 
-    const created = await this.prisma.bloqueioAgenda.create({
-      data: {
-        barbeiroId: barberId,
-        data: dayFilter,
-        horaInicio: inicioUtc,
-        horaFim: fimUtc,
-        motivo: dto.motivo ?? null,
-      },
+      const created = await tx.bloqueioAgenda.create({
+        data: {
+          barbeiroId: barberId,
+          data: dayFilter,
+          horaInicio: inicioUtc,
+          horaFim: fimUtc,
+          motivo: dto.motivo ?? null,
+        },
+      });
+
+      return this.toBlockResponse(created);
     });
-
-    return this.toBlockResponse(created);
   }
 
   async findOwnBlocks(
@@ -301,6 +366,66 @@ export class ScheduleService {
   // ---------------------------------------------------------------------
   // Disponibilidade (API.md §8)
   // ---------------------------------------------------------------------
+
+  /**
+   * Snapshot do dia para o barbeiro: janelas ativas + ocupações (bloqueios
+   * ativos e agendamentos CONFIRMADOS), tudo em minutos locais
+   * (America/Sao_Paulo). `client` deve ser o MESMO client da transação
+   * chamadora quando usado dentro de um advisory lock.
+   */
+  async getDateSnapshot(
+    client: ScheduleDbClient,
+    barbeiroId: number,
+    dateKey: string,
+  ): Promise<ScheduleDaySnapshot> {
+    const windows: MinuteInterval[] = (
+      await client.horarioFuncionamento.findMany({
+        where: {
+          barbeiroId,
+          diaSemana: weekdayFromDateKey(dateKey),
+          ativo: true,
+        },
+      })
+    )
+      .map((window) => ({
+        ini: this.parseHHmm(window.horaInicio),
+        fim: this.parseHHmm(window.horaFim),
+      }))
+      .filter((window) => window.ini < window.fim)
+      .sort((a, b) => a.ini - b.ini);
+
+    const busy: ScheduleBusyInterval[] = [
+      ...(
+        await client.bloqueioAgenda.findMany({
+          where: {
+            barbeiroId,
+            data: prismaDateFilter(dateKey),
+            ativo: true,
+          },
+        })
+      ).map((block) => ({
+        ini: localMinuteOfDay(block.horaInicio),
+        fim: localMinuteOfDay(block.horaFim),
+        origem: 'BLOQUEIO' as const,
+      })),
+      ...(
+        await client.agendamento.findMany({
+          where: {
+            barbeiroId,
+            data: prismaDateFilter(dateKey),
+            status: { in: [StatusAgendamento.CONFIRMADO] },
+          },
+        })
+      ).map((appointment) => ({
+        ini: localMinuteOfDay(appointment.horaInicio),
+        fim: localMinuteOfDay(appointment.horaFim),
+        origem: 'AGENDAMENTO' as const,
+      })),
+    ];
+
+    return { windows, busy };
+  }
+
   async getAvailability(
     userId: number,
     query: AvailabilityQueryDto,
@@ -341,21 +466,11 @@ export class ScheduleService {
 
     const duration = service.duracaoMinutos;
 
-    const dayWindows: MinuteInterval[] = (
-      await this.prisma.horarioFuncionamento.findMany({
-        where: {
-          barbeiroId: targetBarberId,
-          diaSemana: weekdayFromDateKey(query.data),
-          ativo: true,
-        },
-      })
-    )
-      .map((window) => ({
-        ini: this.parseHHmm(window.horaInicio),
-        fim: this.parseHHmm(window.horaFim),
-      }))
-      .filter((window) => window.ini < window.fim)
-      .sort((a, b) => a.ini - b.ini);
+    const { windows: dayWindows, busy } = await this.getDateSnapshot(
+      this.prisma,
+      targetBarberId,
+      query.data,
+    );
 
     const buildEmpty = (): AvailabilityResponseDto => ({
       data: query.data,
@@ -367,34 +482,6 @@ export class ScheduleService {
     if (dayWindows.length === 0) {
       return buildEmpty();
     }
-
-    // Ocupações do dia convertidas para minutos locais (America/Sao_Paulo).
-    const busy: MinuteInterval[] = [
-      ...(
-        await this.prisma.bloqueioAgenda.findMany({
-          where: {
-            barbeiroId: targetBarberId,
-            data: prismaDateFilter(query.data),
-            ativo: true,
-          },
-        })
-      ).map((block) => ({
-        ini: localMinuteOfDay(block.horaInicio),
-        fim: localMinuteOfDay(block.horaFim),
-      })),
-      ...(
-        await this.prisma.agendamento.findMany({
-          where: {
-            barbeiroId: targetBarberId,
-            data: prismaDateFilter(query.data),
-            status: { in: [StatusAgendamento.CONFIRMADO] },
-          },
-        })
-      ).map((appointment) => ({
-        ini: localMinuteOfDay(appointment.horaInicio),
-        fim: localMinuteOfDay(appointment.horaFim),
-      })),
-    ];
 
     const freeSlots = new Set<number>();
     for (const window of dayWindows) {

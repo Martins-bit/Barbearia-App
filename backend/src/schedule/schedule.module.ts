@@ -14,5 +14,6 @@ import { ScheduleService } from './schedule.service';
     AvailabilityController,
   ],
   providers: [ScheduleService],
+  exports: [ScheduleService],
 })
 export class ScheduleModule {}

@@ -12,6 +12,8 @@ const DAY_MON = '2099-01-12'; // segunda-feira
 function buildPrismaMock(): any {
   const prismaMock: any = {
     barbeiro: { findUnique: jest.fn() },
+    // Advisory lock do calendário (acquireCalendarLock usa $executeRaw).
+    $executeRaw: jest.fn().mockResolvedValue(1),
     horarioFuncionamento: {
       findMany: jest.fn().mockResolvedValue([]),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
