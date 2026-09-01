@@ -7,7 +7,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { StatusAgendamento } from '../generated/prisma/enums';
 import { ScheduleService } from '../schedule/schedule.service';
 import { AppointmentsService } from './appointments.service';
-import { prismaDateFilter, zonedWallTimeToUtc } from '../schedule/tz.util';
+import {
+  getZonedParts,
+  prismaDateFilter,
+  zonedWallTimeToUtc,
+} from '../schedule/tz.util';
 
 const BARBER_ID = 21;
 const CLIENT_ID = 31;
@@ -25,6 +29,7 @@ function buildPrismaMock(): any {
       findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn(),
       findUnique: jest.fn(),
+      updateMany: jest.fn(),
     },
     $executeRaw: jest.fn().mockResolvedValue(1),
   };
@@ -504,6 +509,276 @@ describe('AppointmentsService', () => {
         }),
       );
       expect(result.map((appointment) => appointment.id)).toEqual([1, 2]);
+    });
+  });
+
+  describe('transições de status (ETAPA 4B)', () => {
+    it('CLIENTE cancela próprio CONFIRMADO antes do dia -> sucesso', async () => {
+      const laterDate = '2099-01-13';
+      const row = buildFullRow(51, {
+        data: prismaDateFilter(laterDate),
+        horaInicio: zonedWallTimeToUtc(laterDate, '10:00'),
+        horaFim: zonedWallTimeToUtc(laterDate, '10:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique
+        .mockResolvedValueOnce(row)
+        .mockResolvedValueOnce({ ...row, status: StatusAgendamento.CANCELADO });
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.cancelAppointment(1, 51);
+
+      expect(result.status).toBe(StatusAgendamento.CANCELADO);
+      expect(prisma.agendamento.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: 51,
+            clienteId: CLIENT_ID,
+            status: StatusAgendamento.CONFIRMADO,
+          },
+          data: { status: StatusAgendamento.CANCELADO },
+        }),
+      );
+    });
+
+    it('CLIENTE tenta cancelar no mesmo dia -> 400', async () => {
+      const now = new Date();
+      const { year, month, day } = getZonedParts(now);
+      const todayKey = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const row = buildFullRow(52, {
+        data: prismaDateFilter(todayKey),
+        horaInicio: zonedWallTimeToUtc(todayKey, '10:00'),
+        horaFim: zonedWallTimeToUtc(todayKey, '10:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(row);
+
+      await expect(service.cancelAppointment(1, 52)).rejects.toThrow(
+        new BadRequestException(
+          'Cliente só pode cancelar até o dia anterior ao agendamento.',
+        ),
+      );
+    });
+
+    it('CLIENTE tenta cancelar agendamento de outro cliente -> 404', async () => {
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(
+        buildFullRow(53, { clienteId: CLIENT_ID + 1, status: StatusAgendamento.CONFIRMADO }),
+      );
+
+      await expect(service.cancelAppointment(1, 53)).rejects.toThrow(
+        new NotFoundException('Agendamento não encontrado.'),
+      );
+    });
+
+    it('BARBEIRO cancela agendamento da própria agenda -> sucesso', async () => {
+      const laterDate = '2099-01-14';
+      const row = buildFullRow(54, {
+        data: prismaDateFilter(laterDate),
+        horaInicio: zonedWallTimeToUtc(laterDate, '11:00'),
+        horaFim: zonedWallTimeToUtc(laterDate, '11:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique
+        .mockResolvedValueOnce(row)
+        .mockResolvedValueOnce({ ...row, status: StatusAgendamento.CANCELADO });
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.cancelAppointment(1, 54);
+
+      expect(result.status).toBe(StatusAgendamento.CANCELADO);
+      expect(prisma.agendamento.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            id: 54,
+            barbeiroId: BARBER_ID,
+            status: StatusAgendamento.CONFIRMADO,
+          },
+          data: { status: StatusAgendamento.CANCELADO },
+        }),
+      );
+    });
+
+    it('BARBEIRO tenta cancelar agendamento de outro barbeiro -> 404', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(
+        buildFullRow(55, { barbeiroId: BARBER_ID + 1, status: StatusAgendamento.CONFIRMADO }),
+      );
+
+      await expect(service.cancelAppointment(1, 55)).rejects.toThrow(
+        new NotFoundException('Agendamento não encontrado.'),
+      );
+    });
+
+    it('cancelamento com status terminal/incompatível -> 409', async () => {
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(
+        buildFullRow(56, { status: StatusAgendamento.CANCELADO }),
+      );
+
+      await expect(service.cancelAppointment(1, 56)).rejects.toThrow(
+        new ConflictException('Status incompatível para cancelamento.'),
+      );
+    });
+
+    it('cancelamento concorrente count=0 -> 409', async () => {
+      const laterDate = '2099-01-15';
+      const row = buildFullRow(57, {
+        data: prismaDateFilter(laterDate),
+        horaInicio: zonedWallTimeToUtc(laterDate, '12:00'),
+        horaFim: zonedWallTimeToUtc(laterDate, '12:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(row);
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.cancelAppointment(1, 57)).rejects.toThrow(
+        new ConflictException('Agendamento não pode mais ser cancelado.'),
+      );
+    });
+
+    it('BARBEIRO conclui próprio agendamento após horaFim -> sucesso', async () => {
+      const finished = new Date(Date.now() - 60_000);
+      const row = buildFullRow(61, {
+        horaInicio: new Date(finished.getTime() - 60_000),
+        horaFim: finished,
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique
+        .mockResolvedValueOnce(row)
+        .mockResolvedValueOnce({ ...row, status: StatusAgendamento.CONCLUIDO });
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.completeAppointment(1, 61);
+
+      expect(result.status).toBe(StatusAgendamento.CONCLUIDO);
+    });
+
+    it('conclusão antes de horaFim -> 400', async () => {
+      const row = buildFullRow(62, {
+        horaInicio: new Date(Date.now() - 60_000),
+        horaFim: new Date(Date.now() + 60_000),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(row);
+
+      await expect(service.completeAppointment(1, 62)).rejects.toThrow(
+        new BadRequestException('Só é possível concluir após o fim do agendamento.'),
+      );
+    });
+
+    it('conclusão de outro barbeiro -> 404', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(
+        buildFullRow(63, { barbeiroId: BARBER_ID + 1, status: StatusAgendamento.CONFIRMADO }),
+      );
+
+      await expect(service.completeAppointment(1, 63)).rejects.toThrow(
+        new NotFoundException('Agendamento não encontrado.'),
+      );
+    });
+
+    it('conclusão com status incompatível -> 409', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(
+        buildFullRow(64, { status: StatusAgendamento.CANCELADO }),
+      );
+
+      await expect(service.completeAppointment(1, 64)).rejects.toThrow(
+        new ConflictException('Status incompatível para conclusão.'),
+      );
+    });
+
+    it('conclusão concorrente count=0 -> 409', async () => {
+      const row = buildFullRow(65, {
+        horaInicio: new Date(Date.now() - 120_000),
+        horaFim: new Date(Date.now() - 30_000),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(row);
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.completeAppointment(1, 65)).rejects.toThrow(
+        new ConflictException('Agendamento foi atualizado por outra operação.'),
+      );
+    });
+
+    it('BARBEIRO marca próprio falta após/início -> sucesso', async () => {
+      const started = new Date(Date.now() - 15_000);
+      const row = buildFullRow(71, {
+        horaInicio: started,
+        horaFim: new Date(started.getTime() + 30_000),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique
+        .mockResolvedValueOnce(row)
+        .mockResolvedValueOnce({ ...row, status: StatusAgendamento.NAO_COMPARECEU });
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.noShowAppointment(1, 71);
+
+      expect(result.status).toBe(StatusAgendamento.NAO_COMPARECEU);
+    });
+
+    it('falta antes de horaInicio -> 400', async () => {
+      const row = buildFullRow(72, {
+        horaInicio: new Date(Date.now() + 60_000),
+        horaFim: new Date(Date.now() + 120_000),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(row);
+
+      await expect(service.noShowAppointment(1, 72)).rejects.toThrow(
+        new BadRequestException(
+          'Só é possível marcar falta após o início do agendamento.',
+        ),
+      );
+    });
+
+    it('falta de outro barbeiro -> 404', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(
+        buildFullRow(73, { barbeiroId: BARBER_ID + 1, status: StatusAgendamento.CONFIRMADO }),
+      );
+
+      await expect(service.noShowAppointment(1, 73)).rejects.toThrow(
+        new NotFoundException('Agendamento não encontrado.'),
+      );
+    });
+
+    it('falta com status incompatível -> 409', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(
+        buildFullRow(74, { status: StatusAgendamento.CANCELADO }),
+      );
+
+      await expect(service.noShowAppointment(1, 74)).rejects.toThrow(
+        new ConflictException('Status incompatível para falta.'),
+      );
+    });
+
+    it('falta concorrente count=0 -> 409', async () => {
+      const row = buildFullRow(75, {
+        horaInicio: new Date(Date.now() - 60_000),
+        horaFim: new Date(Date.now() + 30_000),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(row);
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.noShowAppointment(1, 75)).rejects.toThrow(
+        new ConflictException('Agendamento foi atualizado por outra operação.'),
+      );
     });
   });
 });

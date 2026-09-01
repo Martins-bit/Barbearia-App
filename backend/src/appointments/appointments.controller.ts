@@ -5,6 +5,7 @@ import {
   HttpCode,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -67,5 +68,35 @@ export class AppointmentsController {
     @CurrentUser() userId: number,
   ): Promise<AppointmentResponseDto[]> {
     return this.appointmentsService.findByBarberUserId(userId);
+  }
+
+  @Patch(':id/cancel')
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.CLIENTE, TipoUsuario.BARBEIRO)
+  async cancelAppointment(
+    @CurrentUser() userId: number,
+    @Param('id', ParseIntPipe) appointmentId: number,
+  ): Promise<AppointmentResponseDto> {
+    return this.appointmentsService.cancelAppointment(userId, appointmentId);
+  }
+
+  @Patch(':id/complete')
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.BARBEIRO)
+  async completeAppointment(
+    @CurrentUser() userId: number,
+    @Param('id', ParseIntPipe) appointmentId: number,
+  ): Promise<AppointmentResponseDto> {
+    return this.appointmentsService.completeAppointment(userId, appointmentId);
+  }
+
+  @Patch(':id/no-show')
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.BARBEIRO)
+  async noShowAppointment(
+    @CurrentUser() userId: number,
+    @Param('id', ParseIntPipe) appointmentId: number,
+  ): Promise<AppointmentResponseDto> {
+    return this.appointmentsService.noShowAppointment(userId, appointmentId);
   }
 }

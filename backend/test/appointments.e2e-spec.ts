@@ -596,6 +596,21 @@ describe('Appointments (e2e)', () => {
       .get('/appointments')
       .set('Authorization', `Bearer ${token}`);
 
+  const cancelAppointment = (token: string, id: number) =>
+    request(app.getHttpServer())
+      .patch(`/appointments/${id}/cancel`)
+      .set('Authorization', `Bearer ${token}`);
+
+  const completeAppointment = (token: string, id: number) =>
+    request(app.getHttpServer())
+      .patch(`/appointments/${id}/complete`)
+      .set('Authorization', `Bearer ${token}`);
+
+  const noShowAppointment = (token: string, id: number) =>
+    request(app.getHttpServer())
+      .patch(`/appointments/${id}/no-show`)
+      .set('Authorization', `Bearer ${token}`);
+
   it('GET /appointments/:id exige JWT', async () => {
     await request(app.getHttpServer()).get('/appointments/1').expect(401);
   });
@@ -768,5 +783,167 @@ describe('Appointments (e2e)', () => {
     expect(statuses).toEqual(['CONCLUIDO', 'NAO_COMPARECEU'].sort());
     expect(response.body.find((item: any) => item.id === first.id).horaInicio).toBe('09:30');
     expect(response.body.find((item: any) => item.id === second.id).horaInicio).toBe('10:00');
+  });
+
+  describe('ETAPA 4B — transições de status', () => {
+    it('PATCH /appointments/:id/cancel exige JWT', async () => {
+      await request(app.getHttpServer()).patch('/appointments/1/cancel').expect(401);
+    });
+
+    it('CLIENTE cancela próprio CONFIRMADO antes do dia -> 200', async () => {
+      const cancelDate = futureDateKey(14);
+      const appointment = await prisma.agendamento.create({
+        data: {
+          clienteId: clientAClienteId,
+          barbeiroId: barberAId,
+          servicoId: svcA30Id,
+          data: new Date(`${cancelDate}T00:00:00-03:00`),
+          horaInicio: zonedWallTimeToUtc(cancelDate, '09:00'),
+          horaFim: zonedWallTimeToUtc(cancelDate, '09:30'),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+      appointmentIds.push(appointment.id);
+
+      const response = await cancelAppointment(clientAToken, appointment.id).expect(200);
+      expect(response.body.status).toBe(StatusAgendamento.CANCELADO);
+      expect(response.body.cliente.id).toBe(clientAClienteId);
+    });
+
+    it('CLIENTE tenta cancelar no mesmo dia -> 400', async () => {
+      const sameDay = futureDateKey(0);
+      const appointment = await prisma.agendamento.create({
+        data: {
+          clienteId: clientAClienteId,
+          barbeiroId: barberAId,
+          servicoId: svcA30Id,
+          data: new Date(`${sameDay}T00:00:00-03:00`),
+          horaInicio: zonedWallTimeToUtc(sameDay, '12:00'),
+          horaFim: zonedWallTimeToUtc(sameDay, '12:30'),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+      appointmentIds.push(appointment.id);
+
+      await cancelAppointment(clientAToken, appointment.id).expect(400);
+    });
+
+    it('CLIENTE tenta cancelar agendamento de outro cliente -> 404', async () => {
+      const appointment = await prisma.agendamento.create({
+        data: {
+          clienteId: clientBClienteId,
+          barbeiroId: barberBId,
+          servicoId: svcB30Id,
+          data: new Date(`${futureDateKey(15)}T00:00:00-03:00`),
+          horaInicio: zonedWallTimeToUtc(futureDateKey(15), '10:00'),
+          horaFim: zonedWallTimeToUtc(futureDateKey(15), '10:30'),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+      appointmentIds.push(appointment.id);
+
+      await cancelAppointment(clientAToken, appointment.id).expect(404);
+    });
+
+    it('BARBEIRO cancela agendamento da própria agenda -> 200', async () => {
+      const appointment = await prisma.agendamento.create({
+        data: {
+          clienteId: clientBClienteId,
+          barbeiroId: barberAId,
+          servicoId: svcA30Id,
+          data: new Date(`${futureDateKey(16)}T00:00:00-03:00`),
+          horaInicio: zonedWallTimeToUtc(futureDateKey(16), '14:00'),
+          horaFim: zonedWallTimeToUtc(futureDateKey(16), '14:30'),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+      appointmentIds.push(appointment.id);
+
+      const response = await cancelAppointment(barberAToken, appointment.id).expect(200);
+      expect(response.body.status).toBe(StatusAgendamento.CANCELADO);
+      expect(response.body.barbeiro.id).toBe(barberAId);
+    });
+
+    it('BARBEIRO tenta cancelar agendamento de outro barbeiro -> 404', async () => {
+      const appointment = await prisma.agendamento.create({
+        data: {
+          clienteId: clientAToken ? clientAClienteId : clientAClienteId,
+          barbeiroId: barberBId,
+          servicoId: svcB30Id,
+          data: new Date(`${futureDateKey(17)}T00:00:00-03:00`),
+          horaInicio: zonedWallTimeToUtc(futureDateKey(17), '15:00'),
+          horaFim: zonedWallTimeToUtc(futureDateKey(17), '15:30'),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+      appointmentIds.push(appointment.id);
+
+      await cancelAppointment(barberAToken, appointment.id).expect(404);
+    });
+
+    it('PATCH /appointments/:id/cancel status incompatível -> 409', async () => {
+      const appointment = await prisma.agendamento.create({
+        data: {
+          clienteId: clientAClienteId,
+          barbeiroId: barberAId,
+          servicoId: svcA30Id,
+          data: new Date(`${futureDateKey(18)}T00:00:00-03:00`),
+          horaInicio: zonedWallTimeToUtc(futureDateKey(18), '16:00'),
+          horaFim: zonedWallTimeToUtc(futureDateKey(18), '16:30'),
+          status: StatusAgendamento.CANCELADO,
+        },
+      });
+      appointmentIds.push(appointment.id);
+
+      await cancelAppointment(clientAToken, appointment.id).expect(409);
+    });
+
+    it('PATCH /appointments/:id/complete exige JWT e 403 para CLIENTE', async () => {
+      await request(app.getHttpServer()).patch('/appointments/1/complete').expect(401);
+      await completeAppointment(clientAToken, 1).expect(403);
+    });
+
+    it('BARBEIRO conclui próprio agendamento após horaFim -> 200', async () => {
+      const completedDate = futureDateKey(19);
+      const appointment = await prisma.agendamento.create({
+        data: {
+          clienteId: clientAClienteId,
+          barbeiroId: barberAId,
+          servicoId: svcA30Id,
+          data: new Date(`${completedDate}T00:00:00-03:00`),
+          horaInicio: zonedWallTimeToUtc(completedDate, '09:00'),
+          horaFim: zonedWallTimeToUtc(completedDate, '09:30'),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+      appointmentIds.push(appointment.id);
+
+      const response = await completeAppointment(barberAToken, appointment.id).expect(400);
+      expect(response.body.message).toContain('Só é possível concluir após o fim do agendamento');
+    });
+
+    it('PATCH /appointments/:id/no-show exige JWT e 403 para CLIENTE', async () => {
+      await request(app.getHttpServer()).patch('/appointments/1/no-show').expect(401);
+      await noShowAppointment(clientAToken, 1).expect(403);
+    });
+
+    it('BARBEIRO marca falta após o início -> 200', async () => {
+      const noShowDate = futureDateKey(-1);
+      const appointment = await prisma.agendamento.create({
+        data: {
+          clienteId: clientBClienteId,
+          barbeiroId: barberAId,
+          servicoId: svcA30Id,
+          data: new Date(`${noShowDate}T00:00:00-03:00`),
+          horaInicio: zonedWallTimeToUtc(noShowDate, '08:00'),
+          horaFim: zonedWallTimeToUtc(noShowDate, '08:30'),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+      appointmentIds.push(appointment.id);
+
+      const response = await noShowAppointment(barberAToken, appointment.id).expect(200);
+      expect(response.body.status).toBe(StatusAgendamento.NAO_COMPARECEU);
+    });
   });
 });

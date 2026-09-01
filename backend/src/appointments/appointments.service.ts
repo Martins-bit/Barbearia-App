@@ -17,6 +17,7 @@ import {
 import {
   dateKeyFromUtcMidnight,
   formatLocalHHmm,
+  getZonedParts,
   isValidDateKey,
   localMinuteOfDay,
   prismaDateFilter,
@@ -325,6 +326,259 @@ export class AppointmentsService {
     });
 
     return rows.map((row) => this.toResponse(row));
+  }
+
+  async cancelAppointment(
+    userId: number,
+    appointmentId: number,
+  ): Promise<AppointmentResponseDto> {
+    const cliente = await this.prisma.cliente.findUnique({
+      where: { usuarioId: userId },
+      select: { id: true },
+    });
+
+    if (cliente) {
+      const row = await this.prisma.agendamento.findUnique({
+        where: { id: appointmentId },
+        include: {
+          servico: { select: { id: true, nome: true, preco: true } },
+          barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+          cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        },
+      });
+
+      if (!row || row.clienteId !== cliente.id) {
+        throw new NotFoundException('Agendamento não encontrado.');
+      }
+
+      if (row.status !== StatusAgendamento.CONFIRMADO) {
+        throw new ConflictException('Status incompatível para cancelamento.');
+      }
+
+      const todayKey = this.dateKeyFromInstantLocal(new Date());
+      const appointmentDateKey = this.dateKeyFromInstantLocal(row.horaInicio);
+      if (appointmentDateKey <= todayKey) {
+        throw new BadRequestException(
+          'Cliente só pode cancelar até o dia anterior ao agendamento.',
+        );
+      }
+
+      const updated = await this.prisma.agendamento.updateMany({
+        where: {
+          id: appointmentId,
+          clienteId: cliente.id,
+          status: StatusAgendamento.CONFIRMADO,
+        },
+        data: { status: StatusAgendamento.CANCELADO },
+      });
+
+      if (updated.count === 0) {
+        throw new ConflictException('Agendamento não pode mais ser cancelado.');
+      }
+
+      const refreshed = await this.prisma.agendamento.findUnique({
+        where: { id: appointmentId },
+        include: {
+          servico: { select: { id: true, nome: true, preco: true } },
+          barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+          cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        },
+      });
+
+      if (!refreshed) {
+        throw new NotFoundException('Agendamento não encontrado.');
+      }
+
+      return this.toResponse(refreshed);
+    }
+
+    const barbeiro = await this.prisma.barbeiro.findUnique({
+      where: { usuarioId: userId },
+      select: { id: true },
+    });
+
+    if (!barbeiro) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    const row = await this.prisma.agendamento.findUnique({
+      where: { id: appointmentId },
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+
+    if (!row || row.barbeiroId !== barbeiro.id) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    if (row.status !== StatusAgendamento.CONFIRMADO) {
+      throw new ConflictException('Status incompatível para cancelamento.');
+    }
+
+    const updated = await this.prisma.agendamento.updateMany({
+      where: {
+        id: appointmentId,
+        barbeiroId: barbeiro.id,
+        status: StatusAgendamento.CONFIRMADO,
+      },
+      data: { status: StatusAgendamento.CANCELADO },
+    });
+
+    if (updated.count === 0) {
+      throw new ConflictException('Agendamento não pode mais ser cancelado.');
+    }
+
+    const refreshed = await this.prisma.agendamento.findUnique({
+      where: { id: appointmentId },
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+
+    if (!refreshed) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    return this.toResponse(refreshed);
+  }
+
+  async completeAppointment(
+    userId: number,
+    appointmentId: number,
+  ): Promise<AppointmentResponseDto> {
+    const barbeiro = await this.prisma.barbeiro.findUnique({
+      where: { usuarioId: userId },
+      select: { id: true },
+    });
+
+    if (!barbeiro) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    const row = await this.prisma.agendamento.findUnique({
+      where: { id: appointmentId },
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+
+    if (!row || row.barbeiroId !== barbeiro.id) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    if (row.status !== StatusAgendamento.CONFIRMADO) {
+      throw new ConflictException('Status incompatível para conclusão.');
+    }
+
+    if (row.horaFim > new Date()) {
+      throw new BadRequestException('Só é possível concluir após o fim do agendamento.');
+    }
+
+    const updated = await this.prisma.agendamento.updateMany({
+      where: {
+        id: appointmentId,
+        barbeiroId: barbeiro.id,
+        status: StatusAgendamento.CONFIRMADO,
+      },
+      data: { status: StatusAgendamento.CONCLUIDO },
+    });
+
+    if (updated.count === 0) {
+      throw new ConflictException('Agendamento foi atualizado por outra operação.');
+    }
+
+    const refreshed = await this.prisma.agendamento.findUnique({
+      where: { id: appointmentId },
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+
+    if (!refreshed) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    return this.toResponse(refreshed);
+  }
+
+  async noShowAppointment(
+    userId: number,
+    appointmentId: number,
+  ): Promise<AppointmentResponseDto> {
+    const barbeiro = await this.prisma.barbeiro.findUnique({
+      where: { usuarioId: userId },
+      select: { id: true },
+    });
+
+    if (!barbeiro) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    const row = await this.prisma.agendamento.findUnique({
+      where: { id: appointmentId },
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+
+    if (!row || row.barbeiroId !== barbeiro.id) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    if (row.status !== StatusAgendamento.CONFIRMADO) {
+      throw new ConflictException('Status incompatível para falta.');
+    }
+
+    if (row.horaInicio > new Date()) {
+      throw new BadRequestException(
+        'Só é possível marcar falta após o início do agendamento.',
+      );
+    }
+
+    const updated = await this.prisma.agendamento.updateMany({
+      where: {
+        id: appointmentId,
+        barbeiroId: barbeiro.id,
+        status: StatusAgendamento.CONFIRMADO,
+      },
+      data: { status: StatusAgendamento.NAO_COMPARECEU },
+    });
+
+    if (updated.count === 0) {
+      throw new ConflictException('Agendamento foi atualizado por outra operação.');
+    }
+
+    const refreshed = await this.prisma.agendamento.findUnique({
+      where: { id: appointmentId },
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+
+    if (!refreshed) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    return this.toResponse(refreshed);
+  }
+
+  private dateKeyFromInstantLocal(instant: Date): string {
+    const { year, month, day } = getZonedParts(instant);
+    const pad = (value: number): string => String(value).padStart(2, '0');
+    return `${year}-${pad(month)}-${pad(day)}`;
   }
 
   private toResponse(row: AppointmentRow): AppointmentResponseDto {
