@@ -373,4 +373,59 @@ describe('AppointmentsService', () => {
       expect(prisma.$executeRaw).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('listagem do cliente (GET /appointments/my)', () => {
+    const row10 = buildFullRow(1);
+    const row1030 = buildFullRow(2, {
+      horaInicio: zonedWallTimeToUtc(DAY_MON, '10:30'),
+      horaFim: zonedWallTimeToUtc(DAY_MON, '11:00'),
+    });
+
+    it('resolve o cliente e retorna somente os próprios agendamentos ordenados', async () => {
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findMany.mockResolvedValue([row10, row1030]);
+
+      const result = await service.findMyAppointments(1);
+
+      expect(prisma.cliente.findUnique).toHaveBeenCalledWith({
+        where: { usuarioId: 1 },
+        select: { id: true },
+      });
+      expect(prisma.agendamento.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { clienteId: CLIENT_ID },
+          orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }],
+        }),
+      );
+      expect(result.map((appointment) => appointment.id)).toEqual([1, 2]);
+      expect(result[0]).toMatchObject({
+        data: DAY_MON,
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        duracaoMinutos: 30,
+        status: 'CONFIRMADO',
+      });
+    });
+
+    it('cliente inexistente recebe 404', async () => {
+      prisma.cliente.findUnique.mockResolvedValue(null);
+
+      await expect(service.findMyAppointments(1)).rejects.toThrow(
+        new NotFoundException('Cliente não encontrado.'),
+      );
+    });
+
+    it('mapeia preço informativo com exatamente 2 casas decimais', async () => {
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findMany.mockResolvedValue([
+        buildFullRow(1, {
+          servico: { id: SERVICE_ID, nome: 'Corte', preco: '45.5' },
+        }),
+      ]);
+
+      const result = await service.findMyAppointments(1);
+
+      expect(result[0].servico.precoInformativo).toBe('45.50');
+    });
+  });
 });

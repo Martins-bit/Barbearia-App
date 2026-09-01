@@ -236,14 +236,35 @@ export class AppointmentsService {
         throw new NotFoundException('Agendamento não encontrado.');
       }
 
-      return this.toResponse(row, service.duracaoMinutos);
+      return this.toResponse(row);
     });
   }
 
-  private toResponse(
-    row: AppointmentRow,
-    duracaoMinutos: number,
-  ): AppointmentResponseDto {
+  /**
+   * Lista SOMENTE os agendamentos do cliente autenticado (API.md §9.2),
+   * ordenados cronologicamente (mais próximos primeiro).
+   */
+  async findMyAppointments(userId: number): Promise<AppointmentResponseDto[]> {
+    const clienteId = await this.resolveClienteId(userId);
+
+    const rows = await this.prisma.agendamento.findMany({
+      where: { clienteId },
+      orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }],
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+
+    return rows.map((row) => this.toResponse(row));
+  }
+
+  private toResponse(row: AppointmentRow): AppointmentResponseDto {
+    // Duração calculada dos instantes persistidos (mesma base do Schedule).
+    const duracaoMinutos =
+      localMinuteOfDay(row.horaFim) - localMinuteOfDay(row.horaInicio);
+
     return {
       id: row.id,
       data: dateKeyFromUtcMidnight(row.data),
