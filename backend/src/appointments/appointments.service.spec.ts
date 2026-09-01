@@ -19,7 +19,7 @@ const WINDOW_9_18 = [{ ini: 540, fim: 1080 }]; // 09:00–18:00
 function buildPrismaMock(): any {
   const prismaMock: any = {
     cliente: { findUnique: jest.fn() },
-    barbeiro: { findFirst: jest.fn() },
+    barbeiro: { findFirst: jest.fn(), findUnique: jest.fn() },
     servico: { findFirst: jest.fn() },
     agendamento: {
       findMany: jest.fn().mockResolvedValue([]),
@@ -426,6 +426,84 @@ describe('AppointmentsService', () => {
       const result = await service.findMyAppointments(1);
 
       expect(result[0].servico.precoInformativo).toBe('45.50');
+    });
+  });
+
+  describe('consultas de ownership (ETAPA 4A)', () => {
+    it('cliente acessa apenas seu próprio agendamento', async () => {
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(buildFullRow(11));
+
+      const result = await service.findByIdForUser(1, 11);
+
+      expect(result.id).toBe(11);
+      expect(prisma.agendamento.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 11 },
+        }),
+      );
+    });
+
+    it('cliente acessa agendamento de outro cliente recebe 404 genérico', async () => {
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(
+        buildFullRow(11, { clienteId: CLIENT_ID + 1 }),
+      );
+
+      await expect(service.findByIdForUser(1, 11)).rejects.toThrow(
+        new NotFoundException('Agendamento não encontrado.'),
+      );
+    });
+
+    it('barbeiro acessa apenas agendamento do próprio perfil', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(buildFullRow(12));
+
+      const result = await service.findByIdForUser(1, 12);
+
+      expect(result.id).toBe(12);
+      expect(prisma.agendamento.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 12 },
+        }),
+      );
+    });
+
+    it('barbeiro acessa agendamento de outro barbeiro recebe 404 genérico', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(
+        buildFullRow(12, { barbeiroId: BARBER_ID + 1 }),
+      );
+
+      await expect(service.findByIdForUser(1, 12)).rejects.toThrow(
+        new NotFoundException('Agendamento não encontrado.'),
+      );
+    });
+
+    it('lista somente a agenda do barbeiro autenticado em ordem cronológica', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findMany.mockResolvedValue([
+        buildFullRow(1, {
+          data: prismaDateFilter('2099-01-12'),
+          horaInicio: zonedWallTimeToUtc('2099-01-12', '10:00'),
+          horaFim: zonedWallTimeToUtc('2099-01-12', '10:30'),
+        }),
+        buildFullRow(2, {
+          data: prismaDateFilter('2099-01-13'),
+          horaInicio: zonedWallTimeToUtc('2099-01-13', '11:00'),
+          horaFim: zonedWallTimeToUtc('2099-01-13', '11:30'),
+        }),
+      ]);
+
+      const result = await service.findByBarberUserId(1);
+
+      expect(prisma.agendamento.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { barbeiroId: BARBER_ID },
+          orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }],
+        }),
+      );
+      expect(result.map((appointment) => appointment.id)).toEqual([1, 2]);
     });
   });
 });

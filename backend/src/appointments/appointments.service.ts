@@ -70,6 +70,19 @@ export class AppointmentsService {
     return cliente.id;
   }
 
+  private async resolveBarbeiroId(userId: number): Promise<number> {
+    const barbeiro = await this.prisma.barbeiro.findUnique({
+      where: { usuarioId: userId },
+      select: { id: true },
+    });
+
+    if (!barbeiro) {
+      throw new NotFoundException('Barbeiro não encontrado.');
+    }
+
+    return barbeiro.id;
+  }
+
   private parseHHmm(hhmm: string): number {
     const [hour, minute] = hhmm.split(':').map(Number);
     return hour * 60 + minute;
@@ -249,6 +262,60 @@ export class AppointmentsService {
 
     const rows = await this.prisma.agendamento.findMany({
       where: { clienteId },
+      orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }],
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+
+    return rows.map((row) => this.toResponse(row));
+  }
+
+  async findByIdForUser(
+    userId: number,
+    appointmentId: number,
+  ): Promise<AppointmentResponseDto> {
+    const row = await this.prisma.agendamento.findUnique({
+      where: { id: appointmentId },
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+
+    if (!row) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    const cliente = await this.prisma.cliente.findUnique({
+      where: { usuarioId: userId },
+      select: { id: true },
+    });
+
+    if (cliente && row.clienteId === cliente.id) {
+      return this.toResponse(row);
+    }
+
+    const barbeiro = await this.prisma.barbeiro.findUnique({
+      where: { usuarioId: userId },
+      select: { id: true },
+    });
+
+    if (barbeiro && row.barbeiroId === barbeiro.id) {
+      return this.toResponse(row);
+    }
+
+    throw new NotFoundException('Agendamento não encontrado.');
+  }
+
+  async findByBarberUserId(userId: number): Promise<AppointmentResponseDto[]> {
+    const barbeiroId = await this.resolveBarbeiroId(userId);
+
+    const rows = await this.prisma.agendamento.findMany({
+      where: { barbeiroId },
       orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }],
       include: {
         servico: { select: { id: true, nome: true, preco: true } },

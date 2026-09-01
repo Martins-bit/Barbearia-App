@@ -585,4 +585,188 @@ describe('Appointments (e2e)', () => {
       ['CONCLUIDO', 'CONFIRMADO', 'NAO_COMPARECEU'].sort(),
     );
   });
+
+  const getAppointmentById = (token: string, id: number) =>
+    request(app.getHttpServer())
+      .get(`/appointments/${id}`)
+      .set('Authorization', `Bearer ${token}`);
+
+  const getBarberAgenda = (token: string) =>
+    request(app.getHttpServer())
+      .get('/appointments')
+      .set('Authorization', `Bearer ${token}`);
+
+  it('GET /appointments/:id exige JWT', async () => {
+    await request(app.getHttpServer()).get('/appointments/1').expect(401);
+  });
+
+  it('CLIENTE acessa seu próprio agendamento com 200', async () => {
+    const ownDate = futureDateKey(7);
+    const appointment = await prisma.agendamento.create({
+      data: {
+        clienteId: clientAClienteId,
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: new Date(`${ownDate}T00:00:00-03:00`),
+        horaInicio: zonedWallTimeToUtc(ownDate, '14:00'),
+        horaFim: zonedWallTimeToUtc(ownDate, '14:30'),
+        status: StatusAgendamento.CONFIRMADO,
+        observacoes: 'Detalhes próprios',
+      },
+    });
+    appointmentIds.push(appointment.id);
+
+    const response = await getAppointmentById(clientAToken, appointment.id).expect(200);
+    expect(response.body.id).toBe(appointment.id);
+    expect(response.body.cliente.id).toBe(clientAClienteId);
+    expect(response.body.servico.precoInformativo).toMatch(/^\d+\.\d{2}$/);
+  });
+
+  it('CLIENTE acessa agendamento de outro cliente com 404', async () => {
+    const appointment = await prisma.agendamento.create({
+      data: {
+        clienteId: clientBClienteId,
+        barbeiroId: barberBId,
+        servicoId: svcB30Id,
+        data: new Date(`${futureDateKey(8)}T00:00:00-03:00`),
+        horaInicio: zonedWallTimeToUtc(futureDateKey(8), '15:00'),
+        horaFim: zonedWallTimeToUtc(futureDateKey(8), '15:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      },
+    });
+    appointmentIds.push(appointment.id);
+
+    await getAppointmentById(clientAToken, appointment.id).expect(404);
+  });
+
+  it('BARBEIRO acessa agendamento do próprio perfil com 200', async () => {
+    const appointment = await prisma.agendamento.create({
+      data: {
+        clienteId: clientBClienteId,
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: new Date(`${futureDateKey(9)}T00:00:00-03:00`),
+        horaInicio: zonedWallTimeToUtc(futureDateKey(9), '16:00'),
+        horaFim: zonedWallTimeToUtc(futureDateKey(9), '16:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      },
+    });
+    appointmentIds.push(appointment.id);
+
+    const response = await getAppointmentById(barberAToken, appointment.id).expect(200);
+    expect(response.body.barbeiro.id).toBe(barberAId);
+    expect(response.body.cliente.id).toBe(clientBClienteId);
+  });
+
+  it('BARBEIRO acessa agendamento de outro barbeiro com 404', async () => {
+    const appointment = await prisma.agendamento.create({
+      data: {
+        clienteId: clientAToken ? clientAClienteId : clientAClienteId,
+        barbeiroId: barberBId,
+        servicoId: svcB30Id,
+        data: new Date(`${futureDateKey(10)}T00:00:00-03:00`),
+        horaInicio: zonedWallTimeToUtc(futureDateKey(10), '10:00'),
+        horaFim: zonedWallTimeToUtc(futureDateKey(10), '10:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      },
+    });
+    appointmentIds.push(appointment.id);
+
+    await getAppointmentById(barberAToken, appointment.id).expect(404);
+  });
+
+  it('GET /appointments/:id retorna 404 para id inexistente', async () => {
+    await getAppointmentById(clientAToken, 999999).expect(404);
+  });
+
+  it('GET /appointments exige JWT', async () => {
+    await request(app.getHttpServer()).get('/appointments').expect(401);
+  });
+
+  it('CLIENTE recebe 403 em GET /appointments', async () => {
+    await getBarberAgenda(clientAToken).expect(403);
+  });
+
+  it('BARBEIRO recebe somente a própria agenda ordenada', async () => {
+    const barberDate = futureDateKey(11);
+    const ownA = await prisma.agendamento.create({
+      data: {
+        clienteId: clientAClienteId,
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: new Date(`${barberDate}T00:00:00-03:00`),
+        horaInicio: zonedWallTimeToUtc(barberDate, '11:00'),
+        horaFim: zonedWallTimeToUtc(barberDate, '11:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      },
+    });
+    const ownB = await prisma.agendamento.create({
+      data: {
+        clienteId: clientBClienteId,
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: new Date(`${barberDate}T00:00:00-03:00`),
+        horaInicio: zonedWallTimeToUtc(barberDate, '12:00'),
+        horaFim: zonedWallTimeToUtc(barberDate, '12:30'),
+        status: StatusAgendamento.CANCELADO,
+      },
+    });
+    const other = await prisma.agendamento.create({
+      data: {
+        clienteId: clientAClienteId,
+        barbeiroId: barberBId,
+        servicoId: svcB30Id,
+        data: new Date(`${barberDate}T00:00:00-03:00`),
+        horaInicio: zonedWallTimeToUtc(barberDate, '13:00'),
+        horaFim: zonedWallTimeToUtc(barberDate, '13:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      },
+    });
+    appointmentIds.push(ownA.id, ownB.id, other.id);
+
+    const response = await getBarberAgenda(barberAToken).expect(200);
+    expect(response.body.some((item: any) => item.id === other.id)).toBe(false);
+    expect(response.body.map((item: any) => item.id)).toEqual(
+      expect.arrayContaining([ownA.id, ownB.id]),
+    );
+    expect(response.body.every((item: any) => item.barbeiro.id === barberAId)).toBe(true);
+    expect(JSON.stringify(response.body)).not.toMatch(/senhaHash|pagamento|pix|checkout/i);
+  });
+
+  it('GET /appointments inclui diferentes status e ordenação cronológica', async () => {
+    const statusDate = futureDateKey(12);
+    const first = await prisma.agendamento.create({
+      data: {
+        clienteId: clientAClienteId,
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: new Date(`${statusDate}T00:00:00-03:00`),
+        horaInicio: zonedWallTimeToUtc(statusDate, '09:30'),
+        horaFim: zonedWallTimeToUtc(statusDate, '10:00'),
+        status: StatusAgendamento.CONCLUIDO,
+      },
+    });
+    const second = await prisma.agendamento.create({
+      data: {
+        clienteId: clientBClienteId,
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: new Date(`${statusDate}T00:00:00-03:00`),
+        horaInicio: zonedWallTimeToUtc(statusDate, '10:00'),
+        horaFim: zonedWallTimeToUtc(statusDate, '10:30'),
+        status: StatusAgendamento.NAO_COMPARECEU,
+      },
+    });
+    appointmentIds.push(first.id, second.id);
+
+    const response = await getBarberAgenda(barberAToken).expect(200);
+    const statuses = response.body
+      .filter((item: any) => item.data === statusDate)
+      .map((item: any) => item.status)
+      .sort();
+
+    expect(statuses).toEqual(['CONCLUIDO', 'NAO_COMPARECEU'].sort());
+    expect(response.body.find((item: any) => item.id === first.id).horaInicio).toBe('09:30');
+    expect(response.body.find((item: any) => item.id === second.id).horaInicio).toBe('10:00');
+  });
 });

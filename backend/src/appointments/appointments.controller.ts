@@ -3,6 +3,8 @@ import {
   Controller,
   Get,
   HttpCode,
+  Param,
+  ParseIntPipe,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -46,5 +48,24 @@ export class AppointmentsController {
     @CurrentUser() userId: number,
   ): Promise<AppointmentResponseDto[]> {
     return this.appointmentsService.findMyAppointments(userId);
+  }
+
+  @Get(':id')
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.CLIENTE, TipoUsuario.BARBEIRO)
+  async findById(
+    @CurrentUser() userId: number,
+    @Param('id', ParseIntPipe) appointmentId: number,
+  ): Promise<AppointmentResponseDto> {
+    return this.appointmentsService.findByIdForUser(userId, appointmentId);
+  }
+
+  @Get()
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.BARBEIRO)
+  async findBarberAgenda(
+    @CurrentUser() userId: number,
+  ): Promise<AppointmentResponseDto[]> {
+    return this.appointmentsService.findByBarberUserId(userId);
   }
 }
