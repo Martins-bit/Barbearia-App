@@ -946,4 +946,183 @@ describe('Appointments (e2e)', () => {
       expect(response.body.status).toBe(StatusAgendamento.NAO_COMPARECEU);
     });
   });
+
+  describe('ETAPA 5A — concorrência real de agendamentos', () => {
+    it('MESMO BARBEIRO / MESMO HORÁRIO: uma criação 201 e outra 409', async () => {
+      const slotDate = futureDateKey(25);
+      const payloadA = {
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: slotDate,
+        horaInicio: '10:00',
+      };
+      const payloadB = {
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: slotDate,
+        horaInicio: '10:00',
+      };
+
+      const results = await Promise.allSettled([
+        postAppointment(clientAToken, payloadA),
+        postAppointment(clientBToken, payloadB),
+      ]);
+
+      const statusCodes = results.map((item) =>
+        item.status === 'fulfilled'
+          ? item.value.status
+          : item.reason?.response?.status ?? 0,
+      );
+
+      expect(statusCodes.filter((code) => code === 201)).toHaveLength(1);
+      expect(statusCodes.filter((code) => code === 409)).toHaveLength(1);
+
+      const successful = results.filter(
+        (item): item is PromiseFulfilledResult<any> => item.status === 'fulfilled',
+      );
+      for (const result of successful) {
+        if (result.value.status === 201) {
+          appointmentIds.push(result.value.body.id);
+        }
+      }
+
+      const count = await prisma.agendamento.count({
+        where: {
+          barbeiroId: barberAId,
+          data: new Date(`${slotDate}T00:00:00-03:00`),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+
+      expect(count).toBe(1);
+    }, 30000);
+
+    it('MESMO CLIENTE / BARBEIROS DIFERENTES: uma criação 201 e outra 409', async () => {
+      const slotDate = futureDateKey(26);
+      const payloadA = {
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: slotDate,
+        horaInicio: '11:00',
+      };
+      const payloadB = {
+        barbeiroId: barberBId,
+        servicoId: svcB30Id,
+        data: slotDate,
+        horaInicio: '11:00',
+      };
+
+      const results = await Promise.allSettled([
+        postAppointment(clientAToken, payloadA),
+        postAppointment(clientAToken, payloadB),
+      ]);
+
+      const statusCodes = results.map((item) =>
+        item.status === 'fulfilled'
+          ? item.value.status
+          : item.reason?.response?.status ?? 0,
+      );
+      expect(statusCodes.filter((code) => code === 201)).toHaveLength(1);
+      expect(statusCodes.filter((code) => code === 409)).toHaveLength(1);
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value.status === 201) {
+          appointmentIds.push(result.value.body.id);
+        }
+      }
+
+      const count = await prisma.agendamento.count({
+        where: {
+          clienteId: clientAClienteId,
+          data: new Date(`${slotDate}T00:00:00-03:00`),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+
+      expect(count).toBe(1);
+    }, 30000);
+
+    it('REQUISIÇÕES INDEPENDENTES: dois 201 em horários distintos', async () => {
+      const slotDate = futureDateKey(27);
+      const results = await Promise.allSettled([
+        postAppointment(clientAToken, {
+          barbeiroId: barberAId,
+          servicoId: svcA30Id,
+          data: slotDate,
+          horaInicio: '12:00',
+        }),
+        postAppointment(clientBToken, {
+          barbeiroId: barberBId,
+          servicoId: svcB30Id,
+          data: slotDate,
+          horaInicio: '13:00',
+        }),
+      ]);
+
+      const statusCodes = results.map((item) =>
+        item.status === 'fulfilled'
+          ? item.value.status
+          : item.reason?.response?.status ?? 0,
+      );
+      expect(statusCodes.filter((code) => code === 201)).toHaveLength(2);
+      expect(statusCodes.some((code) => code === 409)).toBe(false);
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value.status === 201) {
+          appointmentIds.push(result.value.body.id);
+        }
+      }
+
+      const count = await prisma.agendamento.count({
+        where: {
+          data: new Date(`${slotDate}T00:00:00-03:00`),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+
+      expect(count).toBeGreaterThanOrEqual(2);
+    }, 30000);
+
+    it('ADJACÊNCIA CONCORRENTE: dois 201 em slots adjacentes', async () => {
+      const slotDate = futureDateKey(28);
+      const results = await Promise.allSettled([
+        postAppointment(clientAToken, {
+          barbeiroId: barberAId,
+          servicoId: svcA30Id,
+          data: slotDate,
+          horaInicio: '09:00',
+        }),
+        postAppointment(clientBToken, {
+          barbeiroId: barberAId,
+          servicoId: svcA30Id,
+          data: slotDate,
+          horaInicio: '09:30',
+        }),
+      ]);
+
+      const statusCodes = results.map((item) =>
+        item.status === 'fulfilled'
+          ? item.value.status
+          : item.reason?.response?.status ?? 0,
+      );
+      expect(statusCodes.filter((code) => code === 201)).toHaveLength(2);
+      expect(statusCodes.some((code) => code === 409)).toBe(false);
+
+      for (const result of results) {
+        if (result.status === 'fulfilled' && result.value.status === 201) {
+          appointmentIds.push(result.value.body.id);
+        }
+      }
+
+      const count = await prisma.agendamento.count({
+        where: {
+          barbeiroId: barberAId,
+          data: new Date(`${slotDate}T00:00:00-03:00`),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+
+      expect(count).toBeGreaterThanOrEqual(2);
+    }, 30000);
+  });
 });
