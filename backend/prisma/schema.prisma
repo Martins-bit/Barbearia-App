@@ -86,6 +86,7 @@ model Barbeiro {
   horarios           HorarioFuncionamento[]
   bloqueios          BloqueioAgenda[]
   emergencias        Emergencia[]
+  listaEspera        ListaEspera[]
 }
 
 model Servico {
@@ -133,17 +134,23 @@ model Agendamento {
 model ListaEspera {
   id              Int                @id @default(autoincrement())
   clienteId       Int
+  barbeiroId      Int
   servicoId       Int
   dataDesejada    DateTime           @db.Date
+  horaInicio      String?
+  horaFim         String?
   status          StatusListaEspera  @default(ATIVA)
   dataEntrada     DateTime           @default(now())
   dataAtualizacao DateTime           @updatedAt
 
   cliente         Cliente            @relation(fields: [clienteId], references: [id])
+  barbeiro        Barbeiro           @relation(fields: [barbeiroId], references: [id])
   servico         Servico            @relation(fields: [servicoId], references: [id])
 
   @@index([clienteId])
+  @@index([barbeiroId])
   @@index([servicoId, dataDesejada, status])
+  @@index([clienteId, barbeiroId, servicoId, dataDesejada, status])
 }
 
 model Notificacao {
