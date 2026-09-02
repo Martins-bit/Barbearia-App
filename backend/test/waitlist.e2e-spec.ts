@@ -6,10 +6,12 @@ import { AppModule } from '../src/app.module';
 import { StatusListaEspera, TipoUsuario } from '../src/generated/prisma/enums';
 import { hashPassword } from '../src/common/utils/password.util';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { WaitlistService } from '../src/waitlist/waitlist.service';
 
 describe('Waitlist (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
+  let waitlistService: WaitlistService;
 
   let clientAToken: string;
   let clientBToken: string;
@@ -50,6 +52,7 @@ describe('Waitlist (e2e)', () => {
     await app.init();
 
     prisma = app.get(PrismaService);
+    waitlistService = app.get(WaitlistService);
     const senhaHash = await hashPassword(password);
 
     const createClient = async (nome: string, telefone: string) => {
@@ -140,7 +143,11 @@ describe('Waitlist (e2e)', () => {
           ],
         },
       });
+      await prisma.agendamento.deleteMany({
+        where: { OR: [{ barbeiroId: { in: barberIds } }, { clienteId: { in: clientIds } }] },
+      });
       await prisma.servico.deleteMany({ where: { id: { in: serviceIds } } });
+      await prisma.horarioFuncionamento.deleteMany({ where: { barbeiroId: { in: barberIds } } });
       await prisma.barbeiro.deleteMany({ where: { id: { in: barberIds } } });
       await prisma.cliente.deleteMany({ where: { usuarioId: { in: userIds } } });
       await prisma.usuario.deleteMany({ where: { id: { in: userIds } } });
@@ -364,5 +371,140 @@ describe('Waitlist (e2e)', () => {
     });
 
     expect(activeEntries).toBe(1);
+  });
+
+  it('seleciona apenas candidatos elegíveis da waitlist em FIFO real no PostgreSQL', async () => {
+    const dateKey = '2099-02-10';
+    const date = new Date(`${dateKey}T00:00:00.000Z`);
+    const senhaHash = await hashPassword(password);
+
+    await prisma.horarioFuncionamento.createMany({
+      data: [
+        {
+          barbeiroId: barberAId,
+          diaSemana: new Date(`${dateKey}T00:00:00.000Z`).getUTCDay(),
+          horaInicio: '08:00',
+          horaFim: '18:00',
+          ativo: true,
+        },
+      ],
+    });
+
+    const clientC = await prisma.usuario.create({
+      data: {
+        nome: 'Cliente C Waitlist',
+        telefone: `${phoneBase}31`,
+        senhaHash,
+        tipoUsuario: TipoUsuario.CLIENTE,
+        cliente: { create: {} },
+      },
+      include: { cliente: true },
+    });
+    const clientD = await prisma.usuario.create({
+      data: {
+        nome: 'Cliente D Waitlist',
+        telefone: `${phoneBase}32`,
+        senhaHash,
+        tipoUsuario: TipoUsuario.CLIENTE,
+        cliente: { create: {} },
+      },
+      include: { cliente: true },
+    });
+
+    const olderEntry = await prisma.listaEspera.create({
+      data: {
+        clienteId: clientAId,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        dataDesejada: date,
+        horaInicio: '09:00',
+        horaFim: '18:00',
+        status: StatusListaEspera.ATIVA,
+      },
+    });
+
+    const newerEntry = await prisma.listaEspera.create({
+      data: {
+        clienteId: clientBId,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        dataDesejada: date,
+        horaInicio: '09:00',
+        horaFim: '18:00',
+        status: StatusListaEspera.ATIVA,
+      },
+    });
+
+    await prisma.listaEspera.create({
+      data: {
+        clienteId: clientC.cliente!.id,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        dataDesejada: date,
+        horaInicio: '14:00',
+        horaFim: '18:00',
+        status: StatusListaEspera.ATIVA,
+      },
+    });
+
+    const conflictingClientEntry = await prisma.listaEspera.create({
+      data: {
+        clienteId: clientD.cliente!.id,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        dataDesejada: date,
+        horaInicio: '09:00',
+        horaFim: '18:00',
+        status: StatusListaEspera.ATIVA,
+      },
+    });
+
+    await prisma.agendamento.create({
+      data: {
+        clienteId: clientD.cliente!.id,
+        barbeiroId: barberBId,
+        servicoId: serviceBId,
+        data: date,
+        horaInicio: new Date('2099-02-10T10:15:00.000-03:00'),
+        horaFim: new Date('2099-02-10T10:45:00.000-03:00'),
+        status: 'CONFIRMADO',
+      },
+    });
+
+    const eligible = await waitlistService.findEligibleEntriesForSlot(
+      barberAId,
+      serviceAId,
+      dateKey,
+      '10:00',
+      '10:30',
+    );
+
+    expect(eligible.map((entry) => entry.id)).toEqual([olderEntry.id, newerEntry.id]);
+    expect(eligible.some(({ id }) => id === conflictingClientEntry.id)).toBe(false);
+    expect(eligible.some(({ id }) => id === olderEntry.id)).toBe(true);
+    expect(eligible.some(({ id }) => id === newerEntry.id)).toBe(true);
+
+    await prisma.listaEspera.deleteMany({
+      where: {
+        OR: [
+          { id: { in: [olderEntry.id, newerEntry.id, conflictingClientEntry.id] } },
+          { clienteId: { in: [clientAId, clientBId, clientC.cliente!.id, clientD.cliente!.id] } },
+        ],
+      },
+    });
+    await prisma.agendamento.deleteMany({
+      where: {
+        OR: [
+          { clienteId: { in: [clientAId, clientBId, clientC.cliente!.id, clientD.cliente!.id] } },
+          { barbeiroId: barberAId },
+        ],
+      },
+    });
+    await prisma.cliente.deleteMany({
+      where: { usuarioId: { in: [clientC.id, clientD.id] } },
+    });
+    await prisma.usuario.deleteMany({
+      where: { id: { in: [clientC.id, clientD.id] } },
+    });
   });
 });

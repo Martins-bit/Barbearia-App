@@ -25,6 +25,7 @@ function buildPrismaMock() {
     cliente: { findUnique: jest.fn() },
     barbeiro: { findUnique: jest.fn() },
     servico: { findFirst: jest.fn() },
+    agendamento: { findMany: jest.fn() },
     listaEspera,
     $transaction: jest.fn(async (callback: any) => callback(tx)),
     $executeRaw: jest.fn().mockResolvedValue(undefined),
@@ -33,6 +34,7 @@ function buildPrismaMock() {
 
 describe('WaitlistService', () => {
   let prisma: any;
+  let scheduleService: any;
   let service: WaitlistService;
 
   const validDto = {
@@ -45,7 +47,17 @@ describe('WaitlistService', () => {
 
   beforeEach(() => {
     prisma = buildPrismaMock();
-    service = new WaitlistService(prisma as unknown as PrismaService);
+    prisma.agendamento.findMany.mockResolvedValue([]);
+    scheduleService = {
+      getDateSnapshot: jest.fn().mockResolvedValue({
+        windows: [{ ini: 0, fim: 24 * 60 }],
+        busy: [],
+      }),
+    };
+    service = new WaitlistService(
+      prisma as unknown as PrismaService,
+      scheduleService,
+    );
   });
 
   it('cria entrada ativa válida', async () => {
@@ -281,5 +293,353 @@ describe('WaitlistService', () => {
     await expect(service.cancel(1, 9)).rejects.toThrow(
       new ConflictException('Esta entrada já está cancelada.'),
     );
+  });
+
+  describe('findEligibleEntriesForSlot', () => {
+    it('retorna entrada ativa compatível', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 1,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataCriacao: new Date('2099-01-01T00:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+          horaInicio: '09:00',
+          horaFim: '18:00',
+        },
+      ]);
+      prisma.agendamento.findMany.mockResolvedValue([]);
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '10:00',
+        '10:30',
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(1);
+    });
+
+    it('rejeita entrada cancelada', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 2,
+          clienteId: 77,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T00:00:00.000Z'),
+          status: StatusListaEspera.CANCELADA,
+          horaInicio: '10:00',
+          horaFim: '18:00',
+        },
+      ]);
+      prisma.agendamento.findMany.mockResolvedValue([]);
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '10:00',
+        '10:30',
+      );
+
+      expect(result).toEqual([]);
+    });
+
+    it('rejeita quando o slot sai da faixa desejada', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 3,
+          clienteId: 88,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T00:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+          horaInicio: '14:00',
+          horaFim: '18:00',
+        },
+      ]);
+      prisma.agendamento.findMany.mockResolvedValue([]);
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '13:45',
+        '14:15',
+      );
+
+      expect(result).toEqual([]);
+    });
+
+    it('rejeita cliente com Appointment confirmado conflitante', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 4,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataCriacao: new Date('2099-01-01T00:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+          horaInicio: '09:00',
+          horaFim: '18:00',
+        },
+      ]);
+      prisma.agendamento.findMany.mockResolvedValue([
+        {
+          clienteId: 99,
+          data: new Date('2099-01-12T00:00:00.000Z'),
+          horaInicio: new Date('2099-01-12T13:00:00.000Z'),
+          horaFim: new Date('2099-01-12T13:30:00.000Z'),
+          status: 'CONFIRMADO',
+        },
+      ]);
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '10:00',
+        '10:30',
+      );
+
+      expect(result).toEqual([]);
+    });
+
+    it('rejeita serviço inativo', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue(null);
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '10:00',
+        '10:30',
+      );
+
+      expect(result).toEqual([]);
+    });
+
+    it('rejeita barbeiro inativo', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: false });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '10:00',
+        '10:30',
+      );
+
+      expect(result).toEqual([]);
+    });
+
+    it('aceita slot válido quando a entrada não tem faixa desejada', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 7,
+          clienteId: 44,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T00:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+          horaInicio: null,
+          horaFim: null,
+        },
+      ]);
+      prisma.agendamento.findMany.mockResolvedValue([]);
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '10:00',
+        '10:30',
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(7);
+    });
+
+    it('não bloqueia Appointment cancelado do cliente', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 8,
+          clienteId: 55,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataCriacao: new Date('2099-01-01T00:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+          horaInicio: '09:00',
+          horaFim: '18:00',
+        },
+      ]);
+      prisma.agendamento.findMany.mockResolvedValue([
+        {
+          clienteId: 55,
+          data: new Date('2099-01-12T00:00:00.000Z'),
+          horaInicio: new Date('2099-01-12T10:00:00.000Z'),
+          horaFim: new Date('2099-01-12T10:30:00.000Z'),
+          status: 'CANCELADO',
+        },
+      ]);
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '10:00',
+        '10:30',
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe(8);
+    });
+
+    it('bloqueia Appointment confirmado do cliente em outro barbeiro', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 9,
+          clienteId: 66,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataCriacao: new Date('2099-01-01T00:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+          horaInicio: '09:00',
+          horaFim: '18:00',
+        },
+      ]);
+      prisma.agendamento.findMany.mockResolvedValue([
+        {
+          clienteId: 66,
+          barbeiroId: 99,
+          data: new Date('2099-01-12T00:00:00.000Z'),
+          horaInicio: new Date('2099-01-12T13:15:00.000Z'),
+          horaFim: new Date('2099-01-12T13:45:00.000Z'),
+          status: 'CONFIRMADO',
+        },
+      ]);
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '10:00',
+        '10:30',
+      );
+
+      expect(result).toEqual([]);
+    });
+
+    it('ordena FIFO por dataCriacao e id', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 6,
+          clienteId: 21,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-04T00:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+          horaInicio: '09:00',
+          horaFim: '18:00',
+        },
+        {
+          id: 5,
+          clienteId: 20,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T00:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+          horaInicio: '09:00',
+          horaFim: '18:00',
+        },
+      ].sort((a, b) => new Date(a.dataEntrada).getTime() - new Date(b.dataEntrada).getTime()));
+      prisma.agendamento.findMany.mockResolvedValue([]);
+
+      const result = await service.findEligibleEntriesForSlot(
+        10,
+        20,
+        '2099-01-12',
+        '10:00',
+        '10:30',
+      );
+
+      expect(result.map((entry) => entry.id)).toEqual([5, 6]);
+    });
   });
 });

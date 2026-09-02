@@ -5,9 +5,18 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, PrismaClient } from '../generated/prisma/client';
-import { StatusListaEspera } from '../generated/prisma/enums';
+import {
+  StatusAgendamento,
+  StatusListaEspera,
+} from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
-import { getZonedParts, isValidDateKey, prismaDateFilter } from '../schedule/tz.util';
+import { ScheduleService } from '../schedule/schedule.service';
+import {
+  getZonedParts,
+  isValidDateKey,
+  localMinuteOfDay,
+  prismaDateFilter,
+} from '../schedule/tz.util';
 
 export type WaitlistDbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -33,7 +42,10 @@ export interface WaitlistCreateDto {
 
 @Injectable()
 export class WaitlistService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly scheduleService: ScheduleService,
+  ) {}
 
   private parseHHmm(hhmm: string): number {
     const [hour, minute] = hhmm.split(':').map(Number);
@@ -191,6 +203,122 @@ export class WaitlistService {
     });
 
     return entries.map((entry) => this.toResponse(entry));
+  }
+
+  async findEligibleEntriesForSlot(
+    barbeiroId: number,
+    servicoId: number,
+    dateKey: string,
+    horaInicio: string,
+    horaFim: string,
+  ): Promise<any[]> {
+    if (!isValidDateKey(dateKey)) {
+      throw new BadRequestException('Data inválida.');
+    }
+
+    const slotStart = this.parseHHmm(horaInicio);
+    const slotEnd = this.parseHHmm(horaFim);
+    if (slotEnd <= slotStart) {
+      throw new BadRequestException('horaFim deve ser posterior a horaInicio.');
+    }
+
+    const todayParts = getZonedParts(new Date());
+    const todayKey = `${todayParts.year}-${String(todayParts.month).padStart(2, '0')}-${String(todayParts.day).padStart(2, '0')}`;
+    if (dateKey < todayKey) {
+      return [];
+    }
+
+    const service = await this.prisma.servico.findFirst({
+      where: { id: servicoId, barbeiroId, ativo: true },
+      select: { id: true, duracaoMinutos: true },
+    });
+    if (!service) {
+      return [];
+    }
+
+    const barber = await this.prisma.barbeiro.findUnique({
+      where: { id: barbeiroId },
+      select: { id: true, ativo: true },
+    });
+    if (!barber || !barber.ativo) {
+      return [];
+    }
+
+    const { windows, busy } = await this.scheduleService.getDateSnapshot(
+      this.prisma,
+      barbeiroId,
+      dateKey,
+    );
+
+    const slotFitsBusinessHours = windows.some(
+      (window) => slotStart >= window.ini && slotEnd <= window.fim,
+    );
+    if (!slotFitsBusinessHours) {
+      return [];
+    }
+
+    const overlapsBusy = busy.some(
+      (interval) => slotStart < interval.fim && interval.ini < slotEnd,
+    );
+    if (overlapsBusy) {
+      return [];
+    }
+
+    const entries = await this.prisma.listaEspera.findMany({
+      where: {
+        status: StatusListaEspera.ATIVA,
+        barbeiroId,
+        servicoId,
+        dataDesejada: prismaDateFilter(dateKey),
+      },
+      orderBy: [{ dataEntrada: 'asc' }, { id: 'asc' }],
+    });
+
+    const orderedEntries = [...entries].sort((a, b) => {
+      const timeDiff =
+        new Date(a.dataEntrada).getTime() - new Date(b.dataEntrada).getTime();
+      return timeDiff !== 0 ? timeDiff : (a.id ?? 0) - (b.id ?? 0);
+    });
+
+    const eligible: any[] = [];
+    for (const entry of orderedEntries) {
+      if (entry.status !== StatusListaEspera.ATIVA) {
+        continue;
+      }
+
+      const entryStart = entry.horaInicio ? this.parseHHmm(entry.horaInicio) : null;
+      const entryEnd = entry.horaFim ? this.parseHHmm(entry.horaFim) : null;
+
+      if (entryStart !== null && entryEnd !== null) {
+        const withinDesiredWindow =
+          entryStart <= slotStart && slotEnd <= entryEnd;
+        if (!withinDesiredWindow) {
+          continue;
+        }
+      }
+
+      const clientAppointments = await this.prisma.agendamento.findMany({
+        where: {
+          clienteId: entry.clienteId,
+          data: prismaDateFilter(dateKey),
+          status: StatusAgendamento.CONFIRMADO,
+        },
+      });
+
+      const hasClientConflict = clientAppointments.some((appointment) => {
+        const appointmentStart = localMinuteOfDay(appointment.horaInicio);
+        const appointmentEnd = localMinuteOfDay(appointment.horaFim);
+        return slotStart < appointmentEnd && appointmentStart < slotEnd;
+      });
+
+      if (hasClientConflict) {
+        continue;
+      }
+
+      eligible.push(entry);
+    }
+
+    return eligible;
   }
 
   async cancel(userId: number, waitlistId: number): Promise<any> {
