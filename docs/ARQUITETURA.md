@@ -176,6 +176,13 @@ O backend e o banco deverão garantir que somente uma reserva válida seja confi
 
 O frontend não deverá ser responsável por essa proteção.
 
+Para claims temporários da lista de espera, o backend adquire o lock do
+calendário do barbeiro e um advisory lock transacional exclusivo do slot. A
+revalidação da agenda, a escolha FIFO e a inserção do claim usam o mesmo
+`TransactionClient`, evitando dois claims ativos válidos para a mesma
+oportunidade. O namespace do claim é separado dos namespaces de barbeiro,
+cliente e entrada da lista.
+
 ---
 
 ## 9. AUTENTICAÇÃO

@@ -3,7 +3,11 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
-import { StatusListaEspera, TipoUsuario } from '../src/generated/prisma/enums';
+import {
+  StatusListaEspera,
+  StatusWaitlistClaim,
+  TipoUsuario,
+} from '../src/generated/prisma/enums';
 import { hashPassword } from '../src/common/utils/password.util';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { WaitlistService } from '../src/waitlist/waitlist.service';
@@ -29,6 +33,7 @@ describe('Waitlist (e2e)', () => {
   const clientIds: number[] = [];
   const barberIds: number[] = [];
   const waitlistIds: number[] = [];
+  const claimIds: number[] = [];
   const serviceIds: number[] = [];
 
   const password = 'waitlist-e2e-password';
@@ -133,6 +138,7 @@ describe('Waitlist (e2e)', () => {
 
   afterAll(async () => {
     if (prisma) {
+      await prisma.waitlistClaim.deleteMany({ where: { id: { in: claimIds } } });
       await prisma.listaEspera.deleteMany({
         where: {
           OR: [
@@ -338,6 +344,125 @@ describe('Waitlist (e2e)', () => {
       .expect(404);
   });
 
+  it('claim real concorrente cria exatamente um claim ativo válido', async () => {
+    const dateKey = '2099-03-10';
+    const date = new Date(`${dateKey}T00:00:00.000Z`);
+    const diaSemana = date.getUTCDay();
+    await prisma.horarioFuncionamento.create({
+      data: {
+        barbeiroId: barberAId,
+        diaSemana,
+        horaInicio: '08:00',
+        horaFim: '18:00',
+        ativo: true,
+      },
+    });
+
+    const older = await prisma.listaEspera.create({
+      data: {
+        clienteId: clientAId,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        dataDesejada: date,
+        horaInicio: '09:00',
+        horaFim: '18:00',
+        dataEntrada: new Date('2098-01-01T00:00:00.000Z'),
+      },
+    });
+    const newer = await prisma.listaEspera.create({
+      data: {
+        clienteId: clientBId,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        dataDesejada: date,
+        horaInicio: '09:00',
+        horaFim: '18:00',
+        dataEntrada: new Date('2098-01-02T00:00:00.000Z'),
+      },
+    });
+    waitlistIds.push(older.id, newer.id);
+
+    const results = await Promise.allSettled([
+      waitlistService.claimNextEligibleEntryForSlot(barberAId, serviceAId, dateKey, '10:00', '10:30'),
+      waitlistService.claimNextEligibleEntryForSlot(barberAId, serviceAId, dateKey, '10:00', '10:30'),
+    ]);
+
+    if (results.every((result) => result.status === 'rejected')) {
+      throw new Error(
+        results
+          .map((result) => (result.status === 'rejected' ? result.reason?.message : 'ok'))
+          .join(' | '),
+      );
+    }
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+
+    const claims = await prisma.waitlistClaim.findMany({
+      where: {
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        data: date,
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: { gt: new Date() },
+      },
+    });
+    expect(claims).toHaveLength(1);
+    expect(claims[0].listaEsperaId).toBe(older.id);
+    claimIds.push(claims[0].id);
+  });
+
+  it('claim expirado real não impede novo claim', async () => {
+    const dateKey = '2099-03-11';
+    const date = new Date(`${dateKey}T00:00:00.000Z`);
+    await prisma.horarioFuncionamento.create({
+      data: {
+        barbeiroId: barberAId,
+        diaSemana: date.getUTCDay(),
+        horaInicio: '08:00',
+        horaFim: '18:00',
+        ativo: true,
+      },
+    });
+    const entry = await prisma.listaEspera.create({
+      data: {
+        clienteId: clientAId,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        dataDesejada: date,
+        horaInicio: '09:00',
+        horaFim: '18:00',
+      },
+    });
+    waitlistIds.push(entry.id);
+    const expired = await prisma.waitlistClaim.create({
+      data: {
+        listaEsperaId: entry.id,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        data: date,
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date(Date.now() - 60_000),
+      },
+    });
+    claimIds.push(expired.id);
+
+    const result = await waitlistService.claimNextEligibleEntryForSlot(
+      barberAId,
+      serviceAId,
+      dateKey,
+      '10:00',
+      '10:30',
+    );
+
+    expect(result.listaEsperaId).toBe(entry.id);
+    expect(result.status).toBe(StatusWaitlistClaim.ATIVO);
+    claimIds.push(result.id);
+  });
+
   it('detecta duplicidade ativa em concorrência real', async () => {
     const payload = {
       barbeiroId: barberAId,
@@ -484,6 +609,9 @@ describe('Waitlist (e2e)', () => {
     expect(eligible.some(({ id }) => id === olderEntry.id)).toBe(true);
     expect(eligible.some(({ id }) => id === newerEntry.id)).toBe(true);
 
+    await prisma.waitlistClaim.deleteMany({
+      where: { barbeiroId: barberAId },
+    });
     await prisma.listaEspera.deleteMany({
       where: {
         OR: [

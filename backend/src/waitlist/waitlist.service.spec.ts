@@ -4,7 +4,10 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { StatusListaEspera } from '../generated/prisma/enums';
+import {
+  StatusListaEspera,
+  StatusWaitlistClaim,
+} from '../generated/prisma/enums';
 import { WaitlistService } from './waitlist.service';
 
 function buildPrismaMock() {
@@ -15,18 +18,30 @@ function buildPrismaMock() {
     findUnique: jest.fn(),
     update: jest.fn(),
   };
+  const waitlistClaim = {
+    findFirst: jest.fn(),
+    create: jest.fn(),
+  };
+  const barbeiro = { findUnique: jest.fn() };
+  const servico = { findFirst: jest.fn() };
+  const agendamento = { findMany: jest.fn() };
 
   const tx = {
     $executeRaw: jest.fn().mockResolvedValue(undefined),
     listaEspera,
+    waitlistClaim,
+    barbeiro,
+    servico,
+    agendamento,
   };
 
   return {
     cliente: { findUnique: jest.fn() },
-    barbeiro: { findUnique: jest.fn() },
-    servico: { findFirst: jest.fn() },
-    agendamento: { findMany: jest.fn() },
+    barbeiro,
+    servico,
+    agendamento,
     listaEspera,
+    waitlistClaim,
     $transaction: jest.fn(async (callback: any) => callback(tx)),
     $executeRaw: jest.fn().mockResolvedValue(undefined),
   };
@@ -238,6 +253,171 @@ describe('WaitlistService', () => {
     const result = await service.findMyWaitlist(1);
     expect(result).toHaveLength(1);
     expect(result[0].clienteId).toBeUndefined();
+  });
+
+  describe('claimNextEligibleEntryForSlot', () => {
+    const slot = {
+      barbeiroId: 10,
+      servicoId: 20,
+      dateKey: '2099-01-12',
+      horaInicio: '10:00',
+      horaFim: '10:30',
+    };
+
+    beforeEach(() => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+      prisma.servico.findFirst.mockResolvedValue({
+        id: 20,
+        barbeiroId: 10,
+        ativo: true,
+        duracaoMinutos: 30,
+      });
+      prisma.agendamento.findMany.mockResolvedValue([]);
+      prisma.waitlistClaim.findFirst.mockResolvedValue(null);
+      scheduleService.getDateSnapshot.mockResolvedValue({
+        windows: [{ ini: 0, fim: 24 * 60 }],
+        busy: [],
+      });
+    });
+
+    it('cria claim para o primeiro candidato FIFO e calcula TTL', async () => {
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 11,
+          clienteId: 101,
+          status: StatusListaEspera.ATIVA,
+          dataEntrada: new Date('2098-01-01T00:00:00.000Z'),
+          horaInicio: null,
+          horaFim: null,
+        },
+        {
+          id: 12,
+          clienteId: 102,
+          status: StatusListaEspera.ATIVA,
+          dataEntrada: new Date('2098-01-02T00:00:00.000Z'),
+          horaInicio: null,
+          horaFim: null,
+        },
+      ]);
+      const createdAt = new Date();
+      prisma.waitlistClaim.create.mockResolvedValue({
+        id: 50,
+        listaEsperaId: 11,
+        barbeiroId: 10,
+        servicoId: 20,
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date(createdAt.getTime() + 5 * 60 * 1000),
+        dataCriacao: createdAt,
+      });
+
+      const result = await service.claimNextEligibleEntryForSlot(
+        slot.barbeiroId,
+        slot.servicoId,
+        slot.dateKey,
+        slot.horaInicio,
+        slot.horaFim,
+      );
+
+      expect(result.listaEsperaId).toBe(11);
+      expect(result.clienteId).toBeUndefined();
+      expect(prisma.waitlistClaim.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            listaEsperaId: 11,
+            status: StatusWaitlistClaim.ATIVO,
+          }),
+        }),
+      );
+      const expiresAt = prisma.waitlistClaim.create.mock.calls[0][0].data.expiraEm;
+      expect(expiresAt.getTime() - createdAt.getTime()).toBeGreaterThanOrEqual(
+        5 * 60 * 1000,
+      );
+      expect(expiresAt.getTime() - createdAt.getTime()).toBeLessThan(
+        5 * 60 * 1000 + 1000,
+      );
+    });
+
+    it('não cria claim quando não há candidato elegível', async () => {
+      prisma.listaEspera.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.claimNextEligibleEntryForSlot(
+          slot.barbeiroId,
+          slot.servicoId,
+          slot.dateKey,
+          slot.horaInicio,
+          slot.horaFim,
+        ),
+      ).rejects.toThrow(new NotFoundException('Nenhuma entrada elegível para este slot.'));
+      expect(prisma.waitlistClaim.create).not.toHaveBeenCalled();
+    });
+
+    it('claim válido bloqueia duplicação, mas claim expirado não bloqueia', async () => {
+      prisma.listaEspera.findMany.mockResolvedValue([
+        {
+          id: 11,
+          clienteId: 101,
+          status: StatusListaEspera.ATIVA,
+          dataEntrada: new Date('2098-01-01T00:00:00.000Z'),
+          horaInicio: null,
+          horaFim: null,
+        },
+      ]);
+      prisma.waitlistClaim.findFirst.mockResolvedValueOnce({ id: 40 });
+
+      await expect(
+        service.claimNextEligibleEntryForSlot(
+          slot.barbeiroId,
+          slot.servicoId,
+          slot.dateKey,
+          slot.horaInicio,
+          slot.horaFim,
+        ),
+      ).rejects.toThrow(new ConflictException('Já existe um claim ativo para este slot.'));
+
+      prisma.waitlistClaim.findFirst.mockResolvedValueOnce(null);
+      prisma.waitlistClaim.create.mockResolvedValue({
+        id: 41,
+        listaEsperaId: 11,
+        barbeiroId: 10,
+        servicoId: 20,
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date(Date.now() + 5 * 60 * 1000),
+        dataCriacao: new Date(),
+      });
+
+      await expect(
+        service.claimNextEligibleEntryForSlot(
+          slot.barbeiroId,
+          slot.servicoId,
+          slot.dateKey,
+          slot.horaInicio,
+          slot.horaFim,
+        ),
+      ).resolves.toEqual(expect.objectContaining({ id: 41 }));
+    });
+
+    it('não cria claim para slot bloqueado ou appointment confirmado', async () => {
+      scheduleService.getDateSnapshot.mockResolvedValue({
+        windows: [{ ini: 0, fim: 24 * 60 }],
+        busy: [{ ini: 600, fim: 630, origem: 'BLOQUEIO' }],
+      });
+
+      await expect(
+        service.claimNextEligibleEntryForSlot(
+          slot.barbeiroId,
+          slot.servicoId,
+          slot.dateKey,
+          slot.horaInicio,
+          slot.horaFim,
+        ),
+      ).rejects.toThrow(new ConflictException('O slot não está mais disponível.'));
+      expect(prisma.waitlistClaim.create).not.toHaveBeenCalled();
+    });
   });
 
   it('cancelamento do próprio cliente funciona e marca status CANCELADA', async () => {

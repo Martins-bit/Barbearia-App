@@ -28,6 +28,13 @@ enum StatusListaEspera {
   EXPIRADA
 }
 
+enum StatusWaitlistClaim {
+  ATIVO
+  EXPIRADO
+  ACEITO
+  RECUSADO
+}
+
 enum TipoNotificacao {
   AGENDAMENTO
   CANCELAMENTO
@@ -45,85 +52,85 @@ enum StatusEmergencia {
 }
 
 model Usuario {
-  id              Int              @id @default(autoincrement())
+  id              Int         @id @default(autoincrement())
   nome            String
-  telefone        String           @unique
-  email           String?          @unique
+  telefone        String      @unique
+  email           String?     @unique
   senhaHash       String
   tipoUsuario     TipoUsuario
-  ativo           Boolean          @default(true)
-  dataCriacao     DateTime         @default(now())
-  dataAtualizacao DateTime         @updatedAt
+  ativo           Boolean     @default(true)
+  dataCriacao     DateTime    @default(now())
+  dataAtualizacao DateTime    @updatedAt
 
-  cliente         Cliente?
-  barbeiro        Barbeiro?
-  notificacoes    Notificacao[]
+  cliente            Cliente?
+  barbeiro           Barbeiro?
+  notificacoes       Notificacao[]
   mensagensEnviadas  Mensagem[]    @relation("MensagensEnviadas")
   mensagensRecebidas Mensagem[]    @relation("MensagensRecebidas")
 }
 
 model Cliente {
-  id              Int              @id @default(autoincrement())
-  usuarioId       Int              @unique
-  dataCriacao     DateTime         @default(now())
-  dataAtualizacao DateTime         @updatedAt
+  id              Int      @id @default(autoincrement())
+  usuarioId       Int      @unique
+  dataCriacao     DateTime @default(now())
+  dataAtualizacao DateTime @updatedAt
 
-  usuario         Usuario          @relation(fields: [usuarioId], references: [id])
-  agendamentos    Agendamento[]
-  listaEspera     ListaEspera[]
+  usuario      Usuario       @relation(fields: [usuarioId], references: [id])
+  agendamentos Agendamento[]
+  listaEspera  ListaEspera[]
 }
 
 model Barbeiro {
-  id                 Int                    @id @default(autoincrement())
-  usuarioId          Int                    @unique
-  ativo              Boolean                @default(true)
-  dataCriacao        DateTime               @default(now())
-  dataAtualizacao    DateTime               @updatedAt
+  id              Int      @id @default(autoincrement())
+  usuarioId       Int      @unique
+  ativo           Boolean  @default(true)
+  dataCriacao     DateTime @default(now())
+  dataAtualizacao DateTime @updatedAt
 
-  usuario            Usuario                @relation(fields: [usuarioId], references: [id])
-  servicos           Servico[]
-  agendamentos       Agendamento[]
-  horarios           HorarioFuncionamento[]
-  bloqueios          BloqueioAgenda[]
-  emergencias        Emergencia[]
-  listaEspera        ListaEspera[]
+  usuario      Usuario                @relation(fields: [usuarioId], references: [id])
+  servicos     Servico[]
+  agendamentos Agendamento[]
+  horarios     HorarioFuncionamento[]
+  bloqueios    BloqueioAgenda[]
+  emergencias  Emergencia[]
+  listaEspera  ListaEspera[]
 }
 
 model Servico {
-  id              Int              @id @default(autoincrement())
+  id              Int      @id @default(autoincrement())
   barbeiroId      Int
   nome            String
   descricao       String?
   duracaoMinutos  Int
-  preco           Decimal          @db.Decimal(10, 2)
-  ativo           Boolean          @default(true)
-  dataCriacao     DateTime         @default(now())
-  dataAtualizacao DateTime         @updatedAt
+  preco           Decimal  @db.Decimal(10, 2)
+  ativo           Boolean  @default(true)
+  dataCriacao     DateTime @default(now())
+  dataAtualizacao DateTime @updatedAt
 
-  barbeiro        Barbeiro         @relation(fields: [barbeiroId], references: [id])
-  agendamentos    Agendamento[]
-  listaEspera     ListaEspera[]
+  barbeiro     Barbeiro      @relation(fields: [barbeiroId], references: [id])
+  agendamentos Agendamento[]
+  listaEspera  ListaEspera[]
 
   @@index([barbeiroId])
   @@index([ativo])
 }
 
 model Agendamento {
-  id              Int                @id @default(autoincrement())
+  id              Int               @id @default(autoincrement())
   clienteId       Int
   barbeiroId      Int
   servicoId       Int
-  data            DateTime           @db.Date
+  data            DateTime          @db.Date
   horaInicio      DateTime
   horaFim         DateTime
-  status          StatusAgendamento  @default(CONFIRMADO)
+  status          StatusAgendamento @default(CONFIRMADO)
   observacoes     String?
-  dataCriacao     DateTime           @default(now())
-  dataAtualizacao DateTime           @updatedAt
+  dataCriacao     DateTime          @default(now())
+  dataAtualizacao DateTime          @updatedAt
 
-  cliente         Cliente            @relation(fields: [clienteId], references: [id])
-  barbeiro        Barbeiro           @relation(fields: [barbeiroId], references: [id])
-  servico         Servico            @relation(fields: [servicoId], references: [id])
+  cliente  Cliente  @relation(fields: [clienteId], references: [id])
+  barbeiro Barbeiro @relation(fields: [barbeiroId], references: [id])
+  servico  Servico  @relation(fields: [servicoId], references: [id])
 
   @@index([clienteId])
   @@index([barbeiroId, data])
@@ -132,20 +139,21 @@ model Agendamento {
 }
 
 model ListaEspera {
-  id              Int                @id @default(autoincrement())
+  id              Int               @id @default(autoincrement())
   clienteId       Int
   barbeiroId      Int
   servicoId       Int
-  dataDesejada    DateTime           @db.Date
+  dataDesejada    DateTime          @db.Date
   horaInicio      String?
   horaFim         String?
-  status          StatusListaEspera  @default(ATIVA)
-  dataEntrada     DateTime           @default(now())
-  dataAtualizacao DateTime           @updatedAt
+  status          StatusListaEspera @default(ATIVA)
+  dataEntrada     DateTime          @default(now())
+  dataAtualizacao DateTime          @updatedAt
 
-  cliente         Cliente            @relation(fields: [clienteId], references: [id])
-  barbeiro        Barbeiro           @relation(fields: [barbeiroId], references: [id])
-  servico         Servico            @relation(fields: [servicoId], references: [id])
+  cliente  Cliente         @relation(fields: [clienteId], references: [id])
+  barbeiro Barbeiro        @relation(fields: [barbeiroId], references: [id])
+  servico  Servico         @relation(fields: [servicoId], references: [id])
+  claims   WaitlistClaim[]
 
   @@index([clienteId])
   @@index([barbeiroId])
@@ -153,16 +161,36 @@ model ListaEspera {
   @@index([clienteId, barbeiroId, servicoId, dataDesejada, status])
 }
 
+model WaitlistClaim {
+  id              Int                 @id @default(autoincrement())
+  listaEsperaId   Int
+  barbeiroId      Int
+  servicoId       Int
+  data            DateTime            @db.Date
+  horaInicio      String
+  horaFim         String
+  status          StatusWaitlistClaim @default(ATIVO)
+  expiraEm        DateTime
+  dataCriacao     DateTime            @default(now())
+  dataAtualizacao DateTime            @updatedAt
+
+  listaEspera ListaEspera @relation(fields: [listaEsperaId], references: [id])
+
+  @@index([barbeiroId, servicoId, data, horaInicio, horaFim, status])
+  @@index([listaEsperaId, status])
+  @@index([expiraEm])
+}
+
 model Notificacao {
-  id          Int              @id @default(autoincrement())
+  id          Int             @id @default(autoincrement())
   usuarioId   Int
   tipo        TipoNotificacao
   titulo      String
   mensagem    String
-  lida        Boolean          @default(false)
-  dataCriacao DateTime         @default(now())
+  lida        Boolean         @default(false)
+  dataCriacao DateTime        @default(now())
 
-  usuario     Usuario          @relation(fields: [usuarioId], references: [id])
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
 
   @@index([usuarioId, lida])
 }
@@ -175,22 +203,22 @@ model Mensagem {
   lida           Boolean  @default(false)
   dataCriacao    DateTime @default(now())
 
-  remetente      Usuario  @relation("MensagensEnviadas", fields: [remetenteId], references: [id])
-  destinatario   Usuario  @relation("MensagensRecebidas", fields: [destinatarioId], references: [id])
+  remetente    Usuario @relation("MensagensEnviadas", fields: [remetenteId], references: [id])
+  destinatario Usuario @relation("MensagensRecebidas", fields: [destinatarioId], references: [id])
 
   @@index([remetenteId])
   @@index([destinatarioId, lida])
 }
 
 model HorarioFuncionamento {
-  id         Int      @id @default(autoincrement())
+  id         Int     @id @default(autoincrement())
   barbeiroId Int
   diaSemana  Int
   horaInicio String
   horaFim    String
-  ativo      Boolean  @default(true)
+  ativo      Boolean @default(true)
 
-  barbeiro   Barbeiro @relation(fields: [barbeiroId], references: [id])
+  barbeiro Barbeiro @relation(fields: [barbeiroId], references: [id])
 
   @@index([barbeiroId, diaSemana])
 }
@@ -205,21 +233,21 @@ model BloqueioAgenda {
   ativo       Boolean  @default(true)
   dataCriacao DateTime @default(now())
 
-  barbeiro    Barbeiro @relation(fields: [barbeiroId], references: [id])
+  barbeiro Barbeiro @relation(fields: [barbeiroId], references: [id])
 
   @@index([barbeiroId, data])
 }
 
 model Emergencia {
-  id          Int               @id @default(autoincrement())
+  id          Int              @id @default(autoincrement())
   barbeiroId  Int
   dataInicio  DateTime
   dataFim     DateTime
   motivo      String
-  status      StatusEmergencia  @default(ATIVA)
-  dataCriacao DateTime          @default(now())
+  status      StatusEmergencia @default(ATIVA)
+  dataCriacao DateTime         @default(now())
 
-  barbeiro    Barbeiro          @relation(fields: [barbeiroId], references: [id])
+  barbeiro Barbeiro @relation(fields: [barbeiroId], references: [id])
 
   @@index([barbeiroId, dataInicio, dataFim])
 }

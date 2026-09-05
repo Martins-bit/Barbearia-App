@@ -8,19 +8,27 @@ import { Prisma, PrismaClient } from '../generated/prisma/client';
 import {
   StatusAgendamento,
   StatusListaEspera,
+  StatusWaitlistClaim,
 } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
-import { ScheduleService } from '../schedule/schedule.service';
+import {
+  acquireCalendarLock,
+  ScheduleService,
+  ScheduleDbClient,
+} from '../schedule/schedule.service';
 import {
   getZonedParts,
   isValidDateKey,
   localMinuteOfDay,
   prismaDateFilter,
+  zonedWallTimeToUtc,
 } from '../schedule/tz.util';
 
 export type WaitlistDbClient = PrismaClient | Prisma.TransactionClient;
 
 export const WAITLIST_LOCK_NS = 3;
+export const WAITLIST_CLAIM_LOCK_NS = 4;
+export const WAITLIST_CLAIM_TTL_MINUTES = 5;
 
 export async function acquireWaitlistLock(
   client: WaitlistDbClient,
@@ -29,6 +37,20 @@ export async function acquireWaitlistLock(
   await client.$executeRaw`SELECT pg_advisory_xact_lock(
     ${WAITLIST_LOCK_NS}::int,
     ${clienteId}::int
+  )`;
+}
+
+export async function acquireWaitlistClaimLock(
+  client: WaitlistDbClient,
+  barbeiroId: number,
+  servicoId: number,
+  dateKey: string,
+  horaInicio: string,
+  horaFim: string,
+): Promise<void> {
+  await client.$executeRaw`SELECT pg_advisory_xact_lock(
+    ${WAITLIST_CLAIM_LOCK_NS}::int,
+    (hashtextextended(${`${barbeiroId}:${servicoId}:${dateKey}:${horaInicio}:${horaFim}`}, 0) % 2147483647)::int
   )`;
 }
 
@@ -211,6 +233,7 @@ export class WaitlistService {
     dateKey: string,
     horaInicio: string,
     horaFim: string,
+    client: ScheduleDbClient = this.prisma,
   ): Promise<any[]> {
     if (!isValidDateKey(dateKey)) {
       throw new BadRequestException('Data inválida.');
@@ -228,7 +251,7 @@ export class WaitlistService {
       return [];
     }
 
-    const service = await this.prisma.servico.findFirst({
+    const service = await client.servico.findFirst({
       where: { id: servicoId, barbeiroId, ativo: true },
       select: { id: true, duracaoMinutos: true },
     });
@@ -236,7 +259,7 @@ export class WaitlistService {
       return [];
     }
 
-    const barber = await this.prisma.barbeiro.findUnique({
+    const barber = await client.barbeiro.findUnique({
       where: { id: barbeiroId },
       select: { id: true, ativo: true },
     });
@@ -245,7 +268,7 @@ export class WaitlistService {
     }
 
     const { windows, busy } = await this.scheduleService.getDateSnapshot(
-      this.prisma,
+      client,
       barbeiroId,
       dateKey,
     );
@@ -264,7 +287,7 @@ export class WaitlistService {
       return [];
     }
 
-    const entries = await this.prisma.listaEspera.findMany({
+    const entries = await client.listaEspera.findMany({
       where: {
         status: StatusListaEspera.ATIVA,
         barbeiroId,
@@ -297,7 +320,7 @@ export class WaitlistService {
         }
       }
 
-      const clientAppointments = await this.prisma.agendamento.findMany({
+      const clientAppointments = await client.agendamento.findMany({
         where: {
           clienteId: entry.clienteId,
           data: prismaDateFilter(dateKey),
@@ -319,6 +342,129 @@ export class WaitlistService {
     }
 
     return eligible;
+  }
+
+  async claimNextEligibleEntryForSlot(
+    barbeiroId: number,
+    servicoId: number,
+    dateKey: string,
+    horaInicio: string,
+    horaFim: string,
+  ): Promise<any> {
+    if (!isValidDateKey(dateKey)) {
+      throw new BadRequestException('Data inválida.');
+    }
+
+    this.validateWindow(horaInicio, horaFim);
+    const slotStart = this.parseHHmm(horaInicio);
+    const slotEnd = this.parseHHmm(horaFim);
+    const slotStartInstant = zonedWallTimeToUtc(dateKey, horaInicio);
+
+    return this.prisma.$transaction(async (tx: WaitlistDbClient) => {
+      // O lock do barbeiro serializa este fluxo com appointments e bloqueios.
+      await acquireCalendarLock(tx, barbeiroId);
+      await acquireWaitlistClaimLock(
+        tx,
+        barbeiroId,
+        servicoId,
+        dateKey,
+        horaInicio,
+        horaFim,
+      );
+
+      const agora = new Date();
+      if (slotStartInstant <= agora) {
+        throw new BadRequestException('Não é possível reivindicar um horário que já passou.');
+      }
+
+      const service = await tx.servico.findFirst({
+        where: { id: servicoId, barbeiroId, ativo: true },
+        select: { id: true, duracaoMinutos: true },
+      });
+      if (!service) {
+        throw new NotFoundException('Serviço não encontrado.');
+      }
+
+      if (service.duracaoMinutos !== slotEnd - slotStart) {
+        throw new BadRequestException('O slot não corresponde à duração do serviço.');
+      }
+
+      const snapshot = await this.scheduleService.getDateSnapshot(
+        tx,
+        barbeiroId,
+        dateKey,
+      );
+      const fitsBusinessHours = snapshot.windows.some(
+        (window) => slotStart >= window.ini && slotEnd <= window.fim,
+      );
+      if (!fitsBusinessHours) {
+        throw new BadRequestException('Fora do horário de funcionamento.');
+      }
+
+      const overlaps = (interval: { ini: number; fim: number }): boolean =>
+        slotStart < interval.fim && interval.ini < slotEnd;
+      if (snapshot.busy.some((interval) => overlaps(interval))) {
+        throw new ConflictException('O slot não está mais disponível.');
+      }
+
+      const activeClaim = await tx.waitlistClaim.findFirst({
+        where: {
+          barbeiroId,
+          servicoId,
+          data: prismaDateFilter(dateKey),
+          horaInicio,
+          horaFim,
+          status: StatusWaitlistClaim.ATIVO,
+          expiraEm: { gt: agora },
+        },
+        orderBy: { dataCriacao: 'desc' },
+      });
+      if (activeClaim) {
+        throw new ConflictException('Já existe um claim ativo para este slot.');
+      }
+
+      const eligible = await this.findEligibleEntriesForSlot(
+        barbeiroId,
+        servicoId,
+        dateKey,
+        horaInicio,
+        horaFim,
+        tx,
+      );
+      const candidate = eligible[0];
+      if (!candidate) {
+        throw new NotFoundException('Nenhuma entrada elegível para este slot.');
+      }
+
+      const expiraEm = new Date(
+        agora.getTime() + WAITLIST_CLAIM_TTL_MINUTES * 60 * 1000,
+      );
+      const created = await tx.waitlistClaim.create({
+        data: {
+          listaEsperaId: candidate.id,
+          barbeiroId,
+          servicoId,
+          data: prismaDateFilter(dateKey),
+          horaInicio,
+          horaFim,
+          status: StatusWaitlistClaim.ATIVO,
+          expiraEm,
+        },
+      });
+
+      return {
+        id: created.id,
+        listaEsperaId: created.listaEsperaId,
+        barbeiroId: created.barbeiroId,
+        servicoId: created.servicoId,
+        data: dateKey,
+        horaInicio: created.horaInicio,
+        horaFim: created.horaFim,
+        status: created.status,
+        expiraEm: created.expiraEm,
+        dataCriacao: created.dataCriacao,
+      };
+    });
   }
 
   async cancel(userId: number, waitlistId: number): Promise<any> {

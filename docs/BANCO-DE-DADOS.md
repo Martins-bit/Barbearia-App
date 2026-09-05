@@ -234,6 +234,17 @@ A prioridade deverá considerar a ordem de entrada.
 
 A informação `data_entrada` poderá ser utilizada para determinar essa ordem.
 
+### Claims temporários de vaga
+
+O sistema poderá persistir claims temporários associados a uma entrada da lista
+de espera. Um claim identifica o slot exato por `barbeiro_id`, `servico_id`,
+`data`, `hora_inicio` e `hora_fim`, além de armazenar `expira_em` e seu status.
+
+Os claims não são agendamentos e não alteram o status da entrada da lista. A
+validade de um claim `ATIVO` é determinada por `expira_em`; claims expirados
+permanecem no histórico e não bloqueiam novos claims. Não existe unicidade
+permanente por slot, pois o histórico pode conter claims expirados.
+
 ---
 
 ## 10. NOTIFICAÇÕES
