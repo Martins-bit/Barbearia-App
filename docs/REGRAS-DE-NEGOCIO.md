@@ -275,6 +275,11 @@ As notificações deverão estar vinculadas ao usuário correto.
 
 Um cliente não poderá visualizar notificações pertencentes a outro cliente.
 
+Notificações internas podem representar uma oportunidade da lista de espera
+com o tipo `WAITLIST_OPPORTUNITY`. Quando um claim válido é criado, deve
+existir uma notificação correspondente para o usuário da entrada, criada na
+mesma transação. A notificação não é push nem substitui o aceite do claim.
+
 ---
 
 # 18. LEMBRETES

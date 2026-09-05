@@ -541,9 +541,20 @@ Endpoint conceitual:
 
 O usuário somente poderá receber suas próprias notificações.
 
+As notificações são ordenadas da mais recente para a mais antiga e não expõem
+`usuario_id`.
+
+## 11.2. Contar notificações não lidas
+
+Endpoint conceitual:
+
+`GET /api/notifications/unread-count`
+
+Retorna a quantidade de notificações não lidas do usuário autenticado.
+
 ---
 
-## 11.2. Marcar notificação como lida
+## 11.3. Marcar notificação como lida
 
 Endpoint conceitual:
 
@@ -552,6 +563,18 @@ Endpoint conceitual:
 ### Permissão
 
 Somente o usuário proprietário da notificação.
+
+Operação idempotente. Define `lida = true` e preenche `data_leitura`. Uma
+notificação inexistente ou pertencente a outro usuário retorna 404 genérico.
+
+## 11.4. Marcar todas como lidas
+
+Endpoint conceitual:
+
+`PATCH /api/notifications/read-all`
+
+Atualiza somente as notificações não lidas do usuário autenticado e retorna a
+quantidade alterada.
 
 ---
 

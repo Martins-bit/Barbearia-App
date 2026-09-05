@@ -36,6 +36,7 @@ enum StatusWaitlistClaim {
 }
 
 enum TipoNotificacao {
+  WAITLIST_OPPORTUNITY
   AGENDAMENTO
   CANCELAMENTO
   LEMBRETE
@@ -175,6 +176,7 @@ model WaitlistClaim {
   dataAtualizacao DateTime            @updatedAt
 
   listaEspera ListaEspera @relation(fields: [listaEsperaId], references: [id])
+  notificacoes Notificacao[]
 
   @@index([barbeiroId, servicoId, data, horaInicio, horaFim, status])
   @@index([listaEsperaId, status])
@@ -182,17 +184,22 @@ model WaitlistClaim {
 }
 
 model Notificacao {
-  id          Int             @id @default(autoincrement())
-  usuarioId   Int
-  tipo        TipoNotificacao
-  titulo      String
-  mensagem    String
-  lida        Boolean         @default(false)
-  dataCriacao DateTime        @default(now())
+  id           Int             @id @default(autoincrement())
+  usuarioId    Int
+  claimId      Int?
+  tipo         TipoNotificacao
+  titulo       String
+  mensagem     String
+  lida         Boolean         @default(false)
+  dataCriacao  DateTime        @default(now())
+  dataLeitura  DateTime?
 
-  usuario Usuario @relation(fields: [usuarioId], references: [id])
+  usuario Usuario       @relation(fields: [usuarioId], references: [id])
+  claim   WaitlistClaim? @relation(fields: [claimId], references: [id])
 
   @@index([usuarioId, lida])
+  @@index([usuarioId, dataCriacao])
+  @@index([claimId])
 }
 
 model Mensagem {

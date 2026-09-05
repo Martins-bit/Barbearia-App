@@ -255,11 +255,13 @@ A entidade de notificações armazenará avisos destinados aos usuários.
 
 - `id`
 - `usuario_id`
+- `claim_id`, quando a notificação representar uma oportunidade da lista de espera
 - `tipo`
 - `titulo`
 - `mensagem`
 - `lida`
 - `data_criacao`
+- `data_leitura`, quando marcada como lida
 
 ### Tipos possíveis
 
@@ -270,6 +272,11 @@ A entidade de notificações armazenará avisos destinados aos usuários.
 - Emergência;
 - Aviso;
 - Alteração de horário.
+
+Nesta etapa, `WAITLIST_OPPORTUNITY` referencia opcionalmente um
+`WaitlistClaim`. A criação do claim e da notificação ocorre na mesma
+transação. Notificações são registros internos persistentes; não representam
+push, e-mail, SMS ou integração externa.
 
 ---
 

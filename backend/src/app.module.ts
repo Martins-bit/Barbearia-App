@@ -9,6 +9,7 @@ import { ServicesModule } from './services/services.module';
 import { ScheduleModule } from './schedule/schedule.module';
 import { AppointmentsModule } from './appointments/appointments.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { WaitlistModule } from './waitlist/waitlist.module';
     ScheduleModule,
     AppointmentsModule,
     WaitlistModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

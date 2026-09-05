@@ -55,6 +55,7 @@ describe('WaitlistService', () => {
   let prisma: any;
   let scheduleService: any;
   let appointmentsService: any;
+  let notificationsService: any;
   let service: WaitlistService;
 
   const validDto = {
@@ -77,10 +78,14 @@ describe('WaitlistService', () => {
     appointmentsService = {
       createConfirmedForClient: jest.fn(),
     };
+    notificationsService = {
+      createWaitlistOpportunity: jest.fn().mockResolvedValue({ id: 900 }),
+    };
     service = new WaitlistService(
       prisma as unknown as PrismaService,
       scheduleService,
       appointmentsService,
+      notificationsService,
     );
   });
 
@@ -338,6 +343,11 @@ describe('WaitlistService', () => {
             status: StatusWaitlistClaim.ATIVO,
           }),
         }),
+      );
+      expect(notificationsService.createWaitlistOpportunity).toHaveBeenCalledWith(
+        expect.anything(),
+        101,
+        50,
       );
       const expiresAt = prisma.waitlistClaim.create.mock.calls[0][0].data.expiraEm;
       expect(expiresAt.getTime() - createdAt.getTime()).toBeGreaterThanOrEqual(

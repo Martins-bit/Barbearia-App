@@ -120,6 +120,11 @@ Deverá armazenar informações como:
 
 A estrutura deverá seguir `BANCO-DE-DADOS.md`.
 
+Notificações internas são persistidas no banco e pertencem a um usuário. O
+fluxo de criação de um `WaitlistClaim` cria sua notificação de oportunidade no
+mesmo `TransactionClient`, sem adquirir novo advisory lock. A referência é
+tipada por `claimId`; não há JSON genérico nem transporte push nesta etapa.
+
 ---
 
 ## 6. SEPARAÇÃO DE RESPONSABILIDADES

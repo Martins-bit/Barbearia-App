@@ -15,6 +15,7 @@ import {
   acquireClienteLock,
   AppointmentsService,
 } from '../appointments/appointments.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import {
   acquireCalendarLock,
   ScheduleService,
@@ -72,6 +73,7 @@ export class WaitlistService {
     private readonly prisma: PrismaService,
     private readonly scheduleService: ScheduleService,
     private readonly appointmentsService: AppointmentsService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   private parseHHmm(hhmm: string): number {
@@ -471,6 +473,12 @@ export class WaitlistService {
           expiraEm,
         },
       });
+
+      await this.notificationsService.createWaitlistOpportunity(
+        tx,
+        candidate.clienteId,
+        created.id,
+      );
 
       return {
         id: created.id,

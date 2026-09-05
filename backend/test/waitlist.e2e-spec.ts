@@ -138,6 +138,9 @@ describe('Waitlist (e2e)', () => {
 
   afterAll(async () => {
     if (prisma) {
+      await prisma.notificacao.deleteMany({
+        where: { usuarioId: { in: userIds } },
+      });
       await prisma.waitlistClaim.deleteMany({ where: { id: { in: claimIds } } });
       await prisma.listaEspera.deleteMany({
         where: {
