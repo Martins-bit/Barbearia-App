@@ -234,6 +234,12 @@ Quando um horário for liberado:
 
 A vaga não deverá ser considerada automaticamente reservada apenas porque o cliente recebeu a notificação.
 
+Quando uma oportunidade possuir claim, somente o cliente proprietário poderá
+aceitá-la ou recusá-la enquanto o claim estiver ativo e vigente. O aceite cria
+um agendamento confirmado e muda a entrada para `ATENDIDA`. A recusa muda o
+claim para `RECUSADO` e mantém a entrada `ATIVA`. Claims expirados são
+rejeitados logicamente pelo horário de expiração.
+
 ---
 
 # 16. FALTA / NÃO COMPARECIMENTO

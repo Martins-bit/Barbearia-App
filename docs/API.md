@@ -503,6 +503,30 @@ Barbeiro autorizado.
 
 A API deverá retornar solicitações compatíveis com a agenda e respeitar a ordem de prioridade.
 
+## 10.5. Aceitar claim de vaga
+
+Endpoint:
+
+`POST /api/waitlist/claims/:id/accept`
+
+Cliente autenticado e proprietário do claim. O backend revalida o claim e a
+agenda dentro de uma transação, cria um agendamento `CONFIRMADO`, altera o
+claim para `ACEITO` e a entrada da lista para `ATENDIDA`.
+
+Claims expirados ou em estado terminal retornam conflito. Um claim de outro
+cliente retorna 404 genérico.
+
+## 10.6. Recusar claim de vaga
+
+Endpoint:
+
+`POST /api/waitlist/claims/:id/reject`
+
+Cliente autenticado e proprietário do claim. Um claim ativo e vigente passa
+para `RECUSADO`; a entrada da lista permanece `ATIVA` e nenhum agendamento é
+criado. Claims expirados ou terminais retornam conflito, e claims de outro
+cliente retornam 404 genérico.
+
 ---
 
 # 11. NOTIFICAÇÕES

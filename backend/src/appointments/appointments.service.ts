@@ -32,6 +32,16 @@ import { AppointmentResponseDto } from './dto/appointment-response.dto';
  */
 const CLIENT_LOCK_NS = CALENDAR_LOCK_NS_CLIENTE;
 
+export interface ConfirmedAppointmentInput {
+  clienteId: number;
+  barbeiroId: number;
+  servicoId: number;
+  data: string;
+  horaInicio: string;
+  horaFim?: string;
+  observacoes?: string | null;
+}
+
 interface AppointmentRow {
   id: number;
   clienteId: number;
@@ -45,6 +55,16 @@ interface AppointmentRow {
   servico: { id: number; nome: string; preco: Prisma.Decimal };
   barbeiro: { id: number; usuario: { nome: string } };
   cliente: { id: number; usuario: { nome: string } };
+}
+
+export async function acquireClienteLock(
+  client: ScheduleDbClient,
+  clienteId: number,
+): Promise<void> {
+  await client.$executeRaw`SELECT pg_advisory_xact_lock(
+    ${CLIENT_LOCK_NS}::int,
+    ${clienteId}::int
+  )`;
 }
 
 @Injectable()
@@ -98,14 +118,103 @@ export class AppointmentsService {
    * Lock de CLIENTE (namespace 2 — distinto do namespace 1 do BARBEIRO).
    * Ordem determinística: CLIENTE → BARBEIRO (sem deadlock).
    */
-  private async acquireClienteLock(
-    client: ScheduleDbClient,
-    clienteId: number,
-  ): Promise<void> {
-    await client.$executeRaw`SELECT pg_advisory_xact_lock(
-      ${CLIENT_LOCK_NS}::int,
-      ${clienteId}::int
-    )`;
+  async createConfirmedForClient(
+    tx: ScheduleDbClient,
+    input: ConfirmedAppointmentInput,
+  ): Promise<AppointmentResponseDto> {
+    const agora = new Date();
+
+    const barber = await tx.barbeiro.findFirst({
+      where: { id: input.barbeiroId, ativo: true },
+      select: { id: true },
+    });
+    if (!barber) {
+      throw new NotFoundException('Barbeiro não encontrado.');
+    }
+
+    const service = await tx.servico.findFirst({
+      where: { id: input.servicoId, barbeiroId: input.barbeiroId },
+      select: { id: true, ativo: true, duracaoMinutos: true },
+    });
+    if (!service || !service.ativo) {
+      throw new NotFoundException('Serviço não encontrado.');
+    }
+
+    const startMinutes = this.parseHHmm(input.horaInicio);
+    const startInstant = zonedWallTimeToUtc(input.data, input.horaInicio);
+    if (startInstant <= agora) {
+      throw new BadRequestException(
+        'Não é possível agendar um horário que já passou.',
+      );
+    }
+
+    const endMinutes = startMinutes + service.duracaoMinutos;
+    if (input.horaFim !== undefined && input.horaFim !== this.minutesToHHmm(endMinutes)) {
+      throw new BadRequestException('O horário final não corresponde à duração do serviço.');
+    }
+
+    const { windows, busy } = await this.scheduleService.getDateSnapshot(
+      tx,
+      input.barbeiroId,
+      input.data,
+    );
+    if (!windows.some((w) => startMinutes >= w.ini && endMinutes <= w.fim)) {
+      throw new BadRequestException('Fora do horário de funcionamento.');
+    }
+
+    const overlaps = (interval: { ini: number; fim: number }): boolean =>
+      startMinutes < interval.fim && interval.ini < endMinutes;
+    if (busy.some((b) => b.origem === 'BLOQUEIO' && overlaps(b))) {
+      throw new BadRequestException('Horário bloqueado.');
+    }
+    if (busy.some((b) => b.origem === 'AGENDAMENTO' && overlaps(b))) {
+      throw new ConflictException('Horário não está mais disponível.');
+    }
+
+    const clientAppointments = await tx.agendamento.findMany({
+      where: {
+        clienteId: input.clienteId,
+        data: prismaDateFilter(input.data),
+        status: StatusAgendamento.CONFIRMADO,
+      },
+    });
+    if (
+      clientAppointments.some((appointment) =>
+        overlaps({
+          ini: localMinuteOfDay(appointment.horaInicio),
+          fim: localMinuteOfDay(appointment.horaFim),
+        }),
+      )
+    ) {
+      throw new ConflictException('Horário não está disponível para o cliente.');
+    }
+
+    const created = await tx.agendamento.create({
+      data: {
+        clienteId: input.clienteId,
+        barbeiroId: input.barbeiroId,
+        servicoId: input.servicoId,
+        data: prismaDateFilter(input.data),
+        horaInicio: startInstant,
+        horaFim: zonedWallTimeToUtc(input.data, this.minutesToHHmm(endMinutes)),
+        status: StatusAgendamento.CONFIRMADO,
+        observacoes: input.observacoes ?? null,
+      },
+    });
+
+    const row = await tx.agendamento.findUnique({
+      where: { id: created.id },
+      include: {
+        servico: { select: { id: true, nome: true, preco: true } },
+        barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+      },
+    });
+    if (!row) {
+      throw new NotFoundException('Agendamento não encontrado.');
+    }
+
+    return this.toResponse(row);
   }
 
   /**
@@ -137,120 +246,16 @@ export class AppointmentsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      // Locks em ordem determinística: CLIENTE → BARBEIRO.
-      await this.acquireClienteLock(tx, clienteId);
+      await acquireClienteLock(tx, clienteId);
       await acquireCalendarLock(tx, dto.barbeiroId);
-
-      // Agora capturado DEPOIS dos locks.
-      const agora = new Date();
-
-      // Barbeiro precisa existir e estar ativo.
-      const barber = await tx.barbeiro.findFirst({
-        where: { id: dto.barbeiroId, ativo: true },
-        select: { id: true },
+      return this.createConfirmedForClient(tx, {
+        clienteId,
+        barbeiroId: dto.barbeiroId,
+        servicoId: dto.servicoId,
+        data: dto.data,
+        horaInicio: dto.horaInicio,
+        observacoes: dto.observacoes,
       });
-      if (!barber) {
-        throw new NotFoundException('Barbeiro não encontrado.');
-      }
-
-      // Serviço precisa existir, estar ativo e pertencer ao barbeiro.
-      const service = await tx.servico.findFirst({
-        where: { id: dto.servicoId, barbeiroId: dto.barbeiroId },
-        select: { id: true, ativo: true, duracaoMinutos: true },
-      });
-      if (!service || !service.ativo) {
-        throw new NotFoundException('Serviço não encontrado.');
-      }
-
-      const startInstant = zonedWallTimeToUtc(dto.data, dto.horaInicio);
-      if (startInstant <= agora) {
-        throw new BadRequestException(
-          'Não é possível agendar um horário que já passou.',
-        );
-      }
-
-      const endMinutes = startMinutes + service.duracaoMinutos;
-
-      // Agenda do barbeiro lida NO MESMO tx (janelas + ocupações).
-      const { windows, busy } = await this.scheduleService.getDateSnapshot(
-        tx,
-        dto.barbeiroId,
-        dto.data,
-      );
-
-      // O slot deve caber integralmente em UMA janela de funcionamento.
-      if (!windows.some((w) => startMinutes >= w.ini && endMinutes <= w.fim)) {
-        throw new BadRequestException('Fora do horário de funcionamento.');
-      }
-
-      // Interseção meio-aberta [início, fim):
-      //   novoInício < ocupadoFim && ocupadoInício < novoFim
-      const overlaps = (interval: { ini: number; fim: number }): boolean =>
-        startMinutes < interval.fim && interval.ini < endMinutes;
-
-      // Bloqueio ativo → 400.
-      if (busy.some((b) => b.origem === 'BLOQUEIO' && overlaps(b))) {
-        throw new BadRequestException('Horário bloqueado.');
-      }
-
-      // Agendamento CONFIRMADO do barbeiro → 409.
-      if (busy.some((b) => b.origem === 'AGENDAMENTO' && overlaps(b))) {
-        throw new ConflictException('Horário não está mais disponível.');
-      }
-
-      // Conflito do PRÓPRIO CLIENTE (qualquer barbeiro, mesmo dia).
-      // CANCELADO/CONCLUIDO/NAO_COMPARECEU não bloqueiam.
-      const clientAppointments = await tx.agendamento.findMany({
-        where: {
-          clienteId,
-          data: prismaDateFilter(dto.data),
-          status: StatusAgendamento.CONFIRMADO,
-        },
-      });
-      const clientConflict = clientAppointments.some((appointment) =>
-        overlaps({
-          ini: localMinuteOfDay(appointment.horaInicio),
-          fim: localMinuteOfDay(appointment.horaFim),
-        }),
-      );
-      if (clientConflict) {
-        throw new ConflictException(
-          'Horário não está disponível para o cliente.',
-        );
-      }
-
-      // Criação — status SEMPRE CONFIRMADO; duração SEMPRE do serviço.
-      const created = await tx.agendamento.create({
-        data: {
-          clienteId,
-          barbeiroId: dto.barbeiroId,
-          servicoId: dto.servicoId,
-          data: prismaDateFilter(dto.data),
-          horaInicio: startInstant,
-          horaFim: zonedWallTimeToUtc(dto.data, this.minutesToHHmm(endMinutes)),
-          status: StatusAgendamento.CONFIRMADO,
-          observacoes: dto.observacoes ?? null,
-        },
-      });
-
-      const row = await tx.agendamento.findUnique({
-        where: { id: created.id },
-        include: {
-          servico: { select: { id: true, nome: true, preco: true } },
-          barbeiro: {
-            select: { id: true, usuario: { select: { nome: true } } },
-          },
-          cliente: {
-            select: { id: true, usuario: { select: { nome: true } } },
-          },
-        },
-      });
-
-      if (!row) {
-        throw new NotFoundException('Agendamento não encontrado.');
-      }
-
-      return this.toResponse(row);
     });
   }
 

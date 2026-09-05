@@ -183,6 +183,12 @@ revalidação da agenda, a escolha FIFO e a inserção do claim usam o mesmo
 oportunidade. O namespace do claim é separado dos namespaces de barbeiro,
 cliente e entrada da lista.
 
+No aceite ou recusa, a ordem dos advisory locks é determinística: cliente
+(namespace 2), barbeiro/calendário (namespace 1) e claim/slot (namespace 4).
+O aceite reutiliza o núcleo transacional de criação de appointments; somente
+depois da criação confirmada o claim e a entrada da lista são atualizados.
+Expiração é lógica: `expiraEm <= agora` rejeita a operação sem mutar o histórico.
+
 ---
 
 ## 9. AUTENTICAÇÃO

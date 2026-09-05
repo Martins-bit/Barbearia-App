@@ -12,6 +12,10 @@ import {
 } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import {
+  acquireClienteLock,
+  AppointmentsService,
+} from '../appointments/appointments.service';
+import {
   acquireCalendarLock,
   ScheduleService,
   ScheduleDbClient,
@@ -67,6 +71,7 @@ export class WaitlistService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scheduleService: ScheduleService,
+    private readonly appointmentsService: AppointmentsService,
   ) {}
 
   private parseHHmm(hhmm: string): number {
@@ -151,6 +156,21 @@ export class WaitlistService {
             nome: entry.servico.nome,
           }
         : undefined,
+    };
+  }
+
+  private claimResponse(claim: any): any {
+    return {
+      id: claim.id,
+      listaEsperaId: claim.listaEsperaId,
+      barbeiroId: claim.barbeiroId,
+      servicoId: claim.servicoId,
+      data: claim.data.toISOString().slice(0, 10),
+      horaInicio: claim.horaInicio,
+      horaFim: claim.horaFim,
+      status: claim.status,
+      expiraEm: claim.expiraEm,
+      dataCriacao: claim.dataCriacao,
     };
   }
 
@@ -464,6 +484,147 @@ export class WaitlistService {
         expiraEm: created.expiraEm,
         dataCriacao: created.dataCriacao,
       };
+    });
+  }
+
+  private async findOwnedClaim(userId: number, claimId: number): Promise<any> {
+    const clienteId = await this.resolveClienteId(userId);
+    const claim = await this.prisma.waitlistClaim.findFirst({
+      where: {
+        id: claimId,
+        listaEspera: { clienteId },
+      },
+      select: {
+        id: true,
+        listaEsperaId: true,
+        barbeiroId: true,
+        servicoId: true,
+        data: true,
+        horaInicio: true,
+        horaFim: true,
+        status: true,
+        expiraEm: true,
+        dataCriacao: true,
+      },
+    });
+
+    if (!claim) {
+      throw new NotFoundException('Claim não encontrado.');
+    }
+
+    return { clienteId, claim };
+  }
+
+  async acceptClaim(userId: number, claimId: number): Promise<any> {
+    const { clienteId, claim } = await this.findOwnedClaim(userId, claimId);
+    const dateKey = claim.data.toISOString().slice(0, 10);
+
+    return this.prisma.$transaction(async (tx: WaitlistDbClient) => {
+      // Ordem 2 (cliente) -> 1 (barbeiro) -> 4 (claim), igual ao fluxo normal
+      // de appointment e serializada com os fluxos de agenda/claim existentes.
+      await acquireClienteLock(tx, clienteId);
+      await acquireCalendarLock(tx, claim.barbeiroId);
+      await acquireWaitlistClaimLock(
+        tx,
+        claim.barbeiroId,
+        claim.servicoId,
+        dateKey,
+        claim.horaInicio,
+        claim.horaFim,
+      );
+
+      const current = await tx.waitlistClaim.findUnique({
+        where: { id: claimId },
+        include: {
+          listaEspera: { select: { clienteId: true, status: true } },
+        },
+      });
+      if (!current || current.listaEspera.clienteId !== clienteId) {
+        throw new NotFoundException('Claim não encontrado.');
+      }
+      if (current.status !== StatusWaitlistClaim.ATIVO) {
+        throw new ConflictException('Claim não está ativo.');
+      }
+
+      const agora = new Date();
+      if (current.expiraEm <= agora) {
+        throw new ConflictException('Claim expirado.');
+      }
+
+      const appointment = await this.appointmentsService.createConfirmedForClient(
+        tx,
+        {
+          clienteId,
+          barbeiroId: current.barbeiroId,
+          servicoId: current.servicoId,
+          data: dateKey,
+          horaInicio: current.horaInicio,
+          horaFim: current.horaFim,
+        },
+      );
+
+      const accepted = await tx.waitlistClaim.updateMany({
+        where: { id: claimId, status: StatusWaitlistClaim.ATIVO },
+        data: { status: StatusWaitlistClaim.ACEITO },
+      });
+      if (accepted.count !== 1) {
+        throw new ConflictException('Claim foi atualizado por outra operação.');
+      }
+
+      const attended = await tx.listaEspera.updateMany({
+        where: { id: current.listaEsperaId, status: StatusListaEspera.ATIVA },
+        data: { status: StatusListaEspera.ATENDIDA },
+      });
+      if (attended.count !== 1) {
+        throw new ConflictException('Entrada da lista não está ativa.');
+      }
+
+      return { appointment, claim: this.claimResponse({ ...current, status: StatusWaitlistClaim.ACEITO }) };
+    });
+  }
+
+  async rejectClaim(userId: number, claimId: number): Promise<any> {
+    const { clienteId, claim } = await this.findOwnedClaim(userId, claimId);
+    const dateKey = claim.data.toISOString().slice(0, 10);
+
+    return this.prisma.$transaction(async (tx: WaitlistDbClient) => {
+      await acquireClienteLock(tx, clienteId);
+      await acquireCalendarLock(tx, claim.barbeiroId);
+      await acquireWaitlistClaimLock(
+        tx,
+        claim.barbeiroId,
+        claim.servicoId,
+        dateKey,
+        claim.horaInicio,
+        claim.horaFim,
+      );
+
+      const current = await tx.waitlistClaim.findUnique({
+        where: { id: claimId },
+        include: {
+          listaEspera: { select: { clienteId: true, status: true } },
+        },
+      });
+      if (!current || current.listaEspera.clienteId !== clienteId) {
+        throw new NotFoundException('Claim não encontrado.');
+      }
+      if (current.status !== StatusWaitlistClaim.ATIVO) {
+        throw new ConflictException('Claim não está ativo.');
+      }
+
+      if (current.expiraEm <= new Date()) {
+        throw new ConflictException('Claim expirado.');
+      }
+
+      const rejected = await tx.waitlistClaim.updateMany({
+        where: { id: claimId, status: StatusWaitlistClaim.ATIVO },
+        data: { status: StatusWaitlistClaim.RECUSADO },
+      });
+      if (rejected.count !== 1) {
+        throw new ConflictException('Claim foi atualizado por outra operação.');
+      }
+
+      return this.claimResponse({ ...current, status: StatusWaitlistClaim.RECUSADO });
     });
   }
 

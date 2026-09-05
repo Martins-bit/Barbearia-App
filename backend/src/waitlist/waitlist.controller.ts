@@ -48,4 +48,24 @@ export class WaitlistController {
   ) {
     return this.waitlistService.cancel(userId, waitlistId);
   }
+
+  @Post('claims/:id/accept')
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.CLIENTE)
+  async acceptClaim(
+    @CurrentUser() userId: number,
+    @Param('id', ParseIntPipe) claimId: number,
+  ) {
+    return this.waitlistService.acceptClaim(userId, claimId);
+  }
+
+  @Post('claims/:id/reject')
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.CLIENTE)
+  async rejectClaim(
+    @CurrentUser() userId: number,
+    @Param('id', ParseIntPipe) claimId: number,
+  ) {
+    return this.waitlistService.rejectClaim(userId, claimId);
+  }
 }

@@ -170,6 +170,52 @@ describe('Waitlist (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .send(payload);
 
+  const ensureBusinessHours = async (dateKey: string) => {
+    await prisma.horarioFuncionamento.create({
+      data: {
+        barbeiroId: barberAId,
+        diaSemana: new Date(`${dateKey}T00:00:00.000Z`).getUTCDay(),
+        horaInicio: '08:00',
+        horaFim: '18:00',
+        ativo: true,
+      },
+    });
+  };
+
+  const createClaimFixture = async (
+    dateKey: string,
+    clienteId = clientAId,
+    horaInicio = '10:00',
+    horaFim = '10:30',
+  ) => {
+    await ensureBusinessHours(dateKey);
+    const entry = await prisma.listaEspera.create({
+      data: {
+        clienteId,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        dataDesejada: new Date(`${dateKey}T00:00:00.000Z`),
+        horaInicio: '08:00',
+        horaFim: '18:00',
+      },
+    });
+    waitlistIds.push(entry.id);
+    const claim = await prisma.waitlistClaim.create({
+      data: {
+        listaEsperaId: entry.id,
+        barbeiroId: barberAId,
+        servicoId: serviceAId,
+        data: new Date(`${dateKey}T00:00:00.000Z`),
+        horaInicio,
+        horaFim,
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date(Date.now() + 5 * 60 * 1000),
+      },
+    });
+    claimIds.push(claim.id);
+    return { entry, claim };
+  };
+
   it('requer autenticação para entrar na lista', async () => {
     await request(app.getHttpServer())
       .post('/waitlist')
@@ -226,6 +272,167 @@ describe('Waitlist (e2e)', () => {
       horaInicio: '10:30',
       horaFim: '10:00',
     }).expect(400);
+  });
+
+  it('aceita claim e cria appointment confirmado atomicamente', async () => {
+    const { entry, claim } = await createClaimFixture('2099-04-01');
+
+    const response = await request(app.getHttpServer())
+      .post(`/waitlist/claims/${claim.id}/accept`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(201);
+
+    expect(response.body.appointment.status).toBe('CONFIRMADO');
+    expect(response.body.claim.status).toBe(StatusWaitlistClaim.ACEITO);
+    expect(response.body.appointment.clienteId).toBeUndefined();
+
+    const storedClaim = await prisma.waitlistClaim.findUnique({ where: { id: claim.id } });
+    const storedEntry = await prisma.listaEspera.findUnique({ where: { id: entry.id } });
+    const appointment = await prisma.agendamento.findFirst({
+      where: { clienteId: clientAId, barbeiroId: barberAId, data: new Date('2099-04-01T00:00:00.000Z') },
+    });
+    expect(storedClaim?.status).toBe(StatusWaitlistClaim.ACEITO);
+    expect(storedEntry?.status).toBe(StatusListaEspera.ATENDIDA);
+    expect(appointment?.status).toBe('CONFIRMADO');
+  });
+
+  it('recusa claim sem criar appointment e mantém a lista ativa', async () => {
+    const { entry, claim } = await createClaimFixture('2099-04-02');
+
+    await request(app.getHttpServer())
+      .post(`/waitlist/claims/${claim.id}/reject`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(201);
+
+    const storedClaim = await prisma.waitlistClaim.findUnique({ where: { id: claim.id } });
+    const storedEntry = await prisma.listaEspera.findUnique({ where: { id: entry.id } });
+    const appointments = await prisma.agendamento.count({
+      where: { clienteId: clientAId, barbeiroId: barberAId, data: new Date('2099-04-02T00:00:00.000Z') },
+    });
+    expect(storedClaim?.status).toBe(StatusWaitlistClaim.RECUSADO);
+    expect(storedEntry?.status).toBe(StatusListaEspera.ATIVA);
+    expect(appointments).toBe(0);
+  });
+
+  it('rejeita aceite de claim expirado sem alterações indevidas', async () => {
+    const { entry, claim } = await createClaimFixture('2099-04-03');
+    await prisma.waitlistClaim.update({
+      where: { id: claim.id },
+      data: { expiraEm: new Date(Date.now() - 60_000) },
+    });
+
+    await request(app.getHttpServer())
+      .post(`/waitlist/claims/${claim.id}/accept`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(409);
+
+    const storedClaim = await prisma.waitlistClaim.findUnique({ where: { id: claim.id } });
+    const storedEntry = await prisma.listaEspera.findUnique({ where: { id: entry.id } });
+    expect(storedClaim?.status).toBe(StatusWaitlistClaim.ATIVO);
+    expect(storedEntry?.status).toBe(StatusListaEspera.ATIVA);
+  });
+
+  it('não permite que outro cliente aceite ou recuse o claim', async () => {
+    const { claim } = await createClaimFixture('2099-04-04');
+
+    await request(app.getHttpServer())
+      .post(`/waitlist/claims/${claim.id}/accept`)
+      .set('Authorization', `Bearer ${clientBToken}`)
+      .expect(404);
+    await request(app.getHttpServer())
+      .post(`/waitlist/claims/${claim.id}/reject`)
+      .set('Authorization', `Bearer ${clientBToken}`)
+      .expect(404);
+  });
+
+  it('dois aceites concorrentes criam exatamente um appointment', async () => {
+    const { claim } = await createClaimFixture('2099-04-05');
+    const results = await Promise.allSettled([
+      request(app.getHttpServer())
+        .post(`/waitlist/claims/${claim.id}/accept`)
+        .set('Authorization', `Bearer ${clientAToken}`),
+      request(app.getHttpServer())
+        .post(`/waitlist/claims/${claim.id}/accept`)
+        .set('Authorization', `Bearer ${clientAToken}`),
+    ]);
+
+    const statusCodes = results.map((result) =>
+      result.status === 'fulfilled' ? result.value.status : 0,
+    );
+    expect(statusCodes.filter((status) => status === 201)).toHaveLength(1);
+    expect(statusCodes.filter((status) => status === 409)).toHaveLength(1);
+    expect(
+      await prisma.agendamento.count({
+        where: { clienteId: clientAId, barbeiroId: barberAId, data: new Date('2099-04-05T00:00:00.000Z') },
+      }),
+    ).toBe(1);
+  });
+
+  it('aceite e recusa concorrentes deixam apenas uma transição terminal consistente', async () => {
+    const { entry, claim } = await createClaimFixture('2099-04-06');
+    const results = await Promise.allSettled([
+      request(app.getHttpServer())
+        .post(`/waitlist/claims/${claim.id}/accept`)
+        .set('Authorization', `Bearer ${clientAToken}`),
+      request(app.getHttpServer())
+        .post(`/waitlist/claims/${claim.id}/reject`)
+        .set('Authorization', `Bearer ${clientAToken}`),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+    const statuses = results.map((result) =>
+      result.status === 'fulfilled' ? result.value.status : result.reason?.status,
+    );
+    expect(statuses.filter((status) => status === 201)).toHaveLength(1);
+    expect(statuses.filter((status) => status === 409)).toHaveLength(1);
+
+    const storedClaim = await prisma.waitlistClaim.findUnique({ where: { id: claim.id } });
+    const storedEntry = await prisma.listaEspera.findUnique({ where: { id: entry.id } });
+    const appointmentCount = await prisma.agendamento.count({
+      where: { clienteId: clientAId, barbeiroId: barberAId, data: new Date('2099-04-06T00:00:00.000Z') },
+    });
+    expect([StatusWaitlistClaim.ACEITO, StatusWaitlistClaim.RECUSADO]).toContain(storedClaim?.status);
+    if (storedClaim?.status === StatusWaitlistClaim.ACEITO) {
+      expect(storedEntry?.status).toBe(StatusListaEspera.ATENDIDA);
+      expect(appointmentCount).toBe(1);
+    } else {
+      expect(storedEntry?.status).toBe(StatusListaEspera.ATIVA);
+      expect(appointmentCount).toBe(0);
+    }
+  });
+
+  it('aceite concorrente com appointment normal deixa apenas um confirmado', async () => {
+    const { claim } = await createClaimFixture('2099-04-07');
+    const results = await Promise.allSettled([
+      request(app.getHttpServer())
+        .post(`/waitlist/claims/${claim.id}/accept`)
+        .set('Authorization', `Bearer ${clientAToken}`),
+      request(app.getHttpServer())
+        .post('/appointments')
+        .set('Authorization', `Bearer ${clientBToken}`)
+        .send({
+          barbeiroId: barberAId,
+          servicoId: serviceAId,
+          data: '2099-04-07',
+          horaInicio: '10:00',
+        }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+    const statuses = results.map((result) =>
+      result.status === 'fulfilled' ? result.value.status : result.reason?.status,
+    );
+    expect(statuses.filter((status) => status === 201)).toHaveLength(1);
+    expect(statuses.filter((status) => [400, 409].includes(status))).toHaveLength(1);
+    expect(
+      await prisma.agendamento.count({
+        where: {
+          barbeiroId: barberAId,
+          data: new Date('2099-04-07T00:00:00.000Z'),
+          status: 'CONFIRMADO',
+        },
+      }),
+    ).toBe(1);
   });
 
   it('rejeita serviço de outro barbeiro', async () => {
