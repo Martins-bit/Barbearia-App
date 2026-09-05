@@ -6,6 +6,7 @@ import { AppointmentsModule } from '../appointments/appointments.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { WaitlistController } from './waitlist.controller';
 import { WaitlistService } from './waitlist.service';
+import { WaitlistOpportunityService } from './waitlist-opportunity.service';
 
 @Module({
   imports: [
@@ -16,7 +17,14 @@ import { WaitlistService } from './waitlist.service';
     NotificationsModule,
   ],
   controllers: [WaitlistController],
-  providers: [WaitlistService],
+  providers: [
+    WaitlistService,
+    WaitlistOpportunityService,
+    {
+      provide: 'WAITLIST_OPPORTUNITY_SERVICE',
+      useExisting: WaitlistOpportunityService,
+    },
+  ],
   exports: [WaitlistService],
 })
 export class WaitlistModule {}

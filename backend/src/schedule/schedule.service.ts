@@ -4,8 +4,10 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, PrismaClient } from '../generated/prisma/client';
 import { StatusAgendamento, TipoUsuario } from '../generated/prisma/enums';
@@ -94,6 +96,7 @@ export interface ScheduleDaySnapshot {
 
 interface BlockRow {
   id: number;
+  barbeiroId: number;
   data: Date;
   horaInicio: Date;
   horaFim: Date;
@@ -106,7 +109,24 @@ export class ScheduleService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
+
+  private async triggerWaitlistOpportunity(block: BlockRow): Promise<void> {
+    if (!this.moduleRef) {
+      return;
+    }
+
+    const opportunityService = this.moduleRef.get('WAITLIST_OPPORTUNITY_SERVICE', {
+      strict: false,
+    });
+    await opportunityService.tryCreateForReleasedWindow({
+      barbeiroId: block.barbeiroId,
+      dateKey: dateKeyFromUtcMidnight(block.data),
+      horaInicio: formatLocalHHmm(block.horaInicio),
+      horaFim: formatLocalHHmm(block.horaFim),
+    });
+  }
 
   // ---------------------------------------------------------------------
   // Identidade: Usuario.id -> Barbeiro.id (padrão do módulo Services).
@@ -361,6 +381,7 @@ export class ScheduleService {
     }
 
     await this.prisma.bloqueioAgenda.delete({ where: { id: block.id } });
+    await this.triggerWaitlistOpportunity(block);
   }
 
   // ---------------------------------------------------------------------

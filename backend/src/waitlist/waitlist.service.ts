@@ -568,6 +568,7 @@ export class WaitlistService {
           data: dateKey,
           horaInicio: current.horaInicio,
           horaFim: current.horaFim,
+          claimId: current.id,
         },
       );
 

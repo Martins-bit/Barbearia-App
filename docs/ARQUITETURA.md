@@ -194,6 +194,15 @@ O aceite reutiliza o núcleo transacional de criação de appointments; somente
 depois da criação confirmada o claim e a entrada da lista são atualizados.
 Expiração é lógica: `expiraEm <= agora` rejeita a operação sem mutar o histórico.
 
+Cancelamento de agendamento confirmado e remoção de bloqueio disparam a
+orquestração de oportunidades somente após a operação principal concluir. A
+orquestração usa uma nova execução da infraestrutura de claim, revalida a
+agenda e não cria transações aninhadas. Ela seleciona FIFO global entre
+entradas ativas e escolhe o primeiro horário cronológico alinhado à grade de
+15 minutos que caiba na janela liberada. Ausência de candidato ou perda da
+vaga por concorrência são resultados normais; erros de infraestrutura são
+propagados. Não há cron, worker ou processamento em background.
+
 ---
 
 ## 9. AUTENTICAÇÃO

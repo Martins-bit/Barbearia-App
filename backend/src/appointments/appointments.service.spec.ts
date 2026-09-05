@@ -25,6 +25,7 @@ function buildPrismaMock(): any {
     cliente: { findUnique: jest.fn() },
     barbeiro: { findFirst: jest.fn(), findUnique: jest.fn() },
     servico: { findFirst: jest.fn() },
+    waitlistClaim: { findMany: jest.fn().mockResolvedValue([]) },
     agendamento: {
       findMany: jest.fn().mockResolvedValue([]),
       create: jest.fn(),

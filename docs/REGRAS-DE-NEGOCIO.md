@@ -240,6 +240,14 @@ um agendamento confirmado e muda a entrada para `ATENDIDA`. A recusa muda o
 claim para `RECUSADO` e mantém a entrada `ATIVA`. Claims expirados são
 rejeitados logicamente pelo horário de expiração.
 
+O cancelamento de um agendamento confirmado e a remoção de um bloqueio podem
+liberar uma oportunidade automaticamente. O sistema considera serviços ativos
+do barbeiro que caibam integralmente na janela, respeita a faixa desejada do
+cliente e a grade de 15 minutos. A prioridade é FIFO entre entradas elegíveis;
+para cada entrada, o primeiro horário válido cronologicamente é escolhido.
+Nenhuma oportunidade é criada quando não há candidato ou quando a vaga foi
+ocupada novamente por concorrência.
+
 ---
 
 # 16. FALTA / NÃO COMPARECIMENTO

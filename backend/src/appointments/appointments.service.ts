@@ -3,10 +3,15 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '../generated/prisma/client';
-import { StatusAgendamento } from '../generated/prisma/enums';
+import {
+  StatusAgendamento,
+  StatusWaitlistClaim,
+} from '../generated/prisma/enums';
 import {
   acquireCalendarLock,
   CALENDAR_LOCK_NS_CLIENTE,
@@ -40,6 +45,7 @@ export interface ConfirmedAppointmentInput {
   horaInicio: string;
   horaFim?: string;
   observacoes?: string | null;
+  claimId?: number;
 }
 
 interface AppointmentRow {
@@ -72,7 +78,29 @@ export class AppointmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scheduleService: ScheduleService,
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
+
+  private async triggerWaitlistOpportunity(row: {
+    barbeiroId: number;
+    data: Date;
+    horaInicio: Date;
+    horaFim: Date;
+  }): Promise<void> {
+    if (!this.moduleRef) {
+      return;
+    }
+
+    const opportunityService = this.moduleRef.get('WAITLIST_OPPORTUNITY_SERVICE', {
+      strict: false,
+    });
+    await opportunityService.tryCreateForReleasedWindow({
+      barbeiroId: row.barbeiroId,
+      dateKey: dateKeyFromUtcMidnight(row.data),
+      horaInicio: formatLocalHHmm(row.horaInicio),
+      horaFim: formatLocalHHmm(row.horaFim),
+    });
+  }
 
   /**
    * Identidade: Usuario.id -> Cliente.id (análogo ao padrão de Barbeiro).
@@ -169,6 +197,30 @@ export class AppointmentsService {
     }
     if (busy.some((b) => b.origem === 'AGENDAMENTO' && overlaps(b))) {
       throw new ConflictException('Horário não está mais disponível.');
+    }
+
+    const activeClaims = await tx.waitlistClaim.findMany({
+      where: {
+        barbeiroId: input.barbeiroId,
+        data: prismaDateFilter(input.data),
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: { gt: agora },
+        ...(input.claimId !== undefined ? { id: { not: input.claimId } } : {}),
+      },
+    });
+    if (
+      activeClaims.some((claim) =>
+        overlaps({
+          ini: localMinuteOfDay(
+            zonedWallTimeToUtc(input.data, claim.horaInicio),
+          ),
+          fim: localMinuteOfDay(
+            zonedWallTimeToUtc(input.data, claim.horaFim),
+          ),
+        }),
+      )
+    ) {
+      throw new ConflictException('Horário possui uma oportunidade ativa.');
     }
 
     const clientAppointments = await tx.agendamento.findMany({
@@ -394,6 +446,8 @@ export class AppointmentsService {
         throw new NotFoundException('Agendamento não encontrado.');
       }
 
+      await this.triggerWaitlistOpportunity(refreshed);
+
       return this.toResponse(refreshed);
     }
 
@@ -448,6 +502,8 @@ export class AppointmentsService {
     if (!refreshed) {
       throw new NotFoundException('Agendamento não encontrado.');
     }
+
+    await this.triggerWaitlistOpportunity(refreshed);
 
     return this.toResponse(refreshed);
   }
