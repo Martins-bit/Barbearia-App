@@ -287,27 +287,41 @@ integração externa.
 ---
 
 ## 11. MENSAGENS
+A entidade de mensagens armazena a comunicação persistente entre cliente e
+barbeiro. Esta etapa cobre apenas a fundação persistente, sem tempo real.
 
-A entidade de mensagens armazenará a comunicação entre cliente e barbeiro.
+### Model `Mensagem` (implementado)
 
-### Campos principais
+| Campo | Tipo | Observação |
+| --- | --- | --- |
+| `id` | Int (autoincrement) | PK |
+| `remetenteId` | Int | FK → `Usuario.id` (relação `MensagensEnviadas`) |
+| `destinatarioId` | Int | FK → `Usuario.id` (relação `MensagensRecebidas`) |
+| `conteudo` | TEXT | 1 a 500 caracteres após trim |
+| `lida` | Boolean | default `false` |
+| `dataCriacao` | DateTime | default `now()` |
+| `dataLeitura` | DateTime? | preenchido na primeira leitura |
 
-- `id`
-- `remetente_id`
-- `destinatario_id`
-- `conteudo`
-- `data_criacao`
-- `lida`
+O remetente **nunca** é aceito do frontend: é derivado do JWT.
+
+### Índices finais
+| Índice | Colunas | Finalidade |
+| --- | --- | --- |
+| `Mensagem_remetenteId_idx` | `remetenteId` | mensagens enviadas |
+| `Mensagem_destinatarioId_lida_idx` | `destinatarioId`, `lida` | não lidas do destinatário |
+| `Mensagem_destinatarioId_dataCriacao_idx` | `destinatarioId`, `dataCriacao` | histórico por destinatário |
+| `Mensagem_remetenteId_destinatarioId_dataCriacao_idx` | `remetenteId`, `destinatarioId`, `dataCriacao` | conversa (sentido A → B) |
+| `Mensagem_destinatarioId_remetenteId_dataCriacao_idx` | `destinatarioId`, `remetenteId`, `dataCriacao` | conversa (sentido B → A) |
+
+Os dois últimos índices suportam a consulta de conversa, que filtra pelo par de
+participantes e ordena por `dataCriacao`.
 
 ### Regra de tamanho
+A mensagem é trimada e deve possuir de **1 a 500 caracteres**. O backend valida
+esse limite (ver `REGRAS-DE-NEGOCIO.md`).
 
-A mensagem deverá respeitar o limite definido na documentação de regras de negócio.
-
-Atualmente:
-
-Máximo de 50 caracteres.
-
-O backend deverá validar esse limite.
+O campo `conteudo` é `TEXT` no banco; o limite de 500 é aplicado na camada de
+aplicação.
 
 ---
 

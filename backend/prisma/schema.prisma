@@ -207,18 +207,22 @@ model Notificacao {
 }
 
 model Mensagem {
-  id             Int      @id @default(autoincrement())
+  id             Int       @id @default(autoincrement())
   remetenteId    Int
   destinatarioId Int
-  conteudo       String   @db.VarChar(50)
-  lida           Boolean  @default(false)
-  dataCriacao    DateTime @default(now())
+  conteudo       String
+  lida           Boolean   @default(false)
+  dataCriacao    DateTime  @default(now())
+  dataLeitura    DateTime?
 
   remetente    Usuario @relation("MensagensEnviadas", fields: [remetenteId], references: [id])
   destinatario Usuario @relation("MensagensRecebidas", fields: [destinatarioId], references: [id])
 
   @@index([remetenteId])
   @@index([destinatarioId, lida])
+  @@index([destinatarioId, dataCriacao])
+  @@index([remetenteId, destinatarioId, dataCriacao])
+  @@index([destinatarioId, remetenteId, dataCriacao])
 }
 
 model HorarioFuncionamento {

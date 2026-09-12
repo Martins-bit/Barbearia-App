@@ -314,12 +314,37 @@ O mecanismo técnico utilizado para enviar o lembrete será definido posteriorme
 ---
 
 # 19. MENSAGENS
+Comunicação persistente entre cliente e barbeiro.
 
-O cliente poderá enviar mensagens ao barbeiro.
+## 19.1. Participantes
+Somente **CLIENTE ↔ BARBEIRO**. São bloqueados:
 
-A especificação original define limite de até 50 caracteres para a mensagem.
+- CLIENTE → CLIENTE;
+- BARBEIRO → BARBEIRO;
+- mensagem para si mesmo.
 
-O sistema deverá impedir mensagens que ultrapassem o limite definido.
+## 19.2. Remetente
+O remetente é **sempre derivado do JWT**. O frontend nunca informa quem envia.
+
+## 19.3. Conteúdo
+O conteúdo é trimado e deve possuir de **1 a 500 caracteres**. Mensagens vazias
+(ou só com espaços) e acima de 500 caracteres são rejeitadas.
+
+## 19.4. Usuários
+Usuários devem estar **ativos**. O barbeiro precisa possuir **perfil ativo**.
+
+## 19.5. Conversa
+A conversa é isolada entre os participantes: o usuário autenticado só acessa as
+mensagens trocadas entre ele e o outro participante. Retorno em ordem
+cronológica crescente e sem dados sensíveis.
+
+## 19.6. Leitura
+Somente o **destinatário** pode marcar a mensagem como lida. A operação é
+**idempotente**: repetir a leitura preserva o primeiro `dataLeitura`.
+
+## 19.7. Escopo desta etapa
+Não fazem parte desta etapa: WebSocket, chat em tempo real, anexos,
+edição/exclusão de mensagens e notificações de mensagem.
 
 ---
 

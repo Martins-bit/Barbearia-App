@@ -98,6 +98,26 @@ Suas responsabilidades incluem:
 
 O backend deverá ser considerado a autoridade final sobre as regras do sistema.
 
+### Módulo de Mensagens
+O módulo `messages` é a autoridade sobre a comunicação CLIENTE ↔ BARBEIRO.
+
+Responsabilidades:
+
+- Derivar o remetente **sempre** do JWT (`sub`), nunca do corpo da requisição;
+- Validar participantes (somente CLIENTE ↔ BARBEIRO), usuários ativos e barbeiro
+  com perfil ativo;
+- Trim e limite de 1 a 500 caracteres no conteúdo;
+- Isolar a conversa por par de participantes e ordenar cronologicamente;
+- Garantir que somente o destinatário marque a leitura, de forma idempotente;
+- Não retornar dados sensíveis.
+
+O módulo segue o padrão do projeto: `Controller` enxuto, regra de negócio no
+`Service`, validação de entrada em DTO com `class-validator`, autorização via
+`JwtGuard` + `RolesGuard`.
+
+Esta etapa é **persistente apenas**: não há WebSocket, tempo real, anexos,
+edição/exclusão nem notificações de mensagem.
+
 ---
 
 ## 5. BANCO DE DADOS

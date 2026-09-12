@@ -582,36 +582,92 @@ quantidade alterada.
 ---
 
 # 12. MENSAGENS
+Comunicação persistente entre CLIENTE e BARBEIRO. Esta etapa implementa apenas a
+fundação persistente: **não há WebSocket, chat em tempo real, anexos, edição,
+exclusão nem notificação de mensagem**.
+
+O identificador do remetente é **sempre derivado do JWT** (`sub`). O frontend
+nunca informa quem envia; informa apenas o destinatário e o conteúdo.
 
 ## 12.1. Enviar mensagem
-
-Endpoint conceitual:
-
 `POST /api/messages`
 
 ### Permissão
+CLIENTE ou BARBEIRO autenticado e ativo. O barbeiro precisa possuir perfil ativo.
 
-Cliente ou barbeiro autorizado.
+### Dados esperados
+- `destinatarioId` — inteiro positivo;
+- `conteudo` — texto.
+
+O `remetenteUsuarioId` **não é aceito** no corpo da requisição (é derivado do JWT).
 
 ### Regra
+Somente CLIENTE ↔ BARBEIRO. São rejeitados:
 
-A mensagem deverá possuir no máximo:
+- CLIENTE → CLIENTE;
+- BARBEIRO → BARBEIRO;
+- mensagem para si mesmo;
+- destinatário inexistente ou inativo;
+- barbeiro sem perfil ativo.
 
-50 caracteres.
+O conteúdo é trimado e deve possuir de **1 a 500 caracteres**.
 
-O backend deverá validar esse limite.
+### Resultado
+Retorna a mensagem criada com `remetenteUsuarioId`, `destinatarioUsuarioId`,
+`conteudo`, `lida`, `dataCriacao` e `dataLeitura`. Nenhum dado sensível
+(senha, telefone, e-mail) é retornado.
 
 ---
 
-## 12.2. Listar mensagens
-
-Endpoint conceitual:
-
-`GET /api/messages`
+## 12.2. Listar conversa com um usuário
+`GET /api/messages/:userId`
 
 ### Regra
+Somente as mensagens trocadas entre o usuário autenticado e o participante
+informado — conversa isolada por par de participantes. Um terceiro usuário nunca
+aparece no resultado.
 
-O usuário somente poderá visualizar conversas das quais participa.
+Conversa consigo mesmo é inválida; participante de perfil igual (ou inexistente)
+retorna 404, sem revelar a existência do recurso.
+
+### Ordem
+Ordem cronológica **crescente** (`dataCriacao`, com `id` como desempate).
+
+---
+
+## 12.3. Listar conversas
+`GET /api/messages/conversations`
+
+### Regra
+Retorna os participantes (per oposto) com quem o usuário autenticado já trocou
+mensagens. Retorna apenas `usuarioId`, `nome` e `tipoUsuario` — não expõe dados
+sensíveis nem o conteúdo das mensagens.
+
+---
+
+## 12.4. Marcar mensagem como lida
+`PATCH /api/messages/:id/read`
+
+### Permissão
+Somente o **destinatário** da mensagem. O remetente não pode marcar a própria
+mensagem como lida. Mensagem inexistente, de terceiros ou enviada pelo próprio
+remetente retorna 404 genérico.
+
+### Idempotência
+Operação idempotente: define `lida = true` e preenche `dataLeitura`. Repetir a
+operação retorna sucesso **preservando o primeiro `dataLeitura`** — a segunda
+leitura nunca sobrescreve o horário original.
+
+---
+
+## 12.5. Erros do módulo
+| Situação | HTTP |
+| --- | --- |
+| Sem token, token inválido, usuário inativo | 401 |
+| Barbeiro sem perfil ativo (como remetente) | 403 |
+| CLIENTE → CLIENTE, BARBEIRO → BARBEIRO, mensagem para si mesmo | 400 |
+| Conteúdo vazio ou acima de 500 caracteres; payload inválido | 400 |
+| Destinatário inexistente/inativo; conversa ou mensagem não acessível | 404 |
 
 ---
 
