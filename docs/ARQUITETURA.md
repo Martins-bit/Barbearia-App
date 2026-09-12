@@ -130,6 +130,14 @@ e a transição de um agendamento para `CANCELADO` também geram notificação
 interna no mesmo `TransactionClient`, com referência tipada por
 `agendamentoId`; nenhum advisory lock adicional é criado.
 
+O motor de lembretes (`NotificationsService.processAppointmentReminders`)
+identifica agendamentos `CONFIRMADO` cujo `horaInicio` está na janela de
+aproximadamente 1 hora e cria a notificação `LEMBRETE` vinculada ao
+agendamento, dentro de uma transação serializada por advisory lock próprio
+(namespace 5), sem duplicar lembretes. Nesta etapa o motor ainda NÃO possui
+execução automática periódica (scheduler/cron); a automação será etapa
+posterior e nenhum endpoint público o dispara.
+
 ---
 
 ## 6. SEPARAÇÃO DE RESPONSABILIDADES

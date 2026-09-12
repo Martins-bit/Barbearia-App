@@ -1,10 +1,13 @@
 import { NotFoundException } from '@nestjs/common';
-import { TipoNotificacao } from '../generated/prisma/enums';
+import {
+  StatusAgendamento,
+  TipoNotificacao,
+} from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from './notifications.service';
 
 function buildPrismaMock() {
-  return {
+  const prismaMock: any = {
     notificacao: {
       findMany: jest.fn(),
       count: jest.fn(),
@@ -13,7 +16,13 @@ function buildPrismaMock() {
       create: jest.fn(),
     },
     cliente: { findUnique: jest.fn() },
+    agendamento: { findMany: jest.fn() },
+    $executeRaw: jest.fn().mockResolvedValue(0),
   };
+  prismaMock.$transaction = jest.fn(async (callback: any) =>
+    callback(prismaMock),
+  );
+  return prismaMock;
 }
 
 describe('NotificationsService', () => {
@@ -204,5 +213,95 @@ describe('NotificationsService', () => {
 
     expect(result[0]).not.toHaveProperty('usuarioId');
     expect(result[0]).not.toHaveProperty('agendamentoId');
+  });
+
+  describe('motor de lembretes (ETAPA 6H)', () => {
+    const base = new Date('2099-05-20T12:00:00.000Z');
+    const windowEnd = new Date(base.getTime() + 60 * 60 * 1000);
+
+    it('consulta somente CONFIRMADO na janela (now, now+1h] e sem LEMBRETE anterior', async () => {
+      prisma.agendamento.findMany.mockResolvedValue([]);
+
+      await service.processAppointmentReminders(base);
+
+      // lock transacional de lembretes adquirido na transação
+      expect(prisma.$executeRaw).toHaveBeenCalled();
+      expect(prisma.agendamento.findMany).toHaveBeenCalledWith({
+        where: {
+          status: StatusAgendamento.CONFIRMADO,
+          horaInicio: { gt: base, lte: windowEnd },
+          notificacoes: { none: { tipo: TipoNotificacao.LEMBRETE } },
+        },
+        select: { id: true, cliente: { select: { usuarioId: true } } },
+        orderBy: { horaInicio: 'asc' },
+      });
+      expect(prisma.notificacao.create).not.toHaveBeenCalled();
+    });
+
+    it('CONFIRMADO dentro da janela cria 1 LEMBRETE com usuarioId e agendamentoId corretos', async () => {
+      prisma.agendamento.findMany.mockResolvedValue([
+        { id: 88, cliente: { usuarioId: 10 } },
+      ]);
+
+      const result = await service.processAppointmentReminders(base);
+
+      expect(prisma.notificacao.create).toHaveBeenCalledTimes(1);
+      expect(prisma.notificacao.create).toHaveBeenCalledWith({
+        data: {
+          usuarioId: 10,
+          agendamentoId: 88,
+          tipo: TipoNotificacao.LEMBRETE,
+          titulo: 'Lembrete de agendamento',
+          mensagem: 'Seu agendamento começa em aproximadamente 1 hora.',
+          lida: false,
+        },
+      });
+      expect(result).toEqual({ created: 1 });
+    });
+
+    it('sem elegíveis (fora da janela) não cria nada', async () => {
+      prisma.agendamento.findMany.mockResolvedValue([]);
+
+      const result = await service.processAppointmentReminders(base);
+
+      expect(prisma.notificacao.create).not.toHaveBeenCalled();
+      expect(result).toEqual({ created: 0 });
+    });
+
+    it('vários elegíveis cria um lembrete para cada', async () => {
+      prisma.agendamento.findMany.mockResolvedValue([
+        { id: 88, cliente: { usuarioId: 10 } },
+        { id: 89, cliente: { usuarioId: 11 } },
+      ]);
+
+      const result = await service.processAppointmentReminders(base);
+
+      expect(prisma.notificacao.create).toHaveBeenCalledTimes(2);
+      expect(result).toEqual({ created: 2 });
+    });
+
+    it('usa o instante atual quando now não é informado', async () => {
+      prisma.agendamento.findMany.mockResolvedValue([]);
+      const before = Date.now();
+
+      await service.processAppointmentReminders();
+
+      const where = prisma.agendamento.findMany.mock.calls[0][0].where;
+      expect(where.horaInicio.gt.getTime()).toBeGreaterThanOrEqual(before);
+      expect(where.horaInicio.lte.getTime()).toBeGreaterThan(before);
+    });
+
+    it('falha na criação propaga erro -> transação é revertida (sem órfãs)', async () => {
+      prisma.agendamento.findMany.mockResolvedValue([
+        { id: 88, cliente: { usuarioId: 10 } },
+      ]);
+      prisma.notificacao.create.mockRejectedValue(
+        new Error('falha no lembrete'),
+      );
+
+      await expect(service.processAppointmentReminders(base)).rejects.toThrow(
+        'falha no lembrete',
+      );
+    });
   });
 });

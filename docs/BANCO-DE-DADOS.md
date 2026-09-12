@@ -278,7 +278,9 @@ Nesta etapa, `WAITLIST_OPPORTUNITY` referencia opcionalmente um
 `WaitlistClaim`. A criação do claim e da notificação ocorre na mesma
 transação. Os tipos `AGENDAMENTO` (confirmação) e `CANCELAMENTO` referenciam
 opcionalmente o `Agendamento` (índice em `agendamento_id`) e são criados na
-mesma transação da criação confirmada ou do cancelamento. Notificações são
+mesma transação da criação confirmada ou do cancelamento. O tipo `LEMBRETE`
+também referencia opcionalmente o `Agendamento` e nunca é gerado em
+duplicidade para o mesmo agendamento. Notificações são
 registros internos persistentes; não representam push, e-mail, SMS ou
 integração externa.
 

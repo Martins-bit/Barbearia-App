@@ -11,6 +11,7 @@ import {
   TipoUsuario,
 } from '../src/generated/prisma/enums';
 import { hashPassword } from '../src/common/utils/password.util';
+import { NotificationsService } from '../src/notifications/notifications.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { WaitlistService } from '../src/waitlist/waitlist.service';
 
@@ -18,6 +19,7 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let waitlistService: WaitlistService;
+  let notificationsService: NotificationsService;
   let clientAToken: string;
   let clientBToken: string;
   let clientAId: number;
@@ -79,6 +81,7 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
     await app.init();
     prisma = app.get(PrismaService);
     waitlistService = app.get(WaitlistService);
+    notificationsService = app.get(NotificationsService);
 
     const clientA = await createUser('Cliente A Notifications', `${phoneBase}51`);
     const clientB = await createUser('Cliente B Notifications', `${phoneBase}52`);
@@ -493,5 +496,104 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
     expect(
       clientBList.body.some((item: any) => item.agendamentoId === appointmentId),
     ).toBe(false);
+  });
+
+  const createReminderCandidate = async (
+    status: StatusAgendamento,
+    startDelayMinutes: number,
+  ) => {
+    const horaInicio = new Date(Date.now() + startDelayMinutes * 60 * 1000);
+    const dateKey = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(horaInicio);
+    return prisma.agendamento.create({
+      data: {
+        clienteId: clientAId,
+        barbeiroId: barberId,
+        servicoId: serviceId,
+        data: new Date(`${dateKey}T00:00:00.000Z`),
+        horaInicio,
+        horaFim: new Date(horaInicio.getTime() + 30 * 60 * 1000),
+        status,
+      },
+    });
+  };
+
+  it('motor de lembretes: cria LEMBRETE somente para CONFIRMADO na janela de 1 hora', async () => {
+    const inWindow = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 30);
+    const outWindow = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 120);
+    const cancelled = await createReminderCandidate(StatusAgendamento.CANCELADO, 30);
+    const completed = await createReminderCandidate(StatusAgendamento.CONCLUIDO, 30);
+    const noShow = await createReminderCandidate(StatusAgendamento.NAO_COMPARECEU, 30);
+
+    const result = await notificationsService.processAppointmentReminders();
+
+    expect(result.created).toBe(1);
+    const reminders = await prisma.notificacao.findMany({
+      where: { agendamentoId: inWindow.id, tipo: TipoNotificacao.LEMBRETE },
+    });
+    expect(reminders).toHaveLength(1);
+    expect(reminders[0].usuarioId).toBe(clientAUserId);
+    expect(reminders[0].agendamentoId).toBe(inWindow.id);
+    expect(reminders[0].titulo).toBe('Lembrete de agendamento');
+    expect(reminders[0].mensagem).toBe(
+      'Seu agendamento começa em aproximadamente 1 hora.',
+    );
+    expect(reminders[0].lida).toBe(false);
+
+    // Fora da janela e status terminais nunca recebem lembrete.
+    for (const id of [outWindow.id, cancelled.id, completed.id, noShow.id]) {
+      expect(
+        await prisma.notificacao.count({
+          where: { agendamentoId: id, tipo: TipoNotificacao.LEMBRETE },
+        }),
+      ).toBe(0);
+    }
+  });
+
+  it('motor de lembretes: corrida e reexecução não duplicam lembrete', async () => {
+    const inWindow = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 45);
+
+    // Duas execuções concorrentes: o advisory lock transacional serializa;
+    // apenas uma cria o lembrete.
+    const concurrent = await Promise.all([
+      notificationsService.processAppointmentReminders(),
+      notificationsService.processAppointmentReminders(),
+    ]);
+    expect(concurrent[0].created + concurrent[1].created).toBe(1);
+
+    // Reexecução sequencial: idempotente.
+    const again = await notificationsService.processAppointmentReminders();
+    expect(again.created).toBe(0);
+
+    expect(
+      await prisma.notificacao.count({
+        where: { agendamentoId: inWindow.id, tipo: TipoNotificacao.LEMBRETE },
+      }),
+    ).toBe(1);
+  });
+
+  it('motor de lembretes: vários elegíveis geram um lembrete cada, visíveis via API sem usuarioId', async () => {
+    const first = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 20);
+    const second = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 40);
+
+    const result = await notificationsService.processAppointmentReminders();
+    expect(result.created).toBe(2);
+
+    const listed = await request(app.getHttpServer())
+      .get('/notifications')
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(200);
+    const reminderIds = [first.id, second.id];
+    const items = listed.body.filter(
+      (item: any) =>
+        item.tipo === TipoNotificacao.LEMBRETE &&
+        reminderIds.includes(item.agendamentoId),
+    );
+    expect(items).toHaveLength(2);
+    expect(items.every((item: any) => item.usuarioId === undefined)).toBe(true);
   });
 });
