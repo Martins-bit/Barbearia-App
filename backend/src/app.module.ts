@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule as NestScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
@@ -16,6 +17,10 @@ import { NotificationsModule } from './notifications/notifications.module';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    // Scheduler oficial do Nest (alias NestScheduleModule para não colidir
+    // com o ScheduleModule de domínio da agenda). Habilita o job periódico
+    // de lembretes definido em NotificationsModule.
+    NestScheduleModule.forRoot(),
     PrismaModule,
     UsersModule,
     AuthModule,

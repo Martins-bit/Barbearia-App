@@ -302,11 +302,12 @@ O sistema deverá poder enviar lembretes relacionados aos próximos atendimentos
 
 A especificação original prevê um lembrete uma hora antes do atendimento.
 
-O motor interno de lembretes já identifica agendamentos `CONFIRMADO` com início
+O motor interno de lembretes identifica agendamentos `CONFIRMADO` com início
 na janela de aproximadamente 1 hora (nunca após o início) e gera a notificação
 `LEMBRETE` vinculada ao agendamento, sem duplicar lembretes para o mesmo
-agendamento. Nesta etapa o motor ainda NÃO possui execução automática periódica
-(scheduler/cron); a automação será etapa posterior.
+agendamento. Os lembretes são processados automaticamente a cada 5 minutos; o
+motor continua idempotente e o scheduler não envia comunicação externa,
+apenas cria notificações internas.
 
 O mecanismo técnico utilizado para enviar o lembrete será definido posteriormente na documentação técnica.
 

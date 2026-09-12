@@ -134,9 +134,12 @@ O motor de lembretes (`NotificationsService.processAppointmentReminders`)
 identifica agendamentos `CONFIRMADO` cujo `horaInicio` está na janela de
 aproximadamente 1 hora e cria a notificação `LEMBRETE` vinculada ao
 agendamento, dentro de uma transação serializada por advisory lock próprio
-(namespace 5), sem duplicar lembretes. Nesta etapa o motor ainda NÃO possui
-execução automática periódica (scheduler/cron); a automação será etapa
-posterior e nenhum endpoint público o dispara.
+(namespace 5), sem duplicar lembretes. Os lembretes são processados
+automaticamente a cada 5 minutos pelo `ReminderSchedulerService`
+(`@nestjs/schedule`, registrado em `AppModule`), sem endpoint de disparo
+manual e sem envio externo (e-mail/SMS/push) — apenas notificações internas.
+Falhas do motor são logadas e não derrubam a aplicação; o motor continua
+idempotente, permitindo múltiplas instâncias simultâneas.
 
 ---
 
