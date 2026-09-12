@@ -30,6 +30,7 @@ import {
 } from '../schedule/tz.util';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { AppointmentResponseDto } from './dto/appointment-response.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 /**
  * Lock de CLIENTE (namespace 2 — ver schedule.service.ts). SEMPRE adquirido
@@ -78,6 +79,7 @@ export class AppointmentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scheduleService: ScheduleService,
+    private readonly notificationsService: NotificationsService,
     @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
@@ -254,6 +256,16 @@ export class AppointmentsService {
       },
     });
 
+    // Notificação interna de confirmação na MESMA transação do agendamento
+    // (appointment + notificação OU nenhum dos dois). Como este é o núcleo
+    // compartilhado pela criação normal e pelo aceite de claim, exatamente
+    // UMA notificação é gerada por appointment CONFIRMADO criado.
+    await this.notificationsService.createAppointmentConfirmed(
+      tx,
+      input.clienteId,
+      created.id,
+    );
+
     const row = await tx.agendamento.findUnique({
       where: { id: created.id },
       include: {
@@ -420,18 +432,32 @@ export class AppointmentsService {
         );
       }
 
-      const updated = await this.prisma.agendamento.updateMany({
-        where: {
-          id: appointmentId,
-          clienteId: cliente.id,
-          status: StatusAgendamento.CONFIRMADO,
-        },
-        data: { status: StatusAgendamento.CANCELADO },
-      });
+      // Transição + notificação na MESMA transação (sem nested transaction):
+      // ou ambas ocorrem, ou nenhuma. O update condicional por status garante
+      // que nova tentativa/corrida de cancelamento não gere notificação
+      // duplicada (count === 0 → conflito, sem notificação).
+      await this.prisma.$transaction(async (tx) => {
+        const updated = await tx.agendamento.updateMany({
+          where: {
+            id: appointmentId,
+            clienteId: cliente.id,
+            status: StatusAgendamento.CONFIRMADO,
+          },
+          data: { status: StatusAgendamento.CANCELADO },
+        });
 
-      if (updated.count === 0) {
-        throw new ConflictException('Agendamento não pode mais ser cancelado.');
-      }
+        if (updated.count === 0) {
+          throw new ConflictException(
+            'Agendamento não pode mais ser cancelado.',
+          );
+        }
+
+        await this.notificationsService.createAppointmentCancelled(
+          tx,
+          cliente.id,
+          appointmentId,
+        );
+      });
 
       const refreshed = await this.prisma.agendamento.findUnique({
         where: { id: appointmentId },
@@ -477,18 +503,28 @@ export class AppointmentsService {
       throw new ConflictException('Status incompatível para cancelamento.');
     }
 
-    const updated = await this.prisma.agendamento.updateMany({
-      where: {
-        id: appointmentId,
-        barbeiroId: barbeiro.id,
-        status: StatusAgendamento.CONFIRMADO,
-      },
-      data: { status: StatusAgendamento.CANCELADO },
-    });
+    // Mesma atomicidade do caminho do cliente: transição para CANCELADO +
+    // notificação na mesma transação, sem duplicação em corrida.
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.agendamento.updateMany({
+        where: {
+          id: appointmentId,
+          barbeiroId: barbeiro.id,
+          status: StatusAgendamento.CONFIRMADO,
+        },
+        data: { status: StatusAgendamento.CANCELADO },
+      });
 
-    if (updated.count === 0) {
-      throw new ConflictException('Agendamento não pode mais ser cancelado.');
-    }
+      if (updated.count === 0) {
+        throw new ConflictException('Agendamento não pode mais ser cancelado.');
+      }
+
+      await this.notificationsService.createAppointmentCancelled(
+        tx,
+        row.clienteId,
+        appointmentId,
+      );
+    });
 
     const refreshed = await this.prisma.agendamento.findUnique({
       where: { id: appointmentId },

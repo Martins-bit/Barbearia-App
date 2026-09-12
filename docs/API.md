@@ -544,6 +544,9 @@ O usuário somente poderá receber suas próprias notificações.
 As notificações são ordenadas da mais recente para a mais antiga e não expõem
 `usuario_id`.
 
+Notificações vinculadas a um agendamento (confirmação e cancelamento) retornam
+`agendamento_id` opcional no corpo da resposta.
+
 ## 11.2. Contar notificações não lidas
 
 Endpoint conceitual:

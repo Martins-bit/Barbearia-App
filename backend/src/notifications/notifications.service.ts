@@ -17,6 +17,7 @@ export interface NotificationResponse {
   dataCriacao: Date;
   dataLeitura: Date | null;
   claimId?: number;
+  agendamentoId?: number;
 }
 
 @Injectable()
@@ -35,14 +36,21 @@ export class NotificationsService {
       ...(notification.claimId !== null && notification.claimId !== undefined
         ? { claimId: notification.claimId }
         : {}),
+      ...(notification.agendamentoId !== null &&
+      notification.agendamentoId !== undefined
+        ? { agendamentoId: notification.agendamentoId }
+        : {}),
     };
   }
 
-  async createWaitlistOpportunity(
+  /**
+   * usuarioId é SEMPRE derivado no backend a partir do Cliente — nunca aceito
+   * do frontend.
+   */
+  private async resolveUsuarioId(
     client: NotificationsDbClient,
     clienteId: number,
-    claimId: number,
-  ): Promise<NotificationResponse> {
+  ): Promise<number> {
     const cliente = await client.cliente.findUnique({
       where: { id: clienteId },
       select: { usuarioId: true },
@@ -51,13 +59,65 @@ export class NotificationsService {
       throw new NotFoundException('Cliente não encontrado.');
     }
 
+    return cliente.usuarioId;
+  }
+
+  async createWaitlistOpportunity(
+    client: NotificationsDbClient,
+    clienteId: number,
+    claimId: number,
+  ): Promise<NotificationResponse> {
+    const usuarioId = await this.resolveUsuarioId(client, clienteId);
+
     const notification = await client.notificacao.create({
       data: {
-        usuarioId: cliente.usuarioId,
+        usuarioId,
         claimId,
         tipo: TipoNotificacao.WAITLIST_OPPORTUNITY,
         titulo: 'Novo horário disponível',
         mensagem: 'Um horário ficou disponível para o serviço solicitado.',
+        lida: false,
+      },
+    });
+
+    return this.toResponse(notification);
+  }
+
+  async createAppointmentConfirmed(
+    client: NotificationsDbClient,
+    clienteId: number,
+    agendamentoId: number,
+  ): Promise<NotificationResponse> {
+    const usuarioId = await this.resolveUsuarioId(client, clienteId);
+
+    const notification = await client.notificacao.create({
+      data: {
+        usuarioId,
+        agendamentoId,
+        tipo: TipoNotificacao.AGENDAMENTO,
+        titulo: 'Agendamento confirmado',
+        mensagem: 'Seu agendamento foi confirmado.',
+        lida: false,
+      },
+    });
+
+    return this.toResponse(notification);
+  }
+
+  async createAppointmentCancelled(
+    client: NotificationsDbClient,
+    clienteId: number,
+    agendamentoId: number,
+  ): Promise<NotificationResponse> {
+    const usuarioId = await this.resolveUsuarioId(client, clienteId);
+
+    const notification = await client.notificacao.create({
+      data: {
+        usuarioId,
+        agendamentoId,
+        tipo: TipoNotificacao.CANCELAMENTO,
+        titulo: 'Agendamento cancelado',
+        mensagem: 'Seu agendamento foi cancelado.',
         lida: false,
       },
     });

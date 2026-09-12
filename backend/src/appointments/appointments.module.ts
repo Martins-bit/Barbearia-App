@@ -2,11 +2,12 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
 import { UsersModule } from '../users/users.module';
 import { ScheduleModule } from '../schedule/schedule.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { AppointmentsController } from './appointments.controller';
 import { AppointmentsService } from './appointments.service';
 
 @Module({
-  imports: [AuthModule, UsersModule, ScheduleModule],
+  imports: [AuthModule, UsersModule, ScheduleModule, NotificationsModule],
   controllers: [AppointmentsController],
   providers: [AppointmentsService],
   exports: [AppointmentsService],

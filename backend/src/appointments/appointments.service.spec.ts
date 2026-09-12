@@ -6,6 +6,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { StatusAgendamento } from '../generated/prisma/enums';
 import { ScheduleService } from '../schedule/schedule.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { AppointmentsService } from './appointments.service';
 import {
   getZonedParts,
@@ -67,6 +68,7 @@ function buildFullRow(id: number, overrides: Record<string, unknown> = {}) {
 describe('AppointmentsService', () => {
   let prisma: any;
   let schedule: any;
+  let notifications: any;
   let service: AppointmentsService;
 
   const validDto = {
@@ -111,9 +113,14 @@ describe('AppointmentsService', () => {
   beforeEach(() => {
     prisma = buildPrismaMock();
     schedule = buildScheduleMock();
+    notifications = {
+      createAppointmentConfirmed: jest.fn().mockResolvedValue({ id: 1 }),
+      createAppointmentCancelled: jest.fn().mockResolvedValue({ id: 2 }),
+    };
     service = new AppointmentsService(
       prisma as unknown as PrismaService,
       schedule as unknown as ScheduleService,
+      notifications as unknown as NotificationsService,
     );
   });
 
@@ -780,6 +787,121 @@ describe('AppointmentsService', () => {
       await expect(service.noShowAppointment(1, 75)).rejects.toThrow(
         new ConflictException('Agendamento foi atualizado por outra operação.'),
       );
+    });
+  });
+
+  describe('notificações internas de agendamento (ETAPA 6G)', () => {
+    it('criação normal gera exatamente 1 notificação de AGENDAMENTO na transação', async () => {
+      arrangeSuccess();
+
+      await service.create(1, validDto);
+
+      expect(notifications.createAppointmentConfirmed).toHaveBeenCalledTimes(1);
+      expect(notifications.createAppointmentConfirmed).toHaveBeenCalledWith(
+        prisma,
+        CLIENT_ID,
+        77,
+      );
+    });
+
+    it('criação via claim (createConfirmedForClient) também gera exatamente 1 notificação', async () => {
+      arrangeSuccess();
+
+      await service.createConfirmedForClient(prisma, {
+        clienteId: CLIENT_ID,
+        barbeiroId: BARBER_ID,
+        servicoId: SERVICE_ID,
+        data: DAY_MON,
+        horaInicio: '10:00',
+        claimId: 900,
+      });
+
+      expect(notifications.createAppointmentConfirmed).toHaveBeenCalledTimes(1);
+      expect(notifications.createAppointmentConfirmed).toHaveBeenCalledWith(
+        prisma,
+        CLIENT_ID,
+        77,
+      );
+    });
+
+    it('falha na notificação propaga erro -> transação é revertida (sem órfãs)', async () => {
+      arrangeSuccess();
+      notifications.createAppointmentConfirmed.mockRejectedValue(
+        new Error('falha na notificação'),
+      );
+
+      await expect(service.create(1, validDto)).rejects.toThrow(
+        'falha na notificação',
+      );
+      // appointment chegou a ser gravado dentro da transação, mas o erro
+      // propaga e o Prisma reverte AMBOS (appointment + notificação).
+      expect(prisma.agendamento.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('cancelamento pelo cliente gera exatamente 1 notificação de CANCELAMENTO', async () => {
+      const laterDate = '2099-01-16';
+      const row = buildFullRow(58, {
+        data: prismaDateFilter(laterDate),
+        horaInicio: zonedWallTimeToUtc(laterDate, '10:00'),
+        horaFim: zonedWallTimeToUtc(laterDate, '10:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique
+        .mockResolvedValueOnce(row)
+        .mockResolvedValueOnce({ ...row, status: StatusAgendamento.CANCELADO });
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.cancelAppointment(1, 58);
+
+      expect(notifications.createAppointmentCancelled).toHaveBeenCalledTimes(1);
+      expect(notifications.createAppointmentCancelled).toHaveBeenCalledWith(
+        prisma,
+        CLIENT_ID,
+        58,
+      );
+    });
+
+    it('cancelamento pelo barbeiro notifica o cliente dono do agendamento', async () => {
+      const laterDate = '2099-01-17';
+      const row = buildFullRow(59, {
+        data: prismaDateFilter(laterDate),
+        horaInicio: zonedWallTimeToUtc(laterDate, '11:00'),
+        horaFim: zonedWallTimeToUtc(laterDate, '11:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findUnique
+        .mockResolvedValueOnce(row)
+        .mockResolvedValueOnce({ ...row, status: StatusAgendamento.CANCELADO });
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.cancelAppointment(1, 59);
+
+      expect(notifications.createAppointmentCancelled).toHaveBeenCalledTimes(1);
+      expect(notifications.createAppointmentCancelled).toHaveBeenCalledWith(
+        prisma,
+        row.clienteId,
+        59,
+      );
+    });
+
+    it('corrida de cancelamento (count=0) não gera notificação', async () => {
+      const laterDate = '2099-01-18';
+      const row = buildFullRow(60, {
+        data: prismaDateFilter(laterDate),
+        horaInicio: zonedWallTimeToUtc(laterDate, '12:00'),
+        horaFim: zonedWallTimeToUtc(laterDate, '12:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique.mockResolvedValue(row);
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(service.cancelAppointment(1, 60)).rejects.toThrow(
+        new ConflictException('Agendamento não pode mais ser cancelado.'),
+      );
+      expect(notifications.createAppointmentCancelled).not.toHaveBeenCalled();
     });
   });
 });

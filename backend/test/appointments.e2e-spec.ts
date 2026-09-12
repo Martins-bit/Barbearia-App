@@ -176,6 +176,14 @@ describe('Appointments (e2e)', () => {
 
   afterAll(async () => {
     if (prisma) {
+      await prisma.notificacao.deleteMany({
+        where: {
+          OR: [
+            { usuarioId: { in: userIds } },
+            { agendamentoId: { in: appointmentIds } },
+          ],
+        },
+      });
       await prisma.agendamento.deleteMany({
         where: {
           OR: [

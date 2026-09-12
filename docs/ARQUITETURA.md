@@ -125,6 +125,11 @@ fluxo de criação de um `WaitlistClaim` cria sua notificação de oportunidade 
 mesmo `TransactionClient`, sem adquirir novo advisory lock. A referência é
 tipada por `claimId`; não há JSON genérico nem transporte push nesta etapa.
 
+A criação de um agendamento `CONFIRMADO` (criação normal ou aceite de claim)
+e a transição de um agendamento para `CANCELADO` também geram notificação
+interna no mesmo `TransactionClient`, com referência tipada por
+`agendamentoId`; nenhum advisory lock adicional é criado.
+
 ---
 
 ## 6. SEPARAÇÃO DE RESPONSABILIDADES

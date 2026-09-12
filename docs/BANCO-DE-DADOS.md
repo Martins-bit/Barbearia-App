@@ -256,6 +256,7 @@ A entidade de notificações armazenará avisos destinados aos usuários.
 - `id`
 - `usuario_id`
 - `claim_id`, quando a notificação representar uma oportunidade da lista de espera
+- `agendamento_id`, quando a notificação estiver vinculada a um agendamento
 - `tipo`
 - `titulo`
 - `mensagem`
@@ -275,8 +276,11 @@ A entidade de notificações armazenará avisos destinados aos usuários.
 
 Nesta etapa, `WAITLIST_OPPORTUNITY` referencia opcionalmente um
 `WaitlistClaim`. A criação do claim e da notificação ocorre na mesma
-transação. Notificações são registros internos persistentes; não representam
-push, e-mail, SMS ou integração externa.
+transação. Os tipos `AGENDAMENTO` (confirmação) e `CANCELAMENTO` referenciam
+opcionalmente o `Agendamento` (índice em `agendamento_id`) e são criados na
+mesma transação da criação confirmada ou do cancelamento. Notificações são
+registros internos persistentes; não representam push, e-mail, SMS ou
+integração externa.
 
 ---
 

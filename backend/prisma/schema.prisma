@@ -132,6 +132,7 @@ model Agendamento {
   cliente  Cliente  @relation(fields: [clienteId], references: [id])
   barbeiro Barbeiro @relation(fields: [barbeiroId], references: [id])
   servico  Servico  @relation(fields: [servicoId], references: [id])
+  notificacoes Notificacao[]
 
   @@index([clienteId])
   @@index([barbeiroId, data])
@@ -184,22 +185,25 @@ model WaitlistClaim {
 }
 
 model Notificacao {
-  id           Int             @id @default(autoincrement())
-  usuarioId    Int
-  claimId      Int?
-  tipo         TipoNotificacao
-  titulo       String
-  mensagem     String
-  lida         Boolean         @default(false)
-  dataCriacao  DateTime        @default(now())
-  dataLeitura  DateTime?
+  id            Int             @id @default(autoincrement())
+  usuarioId     Int
+  claimId       Int?
+  agendamentoId Int?
+  tipo          TipoNotificacao
+  titulo        String
+  mensagem      String
+  lida          Boolean         @default(false)
+  dataCriacao   DateTime        @default(now())
+  dataLeitura   DateTime?
 
-  usuario Usuario       @relation(fields: [usuarioId], references: [id])
-  claim   WaitlistClaim? @relation(fields: [claimId], references: [id])
+  usuario     Usuario        @relation(fields: [usuarioId], references: [id])
+  claim       WaitlistClaim? @relation(fields: [claimId], references: [id])
+  agendamento Agendamento?   @relation(fields: [agendamentoId], references: [id])
 
   @@index([usuarioId, lida])
   @@index([usuarioId, dataCriacao])
   @@index([claimId])
+  @@index([agendamentoId])
 }
 
 model Mensagem {

@@ -288,6 +288,12 @@ com o tipo `WAITLIST_OPPORTUNITY`. Quando um claim válido é criado, deve
 existir uma notificação correspondente para o usuário da entrada, criada na
 mesma transação. A notificação não é push nem substitui o aceite do claim.
 
+A criação de um agendamento confirmado gera uma notificação de confirmação e o
+cancelamento de um agendamento confirmado gera uma notificação de cancelamento,
+ambas para o usuário do cliente dono do agendamento e criadas na mesma
+transação da operação correspondente. Tentativas repetidas ou corridas não
+geram notificações duplicadas.
+
 ---
 
 # 18. LEMBRETES

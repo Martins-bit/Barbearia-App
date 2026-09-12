@@ -4,6 +4,7 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
 import {
+  StatusAgendamento,
   StatusListaEspera,
   StatusWaitlistClaim,
   TipoNotificacao,
@@ -325,5 +326,172 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
     expect(activeClaims).toHaveLength(1);
     expect(await prisma.notificacao.count({ where: { claimId: activeClaims[0].id } })).toBe(1);
     expect([first.id, second.id]).toContain(activeClaims[0].listaEsperaId);
+  });
+
+  const createAppointmentFixture = async (dateKey: string, horaInicio: string) => {
+    await prisma.horarioFuncionamento.create({
+      data: {
+        barbeiroId: barberId,
+        diaSemana: new Date(`${dateKey}T00:00:00.000Z`).getUTCDay(),
+        horaInicio: '08:00',
+        horaFim: '18:00',
+        ativo: true,
+      },
+    });
+    const response = await request(app.getHttpServer())
+      .post('/appointments')
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .send({ barbeiroId: barberId, servicoId: serviceId, data: dateKey, horaInicio })
+      .expect(201);
+    return response.body.id as number;
+  };
+
+  it('criação normal de agendamento gera exatamente 1 notificação de AGENDAMENTO', async () => {
+    const appointmentId = await createAppointmentFixture('2099-05-12', '10:00');
+
+    const notifications = await prisma.notificacao.findMany({
+      where: { agendamentoId: appointmentId },
+    });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].usuarioId).toBe(clientAUserId);
+    expect(notifications[0].tipo).toBe(TipoNotificacao.AGENDAMENTO);
+    expect(notifications[0].titulo).toBe('Agendamento confirmado');
+    expect(notifications[0].lida).toBe(false);
+
+    const listed = await request(app.getHttpServer())
+      .get('/notifications')
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(200);
+    const match = listed.body.find(
+      (item: any) => item.agendamentoId === appointmentId,
+    );
+    expect(match).toEqual(
+      expect.objectContaining({ tipo: TipoNotificacao.AGENDAMENTO }),
+    );
+    expect(listed.body.every((item: any) => item.usuarioId === undefined)).toBe(true);
+  });
+
+  it('aceite de claim gera exatamente 1 AGENDAMENTO e preserva a notificação de oportunidade', async () => {
+    const dateKey = '2099-05-13';
+    await createEntryFixture(dateKey, clientAId);
+    const claim = await waitlistService.claimNextEligibleEntryForSlot(
+      barberId,
+      serviceId,
+      dateKey,
+      '10:00',
+      '10:30',
+    );
+    claimIds.push(claim.id);
+
+    await waitlistService.acceptClaim(clientAUserId, claim.id);
+
+    const accepted = await prisma.waitlistClaim.findUnique({
+      where: { id: claim.id },
+    });
+    expect(accepted?.status).toBe(StatusWaitlistClaim.ACEITO);
+
+    // Regressão: WAITLIST_OPPORTUNITY permanece única e não é regenerada.
+    expect(
+      await prisma.notificacao.count({
+        where: { claimId: claim.id, tipo: TipoNotificacao.WAITLIST_OPPORTUNITY },
+      }),
+    ).toBe(1);
+
+    const appointment = await prisma.agendamento.findFirst({
+      where: {
+        clienteId: clientAId,
+        barbeiroId: barberId,
+        servicoId: serviceId,
+        data: new Date(`${dateKey}T00:00:00.000Z`),
+        status: StatusAgendamento.CONFIRMADO,
+      },
+    });
+    expect(appointment).toBeTruthy();
+
+    const confirmations = await prisma.notificacao.findMany({
+      where: { agendamentoId: appointment!.id },
+    });
+    expect(confirmations).toHaveLength(1);
+    expect(confirmations[0].tipo).toBe(TipoNotificacao.AGENDAMENTO);
+    expect(confirmations[0].usuarioId).toBe(clientAUserId);
+    expect(confirmations[0].agendamentoId).toBe(appointment!.id);
+  });
+
+  it('corrida de aceite do mesmo claim gera apenas 1 agendamento e 1 notificação', async () => {
+    const dateKey = '2099-05-15';
+    await createEntryFixture(dateKey, clientAId);
+    const claim = await waitlistService.claimNextEligibleEntryForSlot(
+      barberId,
+      serviceId,
+      dateKey,
+      '11:00',
+      '11:30',
+    );
+    claimIds.push(claim.id);
+
+    const results = await Promise.allSettled([
+      waitlistService.acceptClaim(clientAUserId, claim.id),
+      waitlistService.acceptClaim(clientAUserId, claim.id),
+    ]);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+
+    const appointments = await prisma.agendamento.findMany({
+      where: { clienteId: clientAId, data: new Date(`${dateKey}T00:00:00.000Z`) },
+    });
+    expect(appointments).toHaveLength(1);
+    const notifications = await prisma.notificacao.findMany({
+      where: { agendamentoId: appointments[0].id },
+    });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].tipo).toBe(TipoNotificacao.AGENDAMENTO);
+  });
+
+  it('cancelamento gera exatamente 1 CANCELAMENTO e nova tentativa não duplica', async () => {
+    const appointmentId = await createAppointmentFixture('2099-05-16', '10:00');
+
+    await request(app.getHttpServer())
+      .patch(`/appointments/${appointmentId}/cancel`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(200);
+
+    // Nova tentativa/corrida: transição não acontece -> 409 sem duplicata.
+    await request(app.getHttpServer())
+      .patch(`/appointments/${appointmentId}/cancel`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(409);
+
+    const notifications = await prisma.notificacao.findMany({
+      where: { agendamentoId: appointmentId, tipo: TipoNotificacao.CANCELAMENTO },
+    });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].tipo).toBe(TipoNotificacao.CANCELAMENTO);
+    expect(notifications[0].usuarioId).toBe(clientAUserId);
+    expect(notifications[0].titulo).toBe('Agendamento cancelado');
+    expect(notifications[0].agendamentoId).toBe(appointmentId);
+  });
+
+  it('ownership: cancelamento e notificação pertencem somente ao cliente dono', async () => {
+    const appointmentId = await createAppointmentFixture('2099-05-17', '10:00');
+
+    // Outro cliente não cancela (404) e nenhuma notificação é gerada.
+    await request(app.getHttpServer())
+      .patch(`/appointments/${appointmentId}/cancel`)
+      .set('Authorization', `Bearer ${clientBToken}`)
+      .expect(404);
+    expect(
+      await prisma.notificacao.count({
+        where: { agendamentoId: appointmentId, tipo: TipoNotificacao.CANCELAMENTO },
+      }),
+    ).toBe(0);
+
+    // A notificação do agendamento aparece somente para o dono (cliente A).
+    const clientBList = await request(app.getHttpServer())
+      .get('/notifications')
+      .set('Authorization', `Bearer ${clientBToken}`)
+      .expect(200);
+    expect(
+      clientBList.body.some((item: any) => item.agendamentoId === appointmentId),
+    ).toBe(false);
   });
 });
