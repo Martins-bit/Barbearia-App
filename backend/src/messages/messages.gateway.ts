@@ -25,6 +25,14 @@ import { MessagesSocketRegistry } from './messages.socket-registry';
 export interface SocketIdentity {
   usuarioId: number;
   tipoUsuario: TipoUsuario;
+  /**
+   * `exp` do JWT (epoch em segundos), copiado do payload validado.
+   *
+   * Guardamos APENAS o instante de expiração — nunca o token em si — para
+   * revalidar a autorização ao longo da vida do socket (ETAPA 7D.1) sem
+   * persistir nada e sem expor o JWT.
+   */
+  tokenExpiraEm: number | null;
 }
 
 /** Payload do evento de handshake autenticado (echo de identidade). */
@@ -52,6 +60,11 @@ interface PingPongDto {
  *   `message:send` (ETAPA 7C.2), que persiste via `MessagesService` — as
  *   MESMAS regras do POST /messages — e só então emite `message:sent` ao
  *   remetente e `message:received` a cada conexão ativa do destinatário.
+ * - Hardening (ETAPA 7D.1): um socket NÃO permanece autorizado apenas porque o
+ *   handshake foi aceito. Cada evento revalida a autorização ATUAL — expiração
+ *   do JWT (guardada como `exp`, nunca o token) e estado vigente da conta/
+ *   perfil pelo mesmo `UsersService` usado pelo `RolesGuard`. Quando a
+ *   autorização deixa de valer, o socket é desconectado e removido do registro.
  * - NÃO há read/unread-count via socket, fila offline, presença,
  *   typing indicator, Redis, push, e-mail ou WhatsApp nesta etapa.
  */
@@ -96,8 +109,10 @@ export class MessagesGateway
       throw new Error('Não autorizado.');
     }
 
-    let payload: { sub?: unknown };
+    let payload: { sub?: unknown; exp?: unknown };
     try {
+      // `verifyAsync` já valida assinatura E expiração (mesmo JwtService/segredo
+      // do REST, configurado no AuthModule).
       payload = await this.jwtService.verifyAsync(token);
     } catch {
       // JWT ausente/inválido/expirado: motivo genérico, sem detalhes internos.
@@ -109,22 +124,111 @@ export class MessagesGateway
       throw new Error('Não autorizado.');
     }
 
-    // Mesma validação de conta/perfil usada pelo RolesGuard (usuários ativos,
-    // barbeiro com perfil ativo). Nunca confia em dado enviado pelo cliente.
-    const authorizationState =
-      await this.usersService.findAuthorizationStateById(usuarioId);
-    if (!authorizationState || !authorizationState.ativo) {
-      throw new Error('Não autorizado.');
-    }
-    if (
-      authorizationState.tipoUsuario === TipoUsuario.BARBEIRO &&
-      (!authorizationState.barbeiro || !authorizationState.barbeiro.ativo)
-    ) {
+    const authorizationState = await this.getAuthorizationState(usuarioId);
+    if (!authorizationState) {
       throw new Error('Não autorizado.');
     }
 
     client.data.usuarioId = usuarioId;
     client.data.tipoUsuario = authorizationState.tipoUsuario;
+    // Guarda apenas o instante de expiração (nunca o token), para revalidar a
+    // autorização durante a vida do socket.
+    client.data.tokenExpiraEm = this.readTokenExpiration(payload);
+  }
+
+  /**
+   * Estado de autorização ATUAL do usuário (ETAPA 7D.1), reutilizando a MESMA
+   * abstração do `RolesGuard`.
+   *
+   * Retorna `null` quando o usuário não está autorizado: inexistente, inativo
+   * ou BARBEIRO sem perfil ativo. Nenhuma regra de autorização é duplicada — a
+   * decisão vive no `UsersService`/`RolesGuard` e é apenas consultada aqui.
+   */
+  private async getAuthorizationState(
+    usuarioId: number,
+  ): Promise<{ tipoUsuario: TipoUsuario } | null> {
+    const authorizationState =
+      await this.usersService.findAuthorizationStateById(usuarioId);
+
+    if (!authorizationState || !authorizationState.ativo) {
+      return null;
+    }
+
+    if (
+      authorizationState.tipoUsuario === TipoUsuario.BARBEIRO &&
+      (!authorizationState.barbeiro || !authorizationState.barbeiro.ativo)
+    ) {
+      return null;
+    }
+
+    return { tipoUsuario: authorizationState.tipoUsuario };
+  }
+
+  /** `exp` do payload (epoch em segundos) ou `null` quando ausente/ inválido. */
+  private readTokenExpiration(payload: { exp?: unknown }): number | null {
+    const exp = Number(payload?.exp);
+    return Number.isFinite(exp) && exp > 0 ? exp : null;
+  }
+
+  /**
+   * Revalida a autorização do socket em cada uso (ETAPA 7D.1).
+   *
+   * Um socket não permanece autorizado indefinidamente só porque o handshake
+   * foi aceito: o JWT pode ter expirado e a conta/perfil podem ter sido
+   * desativados. Quando a autorização deixa de valer, o socket é DESCONECTADO
+   * e um erro genérico é lançado — sem expor token, JWT ou detalhes internos.
+   *
+   * Nada é persistido: a expiração vem do próprio JWT (em memória, no socket) e
+   * o estado da conta vem do banco, pelo serviço já existente.
+   */
+  private async assertCurrentAuthorization(
+    client: Socket,
+  ): Promise<SocketIdentity | null> {
+    const identity = this.getIdentity(client);
+    if (!identity) {
+      this.rejectUnauthorized(client);
+      return null;
+    }
+
+    const expirou =
+      identity.tokenExpiraEm !== null &&
+      identity.tokenExpiraEm * 1000 <= Date.now();
+
+    if (expirou) {
+      this.rejectUnauthorized(client);
+      return null;
+    }
+
+    const authorizationState = await this.getAuthorizationState(
+      identity.usuarioId,
+    );
+    if (!authorizationState) {
+      // Conta desativada ou barbeiro sem perfil ativo após a conexão.
+      this.rejectUnauthorized(client);
+      return null;
+    }
+
+    // Mantém o tipoUsuario sincronizado com o estado atual (ex.: papel
+    // alterado no banco), sem alterar a identidade do remetente.
+    client.data.tipoUsuario = authorizationState.tipoUsuario;
+    return { ...identity, tipoUsuario: authorizationState.tipoUsuario };
+  }
+
+  /**
+   * Recusa um socket que perdeu autorização.
+   *
+   * A ordem importa: o cliente precisa RECEBER o motivo genérico antes de o
+   * socket ser encerrado — desconectar primeiro faria o erro se perder. Remove
+   * o socket do registro (não receberá mais entregas) e só então desconecta.
+   */
+  private rejectUnauthorized(client: Socket): void {
+    const identity = this.getIdentity(client);
+    if (identity) {
+      this.socketRegistry.remove(identity.usuarioId, client.id);
+    }
+    client.emit('exception', { status: 'error', message: 'Não autorizado.' });
+    this.logger.debug(`WebSocket sem autorização: socketId=${client.id}`);
+    client.disconnect(true);
   }
 
   /** Registra a conexão autenticada (identidade já validada no handshake). */
@@ -163,6 +267,9 @@ export class MessagesGateway
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     @MessageBody() _body?: unknown,
   ): { event: string; data: PingPongDto } {
+    // Não revalida autorização: `ping` é apenas o eco do handshake já
+    // autenticado e não concede acesso a nada. A revalidação (ETAPA 7D.1)
+    // acontece no evento que de fato altera estado — `message:send`.
     const identity = this.getIdentity(client);
     if (!identity) {
       throw new WsException('Não autorizado.');
@@ -192,9 +299,12 @@ export class MessagesGateway
     @ConnectedSocket() client: Socket,
     @MessageBody() body: unknown,
   ): Promise<void> {
-    const identity = this.getIdentity(client);
+    // Autorização ATUAL: recusa (e desconecta) se o JWT expirou ou se a
+    // conta/perfil deixou de estar ativa após o handshake. O erro já foi
+    // emitido ao cliente dentro da revalidação.
+    const identity = await this.assertCurrentAuthorization(client);
     if (!identity) {
-      throw new WsException('Não autorizado.');
+      return;
     }
 
     // Validação estrita: campos de identidade enviados pelo cliente são
@@ -279,11 +389,15 @@ export class MessagesGateway
   }
 
   private getIdentity(client: Socket): SocketIdentity | null {
-    const { usuarioId, tipoUsuario } = client.data ?? {};
+    const { usuarioId, tipoUsuario, tokenExpiraEm } = client.data ?? {};
     if (typeof usuarioId !== 'number' || !tipoUsuario) {
       return null;
     }
-    return { usuarioId, tipoUsuario };
+    return {
+      usuarioId,
+      tipoUsuario,
+      tokenExpiraEm: typeof tokenExpiraEm === 'number' ? tokenExpiraEm : null,
+    };
   }
 
   /** Token do handshake: `auth.token` ou header `Authorization` (Bearer). */

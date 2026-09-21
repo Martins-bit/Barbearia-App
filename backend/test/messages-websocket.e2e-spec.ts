@@ -616,5 +616,217 @@ describe('Messages WebSocket — fundação autenticada (e2e)', () => {
       expect(unread.body.count).toBeGreaterThanOrEqual(1);
     });
   });
+
+  describe('revalidação de autorização durante a vida do socket (ETAPA 7D.1)', () => {
+    /** Conecta e resolve com o socket autenticado. */
+    const connectAs = async (token: string) => {
+      const { socket, error } = await tryConnect({ token });
+      expect(error).toBeNull();
+      openSockets.push(socket);
+      return socket;
+    };
+
+    /** Emite message:send e resolve com `message:sent` ou com o erro. */
+    const trySend = (socket: Socket, payload: Record<string, unknown>) =>
+      new Promise<{ sent: any; error: string | null }>((resolve) => {
+        let settled = false;
+        const finish = (result: { sent: any; error: string | null }) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          socket.off('exception', onException);
+          socket.off('message:sent', onSent);
+          resolve(result);
+        };
+        const onException = (err: any) =>
+          finish({ sent: null, error: String(err?.message ?? err) });
+        const onSent = (data: any) => finish({ sent: data, error: null });
+        const timer = setTimeout(
+          () => finish({ sent: null, error: 'timeout' }),
+          5000,
+        );
+        socket.once('exception', onException);
+        socket.once('message:sent', onSent);
+        socket.emit('message:send', payload);
+      });
+
+    /** Aguarda a desconexão do socket (o servidor derruba ao perder autorização). */
+    const waitDisconnect = (socket: Socket, timeoutMs = 5000) =>
+      new Promise<void>((resolve, reject) => {
+        if (!socket.connected) return resolve();
+        const timer = setTimeout(
+          () => reject(new Error('Socket não foi desconectado.')),
+          timeoutMs,
+        );
+        socket.once('disconnect', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+
+    afterEach(async () => {
+      for (const socket of openSockets.splice(0)) {
+        socket.disconnect();
+      }
+      await waitUntil(() => registry.size() === 0, 8000);
+    });
+
+    it('usuário desativado após a conexão: envio rejeitado e socket derrubado', async () => {
+      const socket = await connectAs(clientToken);
+      await waitUntil(() => registry.count(clientUserId) === 1);
+
+      // Ativo durante a conexão: envio funciona.
+      const antes = await trySend(socket, {
+        destinatarioId: barberUserId,
+        conteudo: 'antes de desativar',
+      });
+      expect(antes.error).toBeNull();
+      messageIds.push(antes.sent.id);
+
+      // Desativa a conta no banco com o socket ainda conectado.
+      await prisma.usuario.update({
+        where: { id: clientUserId },
+        data: { ativo: false },
+      });
+
+      const desconectou = waitDisconnect(socket);
+      const depois = await trySend(socket, {
+        destinatarioId: barberUserId,
+        conteudo: 'depois de desativar',
+      });
+
+      expect(depois.error).toBe('Não autorizado.');
+      expect(depois.sent).toBeNull();
+      await desconectou;
+
+      // Nada persistido pela tentativa negada.
+      expect(
+        await prisma.mensagem.count({
+          where: { conteudo: 'depois de desativar' },
+        }),
+      ).toBe(0);
+
+      // Socket removido do registro e REST rejeita o usuário inativo.
+      await waitUntil(() => registry.count(clientUserId) === 0);
+      await request(app.getHttpServer())
+        .post('/messages')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .send({ destinatarioId: barberUserId, conteudo: 'via REST' })
+        .expect(401);
+
+      await prisma.usuario.update({
+        where: { id: clientUserId },
+        data: { ativo: true },
+      });
+    });
+
+    it('barbeiro com perfil desativado após a conexão: envio rejeitado', async () => {
+      const socket = await connectAs(barberToken);
+      await waitUntil(() => registry.count(barberUserId) === 1);
+
+      const antes = await trySend(socket, {
+        destinatarioId: clientUserId,
+        conteudo: 'antes de desativar perfil',
+      });
+      expect(antes.error).toBeNull();
+      messageIds.push(antes.sent.id);
+
+      const barberRow = await prisma.barbeiro.findUnique({
+        where: { usuarioId: barberUserId },
+      });
+      await prisma.barbeiro.update({
+        where: { id: barberRow!.id },
+        data: { ativo: false },
+      });
+
+      const desconectou = waitDisconnect(socket);
+      const depois = await trySend(socket, {
+        destinatarioId: clientUserId,
+        conteudo: 'depois de desativar perfil',
+      });
+
+      expect(depois.error).toBe('Não autorizado.');
+      await desconectou;
+      expect(
+        await prisma.mensagem.count({
+          where: { conteudo: 'depois de desativar perfil' },
+        }),
+      ).toBe(0);
+
+      await prisma.barbeiro.update({
+        where: { id: barberRow!.id },
+        data: { ativo: true },
+      });
+    });
+
+    it('múltiplas conexões do usuário continuam funcionando antes da desativação', async () => {
+      const primeira = await connectAs(clientToken);
+      const segunda = await connectAs(clientToken);
+      await waitUntil(() => registry.count(clientUserId) === 2);
+
+      const envioA = await trySend(primeira, {
+        destinatarioId: barberUserId,
+        conteudo: 'conexão 1',
+      });
+      const envioB = await trySend(segunda, {
+        destinatarioId: barberUserId,
+        conteudo: 'conexão 2',
+      });
+
+      expect(envioA.error).toBeNull();
+      expect(envioB.error).toBeNull();
+      messageIds.push(envioA.sent.id, envioB.sent.id);
+      expect(envioA.sent.id).not.toBe(envioB.sent.id);
+
+      // Uma desconexão não afeta a outra.
+      primeira.disconnect();
+      await waitUntil(() => registry.count(clientUserId) === 1);
+      const aindaEnvia = await trySend(segunda, {
+        destinatarioId: barberUserId,
+        conteudo: 'após fechar uma aba',
+      });
+      expect(aindaEnvia.error).toBeNull();
+      messageIds.push(aindaEnvia.sent.id);
+    });
+
+    it('desconexão limpa o registry e usuário offline não tem conexões', async () => {
+      const socket = await connectAs(clientToken);
+      await waitUntil(() => registry.count(clientUserId) === 1);
+      expect(registry.getSocketIds(clientUserId)).toEqual([socket.id]);
+
+      const desconectou = new Promise<void>((resolve) =>
+        socket.once('disconnect', () => resolve()),
+      );
+      socket.disconnect();
+      await desconectou;
+      await waitUntil(() => registry.count(clientUserId) === 0);
+
+      // Offline: nenhuma conexão e nenhuma entrada residual.
+      expect(registry.has(clientUserId)).toBe(false);
+      expect(registry.getSocketIds(clientUserId)).toEqual([]);
+
+      // Remoção idempotente: desconectar de novo não lança nem afeta o total.
+      socket.disconnect();
+      expect(registry.count(clientUserId)).toBe(0);
+    });
+
+    it('REST permanece funcionando após o hardening', async () => {
+      const listagem = await request(app.getHttpServer())
+        .get(`/messages/${barberUserId}`)
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200);
+      expect(Array.isArray(listagem.body)).toBe(true);
+
+      await request(app.getHttpServer())
+        .get('/messages/conversations')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .get('/messages/unread-count')
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200);
+    });
+  });
 });
 

@@ -384,11 +384,25 @@ O envio por WebSocket **aplica exatamente as mesmas regras do REST**
 - é **persistida no PostgreSQL** e permanece disponível para consulta via REST
   mesmo que o destinatário esteja desconectado.
 
-Ordem obrigatória: autenticar → validar → **persistir** → confirmar ao
-remetente → entregar ao destinatário. Nenhuma confirmação é enviada antes da
-persistência. O destinatário recebe a mensagem em **todas** as suas conexões
-ativas; se estiver offline, a mensagem apenas permanece salva, sem erro e sem
-fila. Uma única chamada gera exatamente uma persistência.
+Ordem obrigatória: autenticar → revalidar autorização → validar →
+**persistir** → confirmar ao remetente → entregar ao destinatário. Nenhuma
+confirmação é enviada antes da persistência. O destinatário recebe a mensagem
+em **todas** as suas conexões ativas; se estiver offline, a mensagem apenas
+permanece salva, sem erro e sem fila. Uma única chamada gera exatamente uma
+persistência.
+
+## 19.12. Autorização durante a conexão
+Estar conectado **não** significa estar autorizado indefinidamente. Cada envio
+revalida a autorização vigente, e o envio é recusado quando:
+
+- o **JWT expirou** durante a conexão;
+- o **usuário foi desativado** depois de conectar;
+- o **perfil do barbeiro foi desativado** depois de conectar.
+
+Nesses casos a mensagem **não é persistida**, o socket é **desconectado** e
+removido do registro (deixando de receber entregas), e o cliente recebe apenas
+`Não autorizado.` — sem expor token, JWT ou detalhes internos. As mesmas regras
+valem no REST: um usuário inativo continua recebendo `401`.
 
 ---
 

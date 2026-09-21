@@ -155,10 +155,30 @@ convertido pelo Nest em um segundo evento, duplicando `message:sent`. A
 emissão explícita é a única origem dos eventos de sucesso.
 
 Se o destinatário estiver offline, nada é emitido e **nenhum erro** é gerado:
-a mensagem já está persistida e é recuperada via REST. Não há fila offline,
-notificações, unread-count via socket, presença ou typing indicator nesta
-etapa. Quando o frontend conectar de origem cruzada, o CORS do gateway deverá
-ser configurado na integração.
+a mensagem já está persistida e é recuperada via REST.
+
+### Revalidação de autorização (ETAPA 7D.1)
+O handshake autoriza a conexão, mas o socket **não fica autorizado para
+sempre**. Antes de processar `message:send`, o gateway revalida:
+
+- a **expiração do JWT** — `client.data` guarda só o `exp` (epoch), nunca o
+token, mantendo o socket sem qualquer credencial em memória;
+- o **estado vigente da conta e do perfil**, pelo mesmo
+  `UsersService.findAuthorizationStateById` que o `RolesGuard` usa.
+
+Perdendo a autorização (JWT expirado, usuário desativado, ou perfil de
+barbeiro desativado depois da conexão), o socket é removido do
+`MessagesSocketRegistry`, recebe `exception: Não autorizado.` e é desconectado.
+A ordem é deliberada: **emitir o erro e só então desconectar**, senão o motivo
+se perderia junto com o socket. Nada é persistido pela tentativa recusada.
+
+Essa é a única extensão de comportamento: não há Redis, tabela de sessões,
+fila, heartbeat periódico nem regra de autorização reescrita — a decisão
+continua centralizada em `UsersService`/`RolesGuard`.
+
+Não há fila offline, notificações, unread-count via socket, presença ou typing
+indicator nesta etapa. Quando o frontend conectar de origem cruzada, o CORS do
+gateway deverá ser configurado na integração.
 
 ---
 

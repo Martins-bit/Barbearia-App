@@ -790,6 +790,33 @@ tempo real, fila offline, presença online/offline, typing indicator, Redis,
 filas, push, e-mail, WhatsApp, anexos, edição/exclusão. `PATCH
 /api/messages/:id/read` continua sendo REST.
 
+---
+
+## 12.9. WebSocket — revalidação de autorização (ETAPA 7D.1)
+
+Um socket **não permanece autorizado** apenas porque o handshake foi aceito.
+Cada `message:send` revalida a autorização vigente **antes** de tocar no banco:
+
+1. **Expiração do JWT** — o handshake guarda no socket apenas o instante de
+expiração (`exp`), **nunca o token**. Se o JWT expirar durante a conexão, o
+envio é recusado e o socket é encerrado.
+2. **Estado atual da conta/perfil** — a autorização é reconferida pelo mesmo
+`UsersService.findAuthorizationStateById` usado pelo `RolesGuard`: usuário
+desativado após a conexão ou BARBEIRO cujo perfil foi desativado deixa de
+poder enviar.
+
+Nenhuma configuração de JWT é duplicada, nada é persistido (sem Redis, sem
+sessões, sem tabelas) e nenhuma regra de autorização é reescrita.
+
+Quando a autorização deixa de valer:
+- o socket recebe o evento `exception` com `Não autorizado.`;
+- o socket é **desconectado** e **removido do registro** (não recebe mais
+entregas como destinatário);
+- **nada é persistido** pela tentativa recusada.
+
+A recusa é comunicada antes da desconexão, para que o motivo chegue ao
+cliente. O erro é genérico — nunca inclui token, JWT, SQL ou stack trace.
+
 ### Observação de integração (futuro)
 O servidor HTTP atual não configura CORS; quando o frontend (browser)
 conectar de outra origem, o CORS do gateway WebSocket deverá ser habilitado

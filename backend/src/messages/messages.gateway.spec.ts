@@ -63,11 +63,19 @@ describe('MessagesGateway', () => {
   let messagesService: any;
   let gateway: MessagesGateway;
 
+  /** `exp` futuro: socket com JWT ainda válido. */
+  const FUTURO = Math.floor(Date.now() / 1000) + 3600;
+  /** `exp` passado: JWT expirado durante a vida do socket. */
+  const PASSADO = Math.floor(Date.now() / 1000) - 60;
+
   beforeEach(() => {
     registry = new MessagesSocketRegistry();
     jwt = buildJwtMock();
     users = buildUsersMock();
     messagesService = buildMessagesServiceMock();
+    // Por padrão a conta está autorizada (CLIENTE ativo). Cada teste pode
+    // sobrescrever para simular desativação após a conexão.
+    users.findAuthorizationStateById.mockResolvedValue(clientAuthState);
     gateway = new MessagesGateway(
       registry,
       jwt,
@@ -290,10 +298,12 @@ describe('MessagesGateway', () => {
       usuarioId: number,
       tipoUsuario = TipoUsuario.CLIENTE,
       socketId = 'socket-1',
+      tokenExpiraEm: number | null = FUTURO,
     ) => {
       const client = buildClient(undefined, socketId);
       client.data.usuarioId = usuarioId;
       client.data.tipoUsuario = tipoUsuario;
+      client.data.tokenExpiraEm = tokenExpiraEm;
       return client;
     };
 
@@ -366,12 +376,20 @@ describe('MessagesGateway', () => {
     });
 
     it('rejeita socket sem identidade', async () => {
-      await expect(
-        gateway.handleMessageSend(buildClient(), {
-          destinatarioId: 20,
-          conteudo: 'Olá',
-        }),
-      ).rejects.toThrow(WsException);
+      const socket = buildClient();
+
+      // A recusa é comunicada via `exception` e o socket é encerrado
+      // (ETAPA 7D.1), em vez de lançar.
+      await gateway.handleMessageSend(socket, {
+        destinatarioId: 20,
+        conteudo: 'Olá',
+      });
+
+      expect(socket.emit).toHaveBeenCalledWith('exception', {
+        status: 'error',
+        message: 'Não autorizado.',
+      });
+      expect(socket.disconnect).toHaveBeenCalledWith(true);
       expect(messagesService.sendMessage).not.toHaveBeenCalled();
     });
 
@@ -551,6 +569,252 @@ describe('MessagesGateway', () => {
       expect(messagesService.sendMessage).toHaveBeenCalledTimes(1);
       expect(client.emit).toHaveBeenCalledTimes(1);
       expect(server.emitted).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('revalidação de autorização durante a vida do socket (ETAPA 7D.1)', () => {
+    const createdMessage = {
+      id: 900,
+      remetenteUsuarioId: 10,
+      destinatarioUsuarioId: 20,
+      conteudo: 'Olá!',
+      lida: false,
+      dataCriacao: new Date('2099-01-01T10:00:00.000Z'),
+      dataLeitura: null,
+    };
+
+    const client = (
+      tokenExpiraEm: number | null = FUTURO,
+      usuarioId = 10,
+      tipoUsuario = TipoUsuario.CLIENTE,
+    ) => {
+      const socket = buildClient(undefined, 'socket-1');
+      socket.data.usuarioId = usuarioId;
+      socket.data.tipoUsuario = tipoUsuario;
+      socket.data.tokenExpiraEm = tokenExpiraEm;
+      return socket;
+    };
+
+    beforeEach(() => {
+      messagesService.sendMessage.mockResolvedValue(createdMessage);
+    });
+
+    it('handshake guarda o exp do JWT (nunca o token) no socket', async () => {
+      jwt.verifyAsync.mockResolvedValue({ sub: 10, exp: FUTURO });
+      users.findAuthorizationStateById.mockResolvedValue(clientAuthState);
+      const socket = buildClient('jwt-cliente');
+
+      await gateway.authenticate(socket);
+
+      expect(socket.data.tokenExpiraEm).toBe(FUTURO);
+      // Nenhuma propriedade do socket contém o token.
+      for (const value of Object.values(socket.data)) {
+        expect(String(value)).not.toContain('jwt-cliente');
+      }
+    });
+
+    /** O erro entregue ao cliente, capturado via `client.emit('exception')`. */
+    const erroEmitido = (socket: any): string | undefined => {
+      const chamada = socket.emit.mock.calls.find(
+        (call: any[]) => call[0] === 'exception',
+      );
+      return chamada?.[1]?.message;
+    };
+
+    it('JWT expirado durante o uso: envio recusado, erro emitido, desconectado e nada persistido', async () => {
+      const socket = client(PASSADO);
+      gateway.server = buildServerMock();
+
+      // A recusa é comunicada ao cliente e o socket é encerrado — não lança,
+      // para que o motivo chegue antes da desconexão.
+      await expect(
+        gateway.handleMessageSend(socket, { destinatarioId: 20, conteudo: 'Oi' }),
+      ).resolves.toBeUndefined();
+
+      expect(erroEmitido(socket)).toBe('Não autorizado.');
+      expect(messagesService.sendMessage).not.toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledWith(true);
+    });
+
+    it('nem consulta a autorização quando o JWT já expirou', async () => {
+      const socket = client(PASSADO);
+
+      await gateway.handleMessageSend(socket, {
+        destinatarioId: 20,
+        conteudo: 'Oi',
+      });
+
+      expect(users.findAuthorizationStateById).not.toHaveBeenCalled();
+    });
+
+    it('usuário desativado APÓS a conexão: envio recusado, desconectado e removido do registry', async () => {
+      const socket = client();
+      // Conectou enquanto ativo...
+      gateway.handleConnection(socket);
+      expect(registry.has(10)).toBe(true);
+
+      // ...e foi desativado no banco depois.
+      users.findAuthorizationStateById.mockResolvedValue({
+        ...clientAuthState,
+        ativo: false,
+      });
+
+      await gateway.handleMessageSend(socket, {
+        destinatarioId: 20,
+        conteudo: 'Oi',
+      });
+
+      expect(erroEmitido(socket)).toBe('Não autorizado.');
+      expect(messagesService.sendMessage).not.toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledWith(true);
+      expect(registry.has(10)).toBe(false);
+    });
+
+    it('usuário removido do banco após a conexão: envio recusado', async () => {
+      const socket = client();
+      users.findAuthorizationStateById.mockResolvedValue(null);
+
+      await gateway.handleMessageSend(socket, {
+        destinatarioId: 20,
+        conteudo: 'Oi',
+      });
+
+      expect(erroEmitido(socket)).toBe('Não autorizado.');
+      expect(messagesService.sendMessage).not.toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledWith(true);
+    });
+
+    it('BARBEIRO com perfil desativado APÓS a conexão: envio recusado', async () => {
+      const socket = client(FUTURO, 20, TipoUsuario.BARBEIRO);
+      gateway.handleConnection(socket);
+
+      users.findAuthorizationStateById.mockResolvedValue({
+        ...barberAuthState,
+        barbeiro: { ativo: false },
+      });
+
+      await gateway.handleMessageSend(socket, {
+        destinatarioId: 10,
+        conteudo: 'Oi',
+      });
+
+      expect(erroEmitido(socket)).toBe('Não autorizado.');
+      expect(messagesService.sendMessage).not.toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledWith(true);
+      expect(registry.has(20)).toBe(false);
+    });
+
+    it('BARBEIRO com perfil ativo continua enviando normalmente', async () => {
+      const socket = client(FUTURO, 20, TipoUsuario.BARBEIRO);
+      gateway.server = buildServerMock();
+      messagesService.sendMessage.mockResolvedValue({
+        ...createdMessage,
+        remetenteUsuarioId: 20,
+        destinatarioUsuarioId: 10,
+      });
+
+      await gateway.handleMessageSend(socket, {
+        destinatarioId: 10,
+        conteudo: 'Resposta',
+      });
+
+      expect(messagesService.sendMessage.mock.calls[0][0]).toBe(20);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('socket válido não é desconectado pela revalidação', async () => {
+      const socket = client();
+      gateway.handleConnection(socket);
+      gateway.server = buildServerMock();
+
+      await gateway.handleMessageSend(socket, {
+        destinatarioId: 20,
+        conteudo: 'Olá!',
+      });
+
+      expect(socket.disconnect).not.toHaveBeenCalled();
+      expect(registry.has(10)).toBe(true);
+    });
+
+    it('mesmo com autorização válida, remetente informado no payload é rejeitado', async () => {
+      const socket = client();
+
+      await expect(
+        gateway.handleMessageSend(socket, {
+          destinatarioId: 20,
+          conteudo: 'Olá!',
+          remetenteUsuarioId: 999,
+        }),
+      ).rejects.toThrow('Dados inválidos.');
+
+      expect(messagesService.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('múltiplas conexões do usuário: a revalidação não derruba as demais', async () => {
+      const primeira = client();
+      const segunda = client();
+      segunda.id = 'socket-2';
+      gateway.handleConnection(primeira);
+      gateway.handleConnection(segunda);
+      expect(registry.count(10)).toBe(2);
+
+      users.findAuthorizationStateById.mockResolvedValue({
+        ...clientAuthState,
+        ativo: false,
+      });
+
+      await gateway.handleMessageSend(primeira, {
+        destinatarioId: 20,
+        conteudo: 'Oi',
+      });
+
+      // Só a conexão que tentou enviar foi removida; a outra permanece.
+      expect(registry.getSocketIds(10)).toEqual(['socket-2']);
+    });
+
+    it('socket sem identidade continua rejeitado', async () => {
+      const socket = buildClient();
+
+      await expect(
+        gateway.handleMessageSend(socket, {
+          destinatarioId: 20,
+          conteudo: 'Oi',
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(erroEmitido(socket)).toBe('Não autorizado.');
+      expect(messagesService.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('erro inesperado permanece genérico e sem dados sensíveis', async () => {
+      const socket = client();
+      gateway.server = buildServerMock();
+      messagesService.sendMessage.mockRejectedValue(
+        new Error(
+          'SQL: SELECT * FROM "Usuario" WHERE senhaHash = $1; jwt=eyJhbGciOi',
+        ),
+      );
+
+      let capturado: unknown;
+      try {
+        await gateway.handleMessageSend(socket, {
+          destinatarioId: 20,
+          conteudo: 'Oi',
+        });
+      } catch (error) {
+        capturado = error;
+      }
+
+      expect(capturado).toBeInstanceOf(WsException);
+      const texto = JSON.stringify(capturado);
+      expect(texto).not.toContain('SQL');
+      expect(texto).not.toContain('SELECT');
+      expect(texto).not.toContain('senhaHash');
+      expect(texto).not.toContain('jwt');
+      expect((capturado as Error).message).toBe(
+        'Não foi possível enviar a mensagem.',
+      );
+      expect(socket.emit).not.toHaveBeenCalled();
     });
   });
 });
