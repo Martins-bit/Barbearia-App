@@ -695,6 +695,47 @@ leitura nunca sobrescreve o horário original.
 
 ---
 
+## 12.7. WebSocket — fundação autenticada (ETAPA 7C.1)
+
+Namespace dedicado:
+
+`/messages` (Socket.IO)
+
+### Autenticação no handshake
+- A conexão exige **JWT válido**, informado em `auth.token` (com ou sem o
+  prefixo `Bearer`) ou no header `Authorization`.
+- O JWT é validado com o mesmo serviço/configuração de autenticação do REST
+  (`JwtService` do módulo de autenticação — mesmo segredo e expiração).
+- O usuário é revalidado no banco a cada conexão: inexistente, inativo ou
+  BARBEIRO sem perfil ativo é **rejeitado** (mesmas regras do `RolesGuard`).
+- A identidade (`usuarioId`/`tipoUsuario`) vem **exclusivamente do JWT**;
+  nada informado pelo cliente pode defini-la.
+- Falhas de autenticação retornam `connect_error` com a mensagem genérica
+  `Não autorizado.` (sem expor o motivo).
+
+### Comportamento implementado
+- Registro da conexão/desconexão **em memória** (mapeamento usuário →
+  sockets), para permitir futuramente localizar as conexões de um usuário;
+  conexões **não são persistidas** no PostgreSQL (nenhuma tabela/migration).
+- Único evento implementado: o cliente envia `ping` e recebe o evento `pong`
+  com a identidade validada:
+  ```json
+  { "usuarioId": 10, "tipoUsuario": "CLIENTE" }
+  ```
+
+### Fora do escopo desta etapa
+Envio de mensagens via socket, persistência de mensagens via socket,
+notificações, unread-count via socket, Redis, filas, push, e-mail, WhatsApp,
+anexos, edição/exclusão. O envio de mensagens continua sendo feito
+exclusivamente por `POST /api/messages`.
+
+### Observação de integração (futuro)
+O servidor HTTP atual não configura CORS; quando o frontend (browser)
+conectar de outra origem, o CORS do gateway WebSocket deverá ser habilitado
+na integração do frontend.
+
+---
+
 # 13. PERFIL
 
 ## 13.1. Visualizar perfil

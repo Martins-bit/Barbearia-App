@@ -20,6 +20,9 @@ import { JWT_CONFIG } from '../common/config/jwt.config';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, JwtGuard, RolesGuard],
-  exports: [AuthService, JwtGuard, RolesGuard],
+  // JwtModule é exportado para que outros módulos (ex.: MessagesGateway na
+  // ETAPA 7C.1) validem o MESMO JWT/segredo do sistema, sem duplicar
+  // configuração de autenticação.
+  exports: [AuthService, JwtGuard, RolesGuard, JwtModule],
 })
 export class AuthModule {}

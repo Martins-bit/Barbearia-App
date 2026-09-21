@@ -121,8 +121,18 @@ O módulo segue o padrão do projeto: `Controller` enxuto, regra de negócio no
 `Service`, validação de entrada em DTO com `class-validator`, autorização via
 `JwtGuard` + `RolesGuard`.
 
-Esta etapa é **persistente apenas**: não há WebSocket, tempo real, anexos,
-edição/exclusão nem notificações de mensagem.
+O envio de mensagens permanece **REST e persistente**. A partir da ETAPA 7C.1
+existe apenas a **fundação WebSocket autenticada** (`MessagesGateway`,
+namespace dedicado `/messages`): handshake com JWT obrigatório verificado
+pelo mesmo `JwtService` do módulo de autenticação, revalidação da conta e do
+perfil pelo mesmo serviço do `RolesGuard`
+(`UsersService.findAuthorizationStateById`), identidade anexada ao socket
+exclusivamente do JWT, registro de conexões/desconexões em memória
+(`MessagesSocketRegistry`, mapeamento usuário → sockets, sem persistência no
+PostgreSQL) e um evento de handshake `ping` → `pong` que ecoa apenas a
+identidade validada. Não há envio de mensagens em tempo real, notificações,
+unread-count via socket, Redis nem filas. Quando o frontend conectar de
+origem cruzada, o CORS do gateway deverá ser configurado na integração.
 
 ---
 

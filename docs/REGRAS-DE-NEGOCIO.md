@@ -358,8 +358,19 @@ O contador global de não lidas considera somente mensagens com
 sempre do JWT; `usuarioId` vindo do frontend nunca é aceito.
 
 ## 19.9. Escopo desta etapa
-Não fazem parte desta etapa: WebSocket, chat em tempo real, anexos,
-edição/exclusão de mensagens e notificações de mensagem.
+Não fazem parte desta etapa: chat em tempo real, anexos, edição/exclusão de
+mensagens e notificações de mensagem.
+
+## 19.10. WebSocket (fundação autenticada)
+A conexão WebSocket do namespace `/messages` exige **JWT válido no
+handshake**, verificado com o mesmo serviço de autenticação do REST, com
+revalidação do usuário no banco: inexistente, inativo ou BARBEIRO sem perfil
+ativo é rejeitado. A identidade do socket vem **exclusivamente do JWT**; o
+cliente nunca informa quem é. Falhas retornam apenas o motivo genérico
+`Não autorizado.` As conexões são registradas em memória e nunca persistidas.
+O único evento disponível é o handshake `ping` → `pong`. O envio de mensagens
+em tempo real permanece fora do escopo — o envio é exclusivamente REST
+(`POST /messages`).
 
 ---
 
