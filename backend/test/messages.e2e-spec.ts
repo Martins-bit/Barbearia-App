@@ -140,12 +140,18 @@ interface MessageBody {
   });
 
   describe('autenticação', () => {
-    it('exige autenticação nos três endpoints', async () => {
+    it('exige autenticação em todos os endpoints de mensagens', async () => {
       await request(app.getHttpServer()).post('/messages').send({}).expect(401);
       await request(app.getHttpServer())
         .get(`/messages/${barberAUserId}`)
         .expect(401);
       await request(app.getHttpServer()).patch('/messages/1/read').expect(401);
+      await request(app.getHttpServer())
+        .get('/messages/conversations')
+        .expect(401);
+      await request(app.getHttpServer())
+        .get('/messages/unread-count')
+        .expect(401);
     });
   });
 
@@ -431,10 +437,14 @@ interface MessageBody {
       );
       expect(partner).toBeTruthy();
       expect(partner!.tipoUsuario).toBe(TipoUsuario.BARBEIRO);
-      // Apenas usuarioId, nome e tipoUsuario.
+      // usuarioId/nome/tipoUsuario + última mensagem + não lidas, sem dados
+      // sensíveis.
       expect(Object.keys(partner!).sort()).toEqual([
+        'naoLidas',
         'nome',
         'tipoUsuario',
+        'ultimaMensagem',
+        'ultimaMensagemDataCriacao',
         'usuarioId',
       ]);
       // Nunca expõe conversa de outro par como se fosse própria.
@@ -586,6 +596,284 @@ interface MessageBody {
         .patch('/messages/abc/read')
         .set('Authorization', `Bearer ${barberAToken}`)
         .expect(400);
+    });
+  });
+
+  describe('lista de conversas e não lidas (7B)', () => {
+    interface ConversationBody {
+      usuarioId: number;
+      nome: string;
+      tipoUsuario: TipoUsuario;
+      ultimaMensagem: string;
+      ultimaMensagemDataCriacao: string;
+      naoLidas: number;
+    }
+
+    let clientVUserId: number; // cliente principal dos testes desta etapa
+    let barber1UserId: number;
+    let barber2UserId: number;
+    let barber3UserId: number; // barbeiro criado sem qualquer mensagem
+    let barberFUserId: number; // par de terceiros (recebe mensagem do cliente F)
+
+    let clientVToken: string;
+    let barber1Token: string;
+    let barber2Token: string;
+    let clientIsoToken: string;
+    let clientFToken: string;
+
+    let perguntaId: number; // primeira não lida do cliente (barber1 → V)
+    let segundaB2Id: number; // usada na marcação de leitura
+
+    const getConversations = async (token: string) =>
+      request(app.getHttpServer())
+        .get('/messages/conversations')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+    const getUnreadCount = (token: string, expected: number) =>
+      request(app.getHttpServer())
+        .get('/messages/unread-count')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200)
+        .expect((response) => {
+          expect(response.body).toEqual({ count: expected });
+        });
+
+    beforeAll(async () => {
+      const clientV = await createClient(
+        'Cliente V Conversas',
+        `${phoneBase}71`,
+      );
+      const barber1 = await createBarber(
+        'Barbeiro 1 Conversas',
+        `${phoneBase}72`,
+      );
+      const barber2 = await createBarber(
+        'Barbeiro 2 Conversas',
+        `${phoneBase}73`,
+      );
+      const barber3 = await createBarber(
+        'Barbeiro 3 Sem Mensagem',
+        `${phoneBase}74`,
+      );
+      const clientIso = await createClient(
+        'Cliente Iso Conversas',
+        `${phoneBase}75`,
+      );
+      const clientF = await createClient(
+        'Cliente F Terceiros',
+        `${phoneBase}76`,
+      );
+      const barberF = await createBarber(
+        'Barbeiro F Terceiros',
+        `${phoneBase}77`,
+      );
+
+      clientVUserId = clientV.userId;
+      barber1UserId = barber1.userId;
+      barber2UserId = barber2.userId;
+      barber3UserId = barber3.userId;
+      barberFUserId = barberF.userId;
+
+      clientVToken = await login(clientV.phone);
+      barber1Token = await login(barber1.phone);
+      barber2Token = await login(barber2.phone);
+      clientIsoToken = await login(clientIso.phone);
+      clientFToken = await login(clientF.phone);
+    });
+
+    it('usuário sem conversas retorna lista vazia e unread-count zero', async () => {
+      const response = await getConversations(clientIsoToken);
+      expect(response.body).toEqual([]);
+
+      await getUnreadCount(clientIsoToken, 0);
+    });
+
+    it('exibe última mensagem, data e não lidas por conversa', async () => {
+      const pergunta = await sendMessage(
+        barber1Token,
+        { destinatarioId: clientVUserId, conteudo: 'Pergunta do barbeiro' },
+        201,
+      );
+      perguntaId = (pergunta.body as MessageBody).id;
+
+      const resposta = await sendMessage(
+        clientVToken,
+        { destinatarioId: barber1UserId, conteudo: 'Resposta do cliente' },
+        201,
+      );
+      const respostaData = (resposta.body as MessageBody).dataCriacao;
+
+      // Ponto de vista do CLIENTE: última mensagem é a resposta dele; a não
+      // lida é a pergunta recebida do barbeiro.
+      const clientConversations = ((await getConversations(clientVToken))
+        .body) as ConversationBody[];
+      const clientSide = clientConversations.find(
+        (conversation) => conversation.usuarioId === barber1UserId,
+      );
+      expect(clientSide).toBeTruthy();
+      expect(clientSide!.tipoUsuario).toBe(TipoUsuario.BARBEIRO);
+      expect(clientSide!.ultimaMensagem).toBe('Resposta do cliente');
+      expect(clientSide!.ultimaMensagemDataCriacao).toBe(respostaData);
+      expect(clientSide!.naoLidas).toBe(1);
+
+      // Ponto de vista do BARBEIRO: mesma última mensagem; a não lida dele é
+      // a resposta recebida do cliente.
+      const barberConversations = ((await getConversations(barber1Token))
+        .body) as ConversationBody[];
+      const barberSide = barberConversations.find(
+        (conversation) => conversation.usuarioId === clientVUserId,
+      );
+      expect(barberSide!.tipoUsuario).toBe(TipoUsuario.CLIENTE);
+      expect(barberSide!.ultimaMensagem).toBe('Resposta do cliente');
+      expect(barberSide!.naoLidas).toBe(1);
+
+      await getUnreadCount(clientVToken, 1);
+    });
+
+    it('ordena as conversas pela mensagem mais recente primeiro', async () => {
+      await sendMessage(
+        barber2Token,
+        {
+          destinatarioId: clientVUserId,
+          conteudo: 'Mensagem mais recente aqui',
+        },
+        201,
+      );
+
+      const conversations = ((await getConversations(clientVToken))
+        .body) as ConversationBody[];
+
+      expect(conversations).toHaveLength(2);
+      expect(conversations[0].usuarioId).toBe(barber2UserId);
+      expect(conversations[0].ultimaMensagem).toBe(
+        'Mensagem mais recente aqui',
+      );
+      expect(conversations[1].usuarioId).toBe(barber1UserId);
+      expect(conversations[1].ultimaMensagem).toBe('Resposta do cliente');
+      expect(
+        conversations.every(
+          (conversation) => conversation.tipoUsuario === TipoUsuario.BARBEIRO,
+        ),
+      ).toBe(true);
+    });
+
+    it('não lidas por conversa e leitura reduz o contador', async () => {
+      const segunda = await sendMessage(
+        barber2Token,
+        { destinatarioId: clientVUserId, conteudo: 'Segunda do barbeiro 2' },
+        201,
+      );
+      segundaB2Id = (segunda.body as MessageBody).id;
+
+      // Não lidas do cliente: 'Pergunta' (barber1) + duas de barber2.
+      await getUnreadCount(clientVToken, 3);
+
+      await request(app.getHttpServer())
+        .patch(`/messages/${segundaB2Id}/read`)
+        .set('Authorization', `Bearer ${clientVToken}`)
+        .expect(200);
+
+      // Após ler uma, sobram 'Pergunta' e 'Mensagem mais recente aqui'.
+      await getUnreadCount(clientVToken, 2);
+
+      const conversations = ((await getConversations(clientVToken))
+        .body) as ConversationBody[];
+      const side1 = conversations.find(
+        (conversation) => conversation.usuarioId === barber1UserId,
+      )!;
+      const side2 = conversations.find(
+        (conversation) => conversation.usuarioId === barber2UserId,
+      )!;
+      expect(side1.naoLidas).toBe(1);
+      expect(side2.naoLidas).toBe(1);
+      expect(side2.ultimaMensagem).toBe('Segunda do barbeiro 2');
+    });
+
+    it('mensagens já lidas não entram na contagem', async () => {
+      await request(app.getHttpServer())
+        .patch(`/messages/${perguntaId}/read`)
+        .set('Authorization', `Bearer ${clientVToken}`)
+        .expect(200);
+
+      await getUnreadCount(clientVToken, 1);
+
+      const conversations = ((await getConversations(clientVToken))
+        .body) as ConversationBody[];
+      const side1 = conversations.find(
+        (conversation) => conversation.usuarioId === barber1UserId,
+      )!;
+      expect(side1.naoLidas).toBe(0);
+      // Ler a mensagem não altera a última mensagem da conversa.
+      expect(side1.ultimaMensagem).toBe('Resposta do cliente');
+    });
+
+    it('usuário sem mensagens não gera conversa artificial', async () => {
+      const conversations = ((await getConversations(clientVToken))
+        .body) as ConversationBody[];
+      expect(
+        conversations.some(
+          (conversation) => conversation.usuarioId === barber3UserId,
+        ),
+      ).toBe(false);
+
+      // Cliente isolado continua sem conversas, mesmo com barber3 existente.
+      const isoConversations = ((await getConversations(clientIsoToken))
+        .body) as ConversationBody[];
+      expect(isoConversations).toEqual([]);
+      await getUnreadCount(clientIsoToken, 0);
+    });
+
+    it('não expõe conversas nem não lidas de terceiros', async () => {
+      await sendMessage(
+        clientFToken,
+        { destinatarioId: barberFUserId, conteudo: 'Segredo entre terceiros' },
+        201,
+      );
+
+      // A conversa entre o par de terceiros não vaza para o cliente isolado...
+      const isoConversations = ((await getConversations(clientIsoToken))
+        .body) as ConversationBody[];
+      expect(
+        isoConversations.some(
+          (conversation) => conversation.usuarioId === barberFUserId,
+        ),
+      ).toBe(false);
+      expect(
+        isoConversations.some(
+          (conversation) => conversation.usuarioId === clientFUserId,
+        ),
+      ).toBe(false);
+      // ...nem entra no contador de não lidas dele.
+      await getUnreadCount(clientIsoToken, 0);
+
+      // E o cliente principal continua vendo apenas as próprias conversas.
+      const conversations = ((await getConversations(clientVToken))
+        .body) as ConversationBody[];
+      expect(
+        conversations.some(
+          (conversation) => conversation.usuarioId === barberFUserId,
+        ),
+      ).toBe(false);
+      await getUnreadCount(clientVToken, 1);
+    });
+
+    it('mensagem enviada pelo próprio usuário não entra no contador de não lidas', async () => {
+      await sendMessage(
+        clientVToken,
+        { destinatarioId: barber3UserId, conteudo: 'Início da conversa com 3' },
+        201,
+      );
+
+      await getUnreadCount(clientVToken, 1);
+
+      const conversations = ((await getConversations(clientVToken))
+        .body) as ConversationBody[];
+      const side3 = conversations.find(
+        (conversation) => conversation.usuarioId === barber3UserId,
+      )!;
+      expect(side3.naoLidas).toBe(0);
+      expect(side3.ultimaMensagem).toBe('Início da conversa com 3');
     });
   });
 

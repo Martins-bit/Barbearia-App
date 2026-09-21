@@ -316,6 +316,15 @@ O remetente **nunca** é aceito do frontend: é derivado do JWT.
 Os dois últimos índices suportam a consulta de conversa, que filtra pelo par de
 participantes e ordena por `dataCriacao`.
 
+### Lista de conversas e não lidas (ETAPA 7B)
+A lista de conversas consulta as mensagens do usuário autenticado por
+`remetenteId` ou `destinatarioId` e agrega em aplicação a última mensagem e as
+não lidas por parceiro; o contador global de não lidas filtra por
+`destinatarioId + lida`. Os índices existentes (`remetenteId`,
+`destinatarioId, lida` e `destinatarioId, dataCriacao`) são suficientes para
+essas consultas: nenhuma migration adicional foi necessária e a modelagem de
+`Mensagem` permanece inalterada.
+
 ### Regra de tamanho
 A mensagem é trimada e deve possuir de **1 a 500 caracteres**. O backend valida
 esse limite (ver `REGRAS-DE-NEGOCIO.md`).

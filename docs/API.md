@@ -639,13 +639,37 @@ Ordem cronológica **crescente** (`dataCriacao`, com `id` como desempate).
 `GET /api/messages/conversations`
 
 ### Regra
-Retorna os participantes (per oposto) com quem o usuário autenticado já trocou
-mensagens. Retorna apenas `usuarioId`, `nome` e `tipoUsuario` — não expõe dados
-sensíveis nem o conteúdo das mensagens.
+Retorna somente as conversas das quais o usuário autenticado participa, sempre
+CLIENTE ↔ BARBEIRO e com o outro participante ativo. Não são criadas conversas
+artificiais: usuário com quem nunca houve mensagem não aparece.
+
+### Resposta
+Cada conversa retorna:
+- `usuarioId` — identificador do outro participante;
+- `nome` — nome do outro participante;
+- `tipoUsuario` — `CLIENTE` ou `BARBEIRO`;
+- `ultimaMensagem` — conteúdo da mensagem mais recente da conversa;
+- `ultimaMensagemDataCriacao` — data/hora da última mensagem;
+- `naoLidas` — quantidade de mensagens da conversa não lidas pelo usuário
+  autenticado (mensagens enviadas pelo próprio usuário não contam).
+
+### Ordenação
+A conversa com a mensagem mais recente aparece primeiro (desempate pelo `id`
+da mensagem). Nenhum dado sensível (telefone, e-mail, senha/hash) é exposto.
 
 ---
 
-## 12.4. Marcar mensagem como lida
+## 12.4. Contar mensagens não lidas
+`GET /api/messages/unread-count`
+
+Retorna `{ "count": n }`, a quantidade total de mensagens não lidas destinadas
+ao usuário autenticado. A identidade vem sempre do JWT; `usuarioId` vindo do
+frontend nunca é considerado. Contam somente mensagens com `destinatarioId` do
+usuário autenticado e `lida = false`.
+
+---
+
+## 12.5. Marcar mensagem como lida
 `PATCH /api/messages/:id/read`
 
 ### Permissão
@@ -660,7 +684,7 @@ leitura nunca sobrescreve o horário original.
 
 ---
 
-## 12.5. Erros do módulo
+## 12.6. Erros do módulo
 | Situação | HTTP |
 | --- | --- |
 | Sem token, token inválido, usuário inativo | 401 |

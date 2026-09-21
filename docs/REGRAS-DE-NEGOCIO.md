@@ -342,7 +342,22 @@ cronológica crescente e sem dados sensíveis.
 Somente o **destinatário** pode marcar a mensagem como lida. A operação é
 **idempotente**: repetir a leitura preserva o primeiro `dataLeitura`.
 
-## 19.7. Escopo desta etapa
+## 19.7. Lista de conversas
+A lista de conversas retorna somente conversas das quais o usuário autenticado
+participa, sempre **CLIENTE ↔ BARBEIRO** e com o outro participante ativo. Cada
+conversa identifica o outro participante (id, nome, tipo), a última mensagem
+(conteúdo e data/hora) e a quantidade de mensagens da conversa não lidas pelo
+usuário autenticado (mensagens enviadas por ele próprio não contam). A
+ordenação é pela mensagem mais recente primeiro. Não são criadas conversas
+artificiais: usuário com quem nunca houve mensagem não aparece. Nenhum dado
+sensível é exposto.
+
+## 19.8. Não lidas
+O contador global de não lidas considera somente mensagens com
+`destinatarioId` do usuário autenticado e `lida = false`. A identidade vem
+sempre do JWT; `usuarioId` vindo do frontend nunca é aceito.
+
+## 19.9. Escopo desta etapa
 Não fazem parte desta etapa: WebSocket, chat em tempo real, anexos,
 edição/exclusão de mensagens e notificações de mensagem.
 

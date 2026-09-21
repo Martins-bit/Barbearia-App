@@ -16,14 +16,16 @@ import { TipoUsuario } from '../generated/prisma/enums';
 import {
   ConversationPartnerDto,
   MessageResponseDto,
+  UnreadCountDto,
 } from './dto/message-response.dto';
 import { SendMessageDto } from './dto/send-message.dto';
 import { MessagesService } from './messages.service';
 
 /**
- * Fundação de mensagens CLIENTE <-> BARBEIRO (ETAPA 7A). Sem tempo real.
+ * Mensagens CLIENTE <-> BARBEIRO (ETAPAS 7A/7B). Sem tempo real.
  * usuarioId do remetente SEMPRE vem do JWT; o frontend informa somente
- * destinatarioId + conteudo.
+ * destinatarioId + conteudo. A lista de conversas e o contador de não lidas
+ * também derivam a identidade exclusivamente do JWT.
  */
 @Controller('messages')
 @UseGuards(JwtGuard, RolesGuard)
@@ -44,6 +46,14 @@ export class MessagesController {
     @CurrentUser() usuarioId: number,
   ): Promise<ConversationPartnerDto[]> {
     return this.messagesService.findConversations(usuarioId);
+  }
+
+  // Declarado ANTES de @Get(':userId') para não ser capturado como parâmetro.
+  @Get('unread-count')
+  async unreadCount(
+    @CurrentUser() usuarioId: number,
+  ): Promise<UnreadCountDto> {
+    return this.messagesService.unreadCount(usuarioId);
   }
 
   @Get(':userId')

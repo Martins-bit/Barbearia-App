@@ -17,6 +17,7 @@ function buildPrismaMock(): any {
       findMany: jest.fn(),
       create: jest.fn(),
       updateMany: jest.fn(),
+      count: jest.fn(),
     },
   };
 }
@@ -298,51 +299,210 @@ describe('MessagesService', () => {
   });
 
   describe('lista de conversas', () => {
-    it('CLIENTE lista barbeiros do perfil oposto com quem já trocou mensagem', async () => {
+    const barberPartner = {
+      id: 20,
+      nome: 'Barbeiro A',
+      tipoUsuario: TipoUsuario.BARBEIRO,
+    };
+    const barberPartnerB = {
+      id: 21,
+      nome: 'Barbeiro B',
+      tipoUsuario: TipoUsuario.BARBEIRO,
+    };
+    const clientPartner = {
+      id: 10,
+      nome: 'Cliente A',
+      tipoUsuario: TipoUsuario.CLIENTE,
+    };
+
+    const arrangeConversations = ({
+      messages,
+      partners,
+    }: {
+      messages: any[];
+      partners: any[];
+    }) => {
       arrangeUsers();
-      prisma.usuario.findMany.mockResolvedValue([
-        { id: 20, nome: 'Barbeiro A', tipoUsuario: TipoUsuario.BARBEIRO },
-      ]);
+      prisma.mensagem.findMany.mockResolvedValue(messages);
+      prisma.usuario.findMany.mockResolvedValue(partners);
+    };
+
+    it('CLIENTE lista barbeiros do perfil oposto com quem já trocou mensagem', async () => {
+      arrangeConversations({
+        messages: [messageRow],
+        partners: [barberPartner],
+      });
 
       const result = await service.findConversations(clientUser.id);
 
+      expect(prisma.mensagem.findMany).toHaveBeenCalledWith({
+        where: {
+          OR: [{ remetenteId: 10 }, { destinatarioId: 10 }],
+        },
+        select: {
+          id: true,
+          remetenteId: true,
+          destinatarioId: true,
+          conteudo: true,
+          lida: true,
+          dataCriacao: true,
+        },
+      });
       expect(prisma.usuario.findMany).toHaveBeenCalledWith({
         where: {
+          id: { in: [20] },
           tipoUsuario: TipoUsuario.BARBEIRO,
           ativo: true,
-          OR: [
-            { mensagensEnviadas: { some: { destinatarioId: 10 }}},
-            { mensagensRecebidas: { some: { remetenteId: 10 }}},
-          ],
         },
         select: { id: true, nome: true, tipoUsuario: true },
-        orderBy: { nome: 'asc' },
       });
       expect(result).toEqual([
-        { usuarioId: 20, nome: 'Barbeiro A', tipoUsuario: TipoUsuario.BARBEIRO },
+        {
+          usuarioId: 20,
+          nome: 'Barbeiro A',
+          tipoUsuario: TipoUsuario.BARBEIRO,
+          ultimaMensagem: 'Olá',
+          ultimaMensagemDataCriacao: messageRow.dataCriacao,
+          naoLidas: 0,
+        },
       ]);
-      // Não expõe dados sensíveis do parceiro.
+      // Não expõe dados sensíveis do parceiro nem das mensagens.
       expect(Object.keys(result[0]).sort()).toEqual([
+        'naoLidas',
         'nome',
         'tipoUsuario',
+        'ultimaMensagem',
+        'ultimaMensagemDataCriacao',
         'usuarioId',
       ]);
     });
 
+    it('última mensagem considera os dois sentidos e vem do par mais recente', async () => {
+      arrangeConversations({
+        // 10→20 ("Olá") e depois 20→10 ("Resposta"): a última é a resposta.
+        messages: [messageRow, barberToClientMessageRow],
+        partners: [barberPartner],
+      });
+
+      const result = await service.findConversations(clientUser.id);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].usuarioId).toBe(20);
+      expect(result[0].ultimaMensagem).toBe('Resposta');
+      expect(result[0].ultimaMensagemDataCriacao).toEqual(
+        barberToClientMessageRow.dataCriacao,
+      );
+      // Somente a mensagem RECEBIDA não lida conta para o cliente.
+      expect(result[0].naoLidas).toBe(1);
+    });
+
     it('BARBEIRO lista clientes (perfil oposto)', async () => {
-      arrangeUsers();
-      prisma.usuario.findMany.mockResolvedValue([
-        { id: 10, nome: 'Cliente A', tipoUsuario: TipoUsuario.CLIENTE },
-      ]);
+      arrangeConversations({
+        messages: [barberToClientMessageRow],
+        partners: [clientPartner],
+      });
 
       const result = await service.findConversations(barberUser.id);
 
       expect(prisma.usuario.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ tipoUsuario: TipoUsuario.CLIENTE }),
+          where: expect.objectContaining({
+            id: { in: [10] },
+            tipoUsuario: TipoUsuario.CLIENTE,
+          }),
         }),
       );
       expect(result[0].usuarioId).toBe(10);
+      // Mensagem enviada pelo próprio barbeiro não conta como não lida dele.
+      expect(result[0].naoLidas).toBe(0);
+    });
+
+    it('empate de dataCriacao desempata pelo id mais alto', async () => {
+      const empate = {
+        ...barberToClientMessageRow,
+        id: 102,
+        conteudo: 'Última no empate',
+      };
+      arrangeConversations({
+        messages: [barberToClientMessageRow, empate],
+        partners: [clientPartner],
+      });
+
+      const result = await service.findConversations(barberUser.id);
+
+      expect(result[0].ultimaMensagem).toBe('Última no empate');
+    });
+
+    it('ordena as conversas pela mensagem mais recente primeiro', async () => {
+      const antiga = {
+        ...messageRow,
+        id: 200,
+        remetenteId: 10,
+        destinatarioId: 20,
+        dataCriacao: new Date('2099-01-01T09:00:00.000Z'),
+      };
+      const recente = {
+        ...messageRow,
+        id: 201,
+        remetenteId: 10,
+        destinatarioId: 21,
+        dataCriacao: new Date('2099-01-01T10:00:00.000Z'),
+      };
+      arrangeConversations({
+        messages: [antiga, recente],
+        partners: [barberPartner, barberPartnerB],
+      });
+
+      const result = await service.findConversations(clientUser.id);
+
+      expect(result.map((conversation) => conversation.usuarioId)).toEqual([
+        21, 20,
+      ]);
+      expect(result[0].ultimaMensagemDataCriacao).toEqual(recente.dataCriacao);
+      expect(result[1].ultimaMensagemDataCriacao).toEqual(antiga.dataCriacao);
+    });
+
+    it('naoLidas por conversa: mensagens lidas e as enviadas não contam', async () => {
+      arrangeConversations({
+        messages: [
+          // 20→10 lida pelo cliente: não conta
+          { ...barberToClientMessageRow, id: 300, lida: true },
+          // 20→10 não lida: conta
+          { ...barberToClientMessageRow, id: 301 },
+          // 10→20 enviada pelo próprio cliente: não conta para ele
+          { ...messageRow, id: 302, remetenteId: 10, destinatarioId: 20 },
+        ],
+        partners: [barberPartner],
+      });
+
+      const result = await service.findConversations(clientUser.id);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].naoLidas).toBe(1);
+    });
+
+    it('usuário sem conversas retorna lista vazia (sem conversas artificiais)', async () => {
+      arrangeConversations({
+        messages: [],
+        partners: [barberPartner],
+      });
+
+      const result = await service.findConversations(clientUser.id);
+
+      expect(result).toEqual([]);
+      // Sem mensagens, nenhum parceiro é consultado.
+      expect(prisma.usuario.findMany).not.toHaveBeenCalled();
+    });
+
+    it('parceiro inativo não aparece (banco filtra usuários ativos)', async () => {
+      arrangeConversations({
+        messages: [messageRow],
+        partners: [],
+      });
+
+      const result = await service.findConversations(clientUser.id);
+
+      expect(result).toEqual([]);
     });
 
     it('usuário inativo é rejeitado', async () => {
@@ -361,6 +521,49 @@ describe('MessagesService', () => {
       prisma.usuario.findUnique.mockResolvedValue(null);
 
       await expect(service.findConversations(999)).rejects.toThrow(
+        new ForbiddenException('Usuário não autorizado.'),
+      );
+    });
+  });
+
+  describe('contador global de não lidas (7B)', () => {
+    it('conta somente destinatarioId do usuário autenticado e lida = false', async () => {
+      prisma.usuario.findUnique.mockResolvedValue(clientUser);
+      prisma.mensagem.count.mockResolvedValue(3);
+
+      await expect(service.unreadCount(clientUser.id)).resolves.toEqual({
+        count: 3,
+      });
+      expect(prisma.mensagem.count).toHaveBeenCalledWith({
+        where: { destinatarioId: 10, lida: false },
+      });
+    });
+
+    it('sem mensagens não lidas retorna zero', async () => {
+      prisma.usuario.findUnique.mockResolvedValue(clientUser);
+      prisma.mensagem.count.mockResolvedValue(0);
+
+      await expect(service.unreadCount(clientUser.id)).resolves.toEqual({
+        count: 0,
+      });
+    });
+
+    it('usuário inativo é rejeitado', async () => {
+      prisma.usuario.findUnique.mockResolvedValue({
+        ...clientUser,
+        ativo: false,
+      });
+
+      await expect(service.unreadCount(clientUser.id)).rejects.toThrow(
+        new ForbiddenException('Usuário não autorizado.'),
+      );
+      expect(prisma.mensagem.count).not.toHaveBeenCalled();
+    });
+
+    it('usuário inexistente é rejeitado', async () => {
+      prisma.usuario.findUnique.mockResolvedValue(null);
+
+      await expect(service.unreadCount(999)).rejects.toThrow(
         new ForbiddenException('Usuário não autorizado.'),
       );
     });

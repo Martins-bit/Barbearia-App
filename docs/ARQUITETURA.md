@@ -109,6 +109,12 @@ Responsabilidades:
 - Trim e limite de 1 a 500 caracteres no conteúdo;
 - Isolar a conversa por par de participantes e ordenar cronologicamente;
 - Garantir que somente o destinatário marque a leitura, de forma idempotente;
+- Listar as conversas do usuário autenticado identificando o outro participante,
+  a última mensagem (conteúdo e data/hora) e as não lidas da conversa, com
+  ordenação pela mensagem mais recente e sem criar conversas artificiais;
+- Expor o contador global de não lidas (`GET /messages/unread-count`),
+  calculado sempre a partir do JWT (`destinatarioId` do usuário autenticado e
+  `lida = false`), sem confiar em `usuarioId` vindo do frontend;
 - Não retornar dados sensíveis.
 
 O módulo segue o padrão do projeto: `Controller` enxuto, regra de negócio no

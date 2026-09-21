@@ -9,11 +9,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   ConversationPartnerDto,
   MessageResponseDto,
+  UnreadCountDto,
 } from './dto/message-response.dto';
 import { SendMessageDto, MAX_MESSAGE_LENGTH } from './dto/send-message.dto';
 
 /**
- * Fundação de mensagens CLIENTE <-> BARBEIRO (ETAPA 7A). Sem tempo real.
+ * Mensagens CLIENTE <-> BARBEIRO (ETAPAS 7A/7B). Sem tempo real.
  *
  * - Identidade do remetente SEMPRE vem do JWT (usuarioId do token).
  * - Permitido somente CLIENTE <-> BARBEIRO, usuários ativos e destinatário
@@ -191,6 +192,14 @@ export class MessagesService {
     return this.toResponse(updated!);
   }
 
+  /**
+   * Lista de conversas (ETAPA 7B): somente conversas em que o usuário
+   * autenticado participa, sempre CLIENTE <-> BARBEIRO, com o outro
+   * participante ativo. Retorna a última mensagem (conteúdo + data/hora) e a
+   * quantidade de não lidas da conversa, ordenada pela mensagem mais recente
+   * primeiro. Nenhuma conversa artificial é criada: sem mensagens, lista
+   * vazia. Nenhum dado sensível é exposto.
+   */
   async findConversations(
     usuarioId: number,
   ): Promise<ConversationPartnerDto[]> {
@@ -201,6 +210,66 @@ export class MessagesService {
       throw new ForbiddenException('Usuário não autorizado.');
     }
 
+    // Leitura única das mensagens do usuário (sem paginação nesta etapa). A
+    // agregação (última mensagem e não lidas por parceiro) é feita em
+    // aplicação sobre as linhas já cobertas pelos índices de remetente e
+    // destinatário — os índices existentes são suficientes para esta consulta.
+    const messages = await this.prisma.mensagem.findMany({
+      where: {
+        OR: [{ remetenteId: usuarioId }, { destinatarioId: usuarioId }],
+      },
+      select: {
+        id: true,
+        remetenteId: true,
+        destinatarioId: true,
+        conteudo: true,
+        lida: true,
+        dataCriacao: true,
+      },
+    });
+
+    if (messages.length === 0) {
+      return [];
+    }
+
+    const ultimaMensagemPorParceiro = new Map<
+      number,
+      { id: number; conteudo: string; dataCriacao: Date }
+    >();
+    const naoLidasPorParceiro = new Map<number, number>();
+
+    for (const message of messages) {
+      const parceiroId =
+        message.remetenteId === usuarioId
+          ? message.destinatarioId
+          : message.remetenteId;
+      if (parceiroId === usuarioId) {
+        continue; // auto-mensagem não deve existir; ignorada por segurança
+      }
+
+      const atual = ultimaMensagemPorParceiro.get(parceiroId);
+      const maisRecente =
+        !atual ||
+        message.dataCriacao > atual.dataCriacao ||
+        (message.dataCriacao.getTime() === atual.dataCriacao.getTime() &&
+          message.id > atual.id);
+      if (maisRecente) {
+        ultimaMensagemPorParceiro.set(parceiroId, {
+          id: message.id,
+          conteudo: message.conteudo,
+          dataCriacao: message.dataCriacao,
+        });
+      }
+
+      // Não lidas: somente mensagens recebidas pelo usuário autenticado.
+      if (message.destinatarioId === usuarioId && !message.lida) {
+        naoLidasPorParceiro.set(
+          parceiroId,
+          (naoLidasPorParceiro.get(parceiroId) ?? 0) + 1,
+        );
+      }
+    }
+
     const oppositeTipoUsuario =
       usuario.tipoUsuario === TipoUsuario.CLIENTE
         ? TipoUsuario.BARBEIRO
@@ -208,21 +277,56 @@ export class MessagesService {
 
     const partners = await this.prisma.usuario.findMany({
       where: {
+        id: { in: [...ultimaMensagemPorParceiro.keys()] },
         tipoUsuario: oppositeTipoUsuario,
         ativo: true,
-        OR: [
-          { mensagensEnviadas: { some: { destinatarioId: usuarioId } } },
-          { mensagensRecebidas: { some: { remetenteId: usuarioId } } },
-        ],
       },
       select: { id: true, nome: true, tipoUsuario: true },
-      orderBy: { nome: 'asc' },
     });
 
-    return partners.map((partner) => ({
+    const conversations = partners.map((partner) => {
+      const ultima = ultimaMensagemPorParceiro.get(partner.id)!;
+      return {
+        partner,
+        ultima,
+        naoLidas: naoLidasPorParceiro.get(partner.id) ?? 0,
+      };
+    });
+
+    // Mensagem mais recente primeiro; empate resolvido pelo id da mensagem.
+    conversations.sort((a, b) => {
+      const tempo =
+        b.ultima.dataCriacao.getTime() - a.ultima.dataCriacao.getTime();
+      return tempo !== 0 ? tempo : b.ultima.id - a.ultima.id;
+    });
+
+    return conversations.map(({ partner, ultima, naoLidas }) => ({
       usuarioId: partner.id,
       nome: partner.nome,
       tipoUsuario: partner.tipoUsuario,
+      ultimaMensagem: ultima.conteudo,
+      ultimaMensagemDataCriacao: ultima.dataCriacao,
+      naoLidas,
     }));
+  }
+
+  /**
+   * Contador global de não lidas (ETAPA 7B): considera somente mensagens com
+   * destinatarioId = usuário autenticado (identidade SEMPRE do JWT, nunca do
+   * frontend) e lida = false.
+   */
+  async unreadCount(usuarioId: number): Promise<UnreadCountDto> {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: usuarioId },
+      select: { ativo: true },
+    });
+    if (!usuario || !usuario.ativo) {
+      throw new ForbiddenException('Usuário não autorizado.');
+    }
+
+    const count = await this.prisma.mensagem.count({
+      where: { destinatarioId: usuarioId, lida: false },
+    });
+    return { count };
   }
 }
