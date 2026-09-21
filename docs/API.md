@@ -715,19 +715,80 @@ Namespace dedicado:
 
 ### Comportamento implementado
 - Registro da conexão/desconexão **em memória** (mapeamento usuário →
-  sockets), para permitir futuramente localizar as conexões de um usuário;
+  sockets), para permitir localizar as conexões de um usuário;
   conexões **não são persistidas** no PostgreSQL (nenhuma tabela/migration).
-- Único evento implementado: o cliente envia `ping` e recebe o evento `pong`
-  com a identidade validada:
+- Cada socket entra também em uma **sala por usuário** (`usuario:<id>`), o que
+  permite entregar um evento a todas as conexões do usuário de uma vez.
+- Evento de handshake: o cliente envia `ping` e recebe o evento `pong` com a
+  identidade validada:
   ```json
   { "usuarioId": 10, "tipoUsuario": "CLIENTE" }
   ```
 
+---
+
+## 12.8. WebSocket — envio de mensagens em tempo real (ETAPA 7C.2)
+
+### Enviar mensagem (cliente → servidor)
+Evento: `message:send`
+
+Payload:
+```json
+{ "destinatarioId": 123, "conteudo": "Olá!" }
+```
+
+O remetente **não** é informado: vem exclusivamente da identidade validada no
+handshake JWT. Campos de identidade no payload (`remetenteId`,
+`remetenteUsuarioId`, `usuarioId`, `tipoUsuario`) são **rejeitados**.
+
+### Confirmação ao remetente (servidor → remetente)
+Evento: `message:sent`
+
+Payload: a mensagem persistida, no mesmo formato seguro do REST
+(`id`, `remetenteUsuarioId`, `destinatarioUsuarioId`, `conteudo`, `lida`,
+`dataCriacao`, `dataLeitura`). Nunca inclui senha/hash/JWT ou dados internos.
+
+### Entrega ao destinatário (servidor → destinatário)
+Evento: `message:received`
+
+O mesmo payload de `message:sent`, entregue a **todas as conexões ativas** do
+destinatário (um dispositivo, várias abas ou vários dispositivos recebem a
+mesma mensagem).
+
+### Regras aplicadas
+São exatamente as mesmas do `POST /api/messages`, pois o gateway delega ao
+`MessagesService`: somente CLIENTE ↔ BARBEIRO (sem CLIENTE→CLIENTE,
+BARBEIRO→BARBEIRO ou autoenvio), destinatário existente e ativo, remetente
+ativo, BARBEIRO com perfil ativo e conteúdo de 1 a 500 caracteres após trim.
+
+### Ordem de execução
+1. autenticar o socket (handshake);
+2. validar o payload;
+3. **persistir** a mensagem no PostgreSQL;
+4. somente após o sucesso, emitir `message:sent` ao remetente;
+5. somente após o sucesso, emitir `message:received` ao destinatário.
+
+Nunca há emissão de sucesso antes da persistência. Uma única chamada
+`message:send` gera exatamente uma persistência, no máximo uma emissão
+`message:sent` e uma entrega `message:received` por conexão ativa do
+destinatário.
+
+### Destinatário offline
+A mensagem é **persistida normalmente** e **nenhum erro é gerado** por não
+haver socket conectado. Não existe fila offline nesta etapa: a mensagem é
+recuperada depois via REST (`GET /api/messages/:userId`).
+
+### Erros
+Validações e violações de regra de negócio resultam em evento `exception` com
+mensagem pública e genérica (ex.: `Não autorizado.`, `Dados inválidos.` ou a
+mensagem de regra já usada pelo REST). Não são expostos stack trace, SQL, JWT,
+senha ou hash.
+
 ### Fora do escopo desta etapa
-Envio de mensagens via socket, persistência de mensagens via socket,
-notificações, unread-count via socket, Redis, filas, push, e-mail, WhatsApp,
-anexos, edição/exclusão. O envio de mensagens continua sendo feito
-exclusivamente por `POST /api/messages`.
+Leitura via WebSocket, `unread-count` via socket, sincronização de leitura em
+tempo real, fila offline, presença online/offline, typing indicator, Redis,
+filas, push, e-mail, WhatsApp, anexos, edição/exclusão. `PATCH
+/api/messages/:id/read` continua sendo REST.
 
 ### Observação de integração (futuro)
 O servidor HTTP atual não configura CORS; quando o frontend (browser)

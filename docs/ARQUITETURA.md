@@ -121,18 +121,44 @@ O módulo segue o padrão do projeto: `Controller` enxuto, regra de negócio no
 `Service`, validação de entrada em DTO com `class-validator`, autorização via
 `JwtGuard` + `RolesGuard`.
 
-O envio de mensagens permanece **REST e persistente**. A partir da ETAPA 7C.1
-existe apenas a **fundação WebSocket autenticada** (`MessagesGateway`,
-namespace dedicado `/messages`): handshake com JWT obrigatório verificado
-pelo mesmo `JwtService` do módulo de autenticação, revalidação da conta e do
-perfil pelo mesmo serviço do `RolesGuard`
-(`UsersService.findAuthorizationStateById`), identidade anexada ao socket
-exclusivamente do JWT, registro de conexões/desconexões em memória
-(`MessagesSocketRegistry`, mapeamento usuário → sockets, sem persistência no
-PostgreSQL) e um evento de handshake `ping` → `pong` que ecoa apenas a
-identidade validada. Não há envio de mensagens em tempo real, notificações,
-unread-count via socket, Redis nem filas. Quando o frontend conectar de
-origem cruzada, o CORS do gateway deverá ser configurado na integração.
+O módulo expõe **REST persistente** e **WebSocket autenticado**, ambos
+delegação para o **mesmo `MessagesService`** — não existe caminho paralelo de
+negócio ou de persistência.
+
+### Fundação WebSocket (ETAPA 7C.1)
+`MessagesGateway` no namespace dedicado `/messages`:
+
+- handshake com JWT obrigatório, verificado pelo mesmo `JwtService` do módulo
+  de autenticação;
+- revalidação da conta e do perfil pelo mesmo serviço do `RolesGuard`
+  (`UsersService.findAuthorizationStateById`);
+- identidade anexada ao socket exclusivamente do JWT (`client.data`);
+- registro de conexões/desconexões em memória (`MessagesSocketRegistry`,
+  mapeamento usuário → sockets) — sem persistência no PostgreSQL;
+- cada socket entra na sala `usuario:<id>`, agrupando as conexões do usuário;
+- evento de handshake `ping` → `pong` ecoando apenas a identidade validada.
+
+### Envio em tempo real (ETAPA 7C.2)
+Fluxo do evento `message:send`:
+
+1. o gateway usa a identidade já autenticada no handshake;
+2. valida o payload (`SendMessageSocketDto`, whitelist estrita — campos de
+   identidade enviados pelo cliente são rejeitados);
+3. delega a criação ao `MessagesService.sendMessage`, que aplica as mesmas
+   regras do `POST /api/messages` e **persiste no PostgreSQL**;
+4. somente após o sucesso emite `message:sent` ao remetente;
+5. somente após o sucesso emite `message:received` a todas as conexões do
+   destinatário (via sala `usuario:<id>`).
+
+O handler **não retorna valor**: o retorno de um `@SubscribeMessage` seria
+convertido pelo Nest em um segundo evento, duplicando `message:sent`. A
+emissão explícita é a única origem dos eventos de sucesso.
+
+Se o destinatário estiver offline, nada é emitido e **nenhum erro** é gerado:
+a mensagem já está persistida e é recuperada via REST. Não há fila offline,
+notificações, unread-count via socket, presença ou typing indicator nesta
+etapa. Quando o frontend conectar de origem cruzada, o CORS do gateway deverá
+ser configurado na integração.
 
 ---
 

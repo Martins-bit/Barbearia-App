@@ -358,8 +358,10 @@ O contador global de não lidas considera somente mensagens com
 sempre do JWT; `usuarioId` vindo do frontend nunca é aceito.
 
 ## 19.9. Escopo desta etapa
-Não fazem parte desta etapa: chat em tempo real, anexos, edição/exclusão de
-mensagens e notificações de mensagem.
+Não fazem parte desta etapa: leitura via WebSocket, unread-count via socket,
+sincronização de leitura em tempo real, fila de mensagens offline, presença
+online/offline, typing indicator, anexos, edição/exclusão de mensagens e
+notificações de mensagem.
 
 ## 19.10. WebSocket (fundação autenticada)
 A conexão WebSocket do namespace `/messages` exige **JWT válido no
@@ -368,9 +370,25 @@ revalidação do usuário no banco: inexistente, inativo ou BARBEIRO sem perfil
 ativo é rejeitado. A identidade do socket vem **exclusivamente do JWT**; o
 cliente nunca informa quem é. Falhas retornam apenas o motivo genérico
 `Não autorizado.` As conexões são registradas em memória e nunca persistidas.
-O único evento disponível é o handshake `ping` → `pong`. O envio de mensagens
-em tempo real permanece fora do escopo — o envio é exclusivamente REST
-(`POST /messages`).
+Evento de handshake disponível: `ping` → `pong`.
+
+## 19.11. Envio em tempo real
+O envio por WebSocket **aplica exatamente as mesmas regras do REST**
+(19.1 a 19.4), pois o gateway delega a criação da mensagem ao mesmo
+`MessagesService`. Uma mensagem enviada por socket:
+
+- tem o remetente derivado **apenas da identidade validada no handshake**;
+- não aceita informação de remetente/tipo/perfil vinda do cliente;
+- passa pelas mesmas validações de participantes, usuários ativos, perfil de
+  barbeiro e conteúdo (1 a 500 caracteres após trim);
+- é **persistida no PostgreSQL** e permanece disponível para consulta via REST
+  mesmo que o destinatário esteja desconectado.
+
+Ordem obrigatória: autenticar → validar → **persistir** → confirmar ao
+remetente → entregar ao destinatário. Nenhuma confirmação é enviada antes da
+persistência. O destinatário recebe a mensagem em **todas** as suas conexões
+ativas; se estiver offline, a mensagem apenas permanece salva, sem erro e sem
+fila. Uma única chamada gera exatamente uma persistência.
 
 ---
 
