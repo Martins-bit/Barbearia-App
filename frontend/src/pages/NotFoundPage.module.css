@@ -1,0 +1,27 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: var(--space-4);
+  min-height: 100dvh;
+  padding: var(--space-8);
+}
+
+.eyebrow {
+  color: var(--color-gold);
+}
+
+.title {
+  font-size: var(--text-3xl);
+}
+
+.text {
+  max-width: 40ch;
+  color: var(--color-text-muted);
+}
+
+.action {
+  margin-top: var(--space-4);
+}

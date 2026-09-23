@@ -1,0 +1,34 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-8) var(--space-4);
+  color: var(--color-text-muted);
+}
+
+.fullArea {
+  flex: 1;
+  justify-content: center;
+  min-height: 240px;
+}
+
+.spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-gold);
+  animation: spin 720ms linear infinite;
+}
+
+.label {
+  font-size: var(--text-sm);
+  letter-spacing: 0.02em;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

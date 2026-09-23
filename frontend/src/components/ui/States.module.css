@@ -1,0 +1,46 @@
+.state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+  padding: var(--space-12) var(--space-6);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-surface-inset);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface);
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.error {
+  border-color: var(--color-danger-soft);
+}
+
+.error .icon {
+  color: var(--color-danger);
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+}
+
+.description {
+  max-width: 42ch;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.action {
+  margin-top: var(--space-2);
+}

@@ -1,0 +1,115 @@
+/* =============================================================================
+   Barbearia do Bruno — Design Tokens
+   Fundação visual: preto/carvão + off-white + dourado como destaque.
+   Toda a interface consome estes tokens; nenhum componente deve fixar cores
+   fora deste arquivo (exceto casos justificados com comentário).
+   ============================================================================= */
+
+:root {
+  /* ---- Cores: fundos ---- */
+  --color-bg: #0c0c0e;              /* fundo principal (preto profundo) */
+  --color-bg-elevated: #141417;     /* fundo secundário / seções */
+  --color-surface: #17171b;         /* superfície / card */
+  --color-surface-hover: #1d1d22;   /* superfície em hover */
+  --color-surface-inset: #101013;   /* poços/inputs */
+
+  /* ---- Cores: bordas ---- */
+  --color-border: #26262c;          /* borda padrão discreta */
+  --color-border-strong: #34343c;   /* borda em foco/realce */
+  --color-border-subtle: #1e1e23;
+
+  /* ---- Cores: texto ---- */
+  --color-text: #f2efe9;            /* texto principal (off-white) */
+  --color-text-muted: #a7a49d;      /* texto secundário */
+  --color-text-faint: #6f6d68;      /* texto terciário / placeholders */
+  --color-text-on-gold: #14110a;    /* texto sobre dourado */
+
+  /* ---- Cores: dourado (destaque) ---- */
+  --color-gold: #c8a45c;            /* dourado principal */
+  --color-gold-strong: #dcb974;     /* dourado hover/claro */
+  --color-gold-deep: #9c7c3c;       /* dourado pressionado/escuro */
+  --color-gold-soft: rgba(200, 164, 92, 0.12); /* fundo dourado suave */
+  --color-gold-line: rgba(200, 164, 92, 0.32); /* linha/borda dourada */
+
+  /* ---- Cores: estados ---- */
+  --color-success: #5f9e6a;
+  --color-success-soft: rgba(95, 158, 106, 0.14);
+  --color-danger: #c05a52;
+  --color-danger-soft: rgba(192, 90, 82, 0.14);
+  --color-warning: #c99a4a;
+  --color-warning-soft: rgba(201, 154, 74, 0.14);
+  --color-info: #6a8bab;
+  --color-info-soft: rgba(106, 139, 171, 0.14);
+
+  /* ---- Tipografia ---- */
+  /* Títulos de identidade: serifada clássica (não gótica literal para manter
+     legibilidade, mas com peso/tradição). Usada em títulos e elementos especiais. */
+  --font-display: 'Playfair Display', 'Times New Roman', Georgia, serif;
+  /* Interface e textos funcionais: altamente legível. */
+  --font-sans: 'Inter', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, Consolas, monospace;
+
+  --text-xs: 0.75rem;    /* 12px */
+  --text-sm: 0.8125rem;  /* 13px */
+  --text-base: 0.9375rem;/* 15px */
+  --text-md: 1rem;       /* 16px */
+  --text-lg: 1.125rem;   /* 18px */
+  --text-xl: 1.375rem;   /* 22px */
+  --text-2xl: 1.75rem;   /* 28px */
+  --text-3xl: 2.25rem;   /* 36px */
+  --text-4xl: 3rem;      /* 48px */
+
+  --leading-tight: 1.15;
+  --leading-snug: 1.35;
+  --leading-normal: 1.55;
+  --tracking-wide: 0.08em;   /* pequenos caps / eyebrow */
+  --tracking-display: 0.01em;
+
+  /* ---- Espaçamento (escala 4px) ---- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+
+  /* ---- Border radius ---- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* ---- Sombras (suaves, discretas) ---- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 18px -6px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 18px 45px -18px rgba(0, 0, 0, 0.7);
+  --shadow-gold: 0 10px 30px -14px rgba(200, 164, 92, 0.45);
+
+  /* ---- Transições ---- */
+  --transition-fast: 120ms ease;
+  --transition-base: 200ms ease;
+  --transition-slow: 320ms cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* ---- Foco (acessibilidade) ---- */
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-gold-line);
+
+  /* ---- Layout ---- */
+  --sidebar-width: 264px;
+  --topbar-height: 64px;
+  --content-max: 1200px;
+
+  color-scheme: dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Breakpoints (documentados; usados via media queries nos componentes):
+   sm: 640px  | md: 768px  | lg: 1024px | xl: 1280px */

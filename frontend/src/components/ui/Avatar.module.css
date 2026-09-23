@@ -1,0 +1,14 @@
+.avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background-color: var(--color-surface-inset);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-gold);
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  user-select: none;
+}

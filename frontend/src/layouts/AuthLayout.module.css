@@ -1,0 +1,132 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  min-height: 100dvh;
+}
+
+/* ---- Painel institucional (esquerda) ---- */
+.institutional {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: var(--space-10) var(--space-12);
+  overflow: hidden;
+  background-color: #0a0a0c;
+  background-image:
+    radial-gradient(circle at 20% 20%, rgba(200, 164, 92, 0.14), transparent 45%),
+    linear-gradient(160deg, #101013 0%, #0a0a0c 60%);
+  border-right: 1px solid var(--color-border-subtle);
+}
+
+/* Textura sutil de "couro/papel" — quadriculado fino quase invisível. */
+.grain {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: repeating-linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.02) 0px,
+      rgba(255, 255, 255, 0.02) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+}
+
+.brandHeader {
+  position: relative;
+  z-index: 1;
+}
+
+.statementBlock {
+  position: relative;
+  z-index: 1;
+  max-width: 40ch;
+}
+
+.eyebrow {
+  display: inline-block;
+  margin-bottom: var(--space-4);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--color-gold);
+}
+
+.heading {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 4vw, 3rem);
+  line-height: 1.1;
+  color: var(--color-text);
+}
+
+.subheading {
+  margin-top: var(--space-5);
+  font-size: var(--text-md);
+  color: var(--color-text-muted);
+  line-height: var(--leading-normal);
+}
+
+.institutionalFooter {
+  position: relative;
+  z-index: 1;
+}
+
+.rule {
+  display: block;
+  width: 56px;
+  height: 2px;
+  margin-bottom: var(--space-4);
+  background: linear-gradient(to right, var(--color-gold), transparent);
+}
+
+.estd {
+  font-size: var(--text-sm);
+  letter-spacing: 0.04em;
+  color: var(--color-text-faint);
+}
+
+/* ---- Lado do formulário (direita) ---- */
+.formSide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-8) var(--space-6);
+  background-color: var(--color-bg);
+}
+
+.formCard {
+  width: 100%;
+  max-width: 380px;
+}
+
+/* ---- Responsivo ---- */
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+  .institutional {
+    padding: var(--space-8) var(--space-6);
+    gap: var(--space-6);
+    min-height: 0;
+  }
+  .statementBlock {
+    max-width: none;
+  }
+  .heading {
+    font-size: var(--text-2xl);
+  }
+  .subheading {
+    margin-top: var(--space-3);
+    font-size: var(--text-base);
+  }
+  .institutionalFooter {
+    display: none;
+  }
+  .formSide {
+    align-items: flex-start;
+    padding: var(--space-8) var(--space-5) var(--space-12);
+  }
+}
