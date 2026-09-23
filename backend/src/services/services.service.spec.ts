@@ -8,7 +8,7 @@ import { ServicesService } from './services.service';
 describe('ServicesService', () => {
   let service: ServicesService;
   let prisma: {
-    barbeiro: { findUnique: jest.Mock };
+    barbeiro: { findUnique: jest.Mock; findFirst: jest.Mock };
     servico: { findMany: jest.Mock; findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
   };
 
@@ -24,7 +24,7 @@ describe('ServicesService', () => {
 
   beforeEach(() => {
     prisma = {
-      barbeiro: { findUnique: jest.fn() },
+      barbeiro: { findUnique: jest.fn(), findFirst: jest.fn() },
       servico: {
         findMany: jest.fn(),
         findFirst: jest.fn(),
@@ -36,15 +36,30 @@ describe('ServicesService', () => {
     service = new ServicesService(prisma as unknown as PrismaService);
   });
 
-  it('lista somente serviços ativos', async () => {
+  it('lista somente serviços ativos DO BARBEIRO informado (escopo por barbeiro)', async () => {
+    prisma.barbeiro.findFirst.mockResolvedValue({ id: 8 });
     prisma.servico.findMany.mockResolvedValue([serviceRecord()]);
 
-    const result = await service.findActiveServices();
+    const result = await service.findActiveServicesByBarber(8);
 
-    expect(prisma.servico.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { ativo: true },
-    }));
+    expect(prisma.barbeiro.findFirst).toHaveBeenCalledWith({
+      where: { id: 8, ativo: true },
+      select: { id: true },
+    });
+    expect(prisma.servico.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { barbeiroId: 8, ativo: true } }),
+    );
     expect(result[0]).toMatchObject({ preco: '35.00', ativo: true });
+  });
+
+  it('barbeiro inexistente ou inativo não lista serviços (404, sem catálogo global)', async () => {
+    prisma.barbeiro.findFirst.mockResolvedValue(null);
+
+    await expect(service.findActiveServicesByBarber(99)).rejects.toThrow(
+      NotFoundException,
+    );
+    // Nunca cai para uma listagem global.
+    expect(prisma.servico.findMany).not.toHaveBeenCalled();
   });
 
   it('não retorna serviço inativo por id', async () => {

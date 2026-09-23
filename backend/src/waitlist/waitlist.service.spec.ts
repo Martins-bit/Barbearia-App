@@ -558,16 +558,9 @@ describe('WaitlistService', () => {
 
   it('cancelamento do próprio cliente funciona e marca status CANCELADA', async () => {
     prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
+    // Transição condicional atômica: exatamente 1 linha afetada.
+    prisma.listaEspera.updateMany.mockResolvedValue({ count: 1 });
     prisma.listaEspera.findUnique.mockResolvedValue({
-      id: 3,
-      clienteId: 99,
-      servicoId: 20,
-      dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
-      status: StatusListaEspera.ATIVA,
-      dataEntrada: new Date(),
-      dataAtualizacao: new Date(),
-    });
-    prisma.listaEspera.update.mockResolvedValue({
       id: 3,
       clienteId: 99,
       servicoId: 20,
@@ -578,37 +571,78 @@ describe('WaitlistService', () => {
     });
 
     const result = await service.cancel(1, 3);
+
+    // O UPDATE exige ATIVA + dono: ATENDIDA/CANCELADA nunca são sobrescritas.
+    expect(prisma.listaEspera.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 3,
+        clienteId: 99,
+        status: StatusListaEspera.ATIVA,
+      },
+      data: {
+        status: StatusListaEspera.CANCELADA,
+        dataAtualizacao: expect.any(Date),
+      },
+    });
     expect(result.status).toBe(StatusListaEspera.CANCELADA);
   });
 
   it('cancelar entrada de outro cliente retorna 404 genérico', async () => {
     prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
-    prisma.listaEspera.findUnique.mockResolvedValue({
-      id: 5,
-      clienteId: 555,
-      servicoId: 20,
-      dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
-      status: StatusListaEspera.ATIVA,
-    });
+    // A condição clienteId no WHERE faz o update não casar nenhuma linha.
+    prisma.listaEspera.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(service.cancel(1, 5)).rejects.toThrow(
       new NotFoundException('Entrada de lista de espera não encontrada.'),
     );
+    expect(prisma.listaEspera.findUnique).not.toHaveBeenCalled();
   });
 
-  it('cancelamento repetido retorna 409', async () => {
+  it('cancelamento repetido (já CANCELADA) retorna 404 sem sobrescrever estado', async () => {
+    prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
+    prisma.listaEspera.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.cancel(1, 9)).rejects.toThrow(
+      new NotFoundException('Entrada de lista de espera não encontrada.'),
+    );
+  });
+
+  it('ATENDIDA nunca é alterada para CANCELADA', async () => {
+    prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
+    // A entrada existe e pertence ao cliente, mas já foi ATENDIDA: o WHERE
+    // (status ATIVA) não casa, logo count = 0 e nada é sobrescrito.
+    prisma.listaEspera.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.cancel(1, 42)).rejects.toThrow(
+      new NotFoundException('Entrada de lista de espera não encontrada.'),
+    );
+
+    expect(prisma.listaEspera.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: StatusListaEspera.ATIVA }),
+      }),
+    );
+  });
+
+  it('dois cancelamentos concorrentes: somente um afeta linha (count = 1)', async () => {
     prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
     prisma.listaEspera.findUnique.mockResolvedValue({
-      id: 9,
+      id: 7,
       clienteId: 99,
       servicoId: 20,
       dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
       status: StatusListaEspera.CANCELADA,
     });
+    // O UPDATE condicional é a própria serialização: o primeiro vence (count 1),
+    // o segundo encontra status != ATIVA e recebe 0.
+    prisma.listaEspera.updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
 
-    await expect(service.cancel(1, 9)).rejects.toThrow(
-      new ConflictException('Esta entrada já está cancelada.'),
-    );
+    await expect(service.cancel(1, 7)).resolves.toMatchObject({
+      status: StatusListaEspera.CANCELADA,
+    });
+    await expect(service.cancel(1, 7)).rejects.toThrow(NotFoundException);
   });
 
   describe('findEligibleEntriesForSlot', () => {

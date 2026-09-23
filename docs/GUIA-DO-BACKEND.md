@@ -256,7 +256,8 @@ O cliente poderá cancelar somente quando estiver dentro do prazo permitido.
 
 Regra atual:
 
-Até um dia antes do atendimento.
+- **CLIENTE:** até o dia anterior ao atendimento (não pode cancelar no mesmo dia).
+- **BARBEIRO:** pode cancelar também no mesmo dia.
 
 Após o cancelamento:
 
@@ -309,9 +310,9 @@ Cada mensagem deverá:
 
 O limite atual é:
 
-50 caracteres.
+1 a 500 caracteres (após trim).
 
-O backend deverá rejeitar mensagens que ultrapassem esse limite.
+O backend deverá rejeitar mensagens vazias (ou só com espaços) e que ultrapassem esse limite.
 
 ---
 
@@ -326,6 +327,8 @@ Operações possíveis:
 - Atualizar;
 - Ativar;
 - Desativar.
+
+Cada serviço pertence a um barbeiro. A listagem para o cliente é sempre **por barbeiro** (`GET /services?barbeiroId=<id>`) e retorna apenas os serviços ativos daquele barbeiro; não existe catálogo global.
 
 A desativação não deverá apagar automaticamente o histórico.
 

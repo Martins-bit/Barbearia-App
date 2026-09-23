@@ -7,6 +7,7 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { TipoUsuario } from '../generated/prisma/enums';
@@ -15,6 +16,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { CreateServiceDto } from './dto/create-service.dto';
+import { ListServicesQueryDto } from './dto/list-services-query.dto';
 import { ServiceResponseDto } from './dto/service-response.dto';
 import { UpdateServiceDto } from './dto/update-service.dto';
 import { UpdateServiceStatusDto } from './dto/update-service-status.dto';
@@ -24,10 +26,20 @@ import { ServicesService } from './services.service';
 export class ServicesController {
   constructor(private readonly servicesService: ServicesService) {}
 
+  /**
+   * Serviços ATIVOS de um barbeiro específico (decisão de projeto: serviços
+   * pertencem a um barbeiro — nunca um catálogo global).
+   *
+   * RolesGuard revalida o estado ATUAL do usuário no banco (ativo, e perfil de
+   * barbeiro ativo quando for BARBEIRO) — não basta o JWT.
+   */
   @Get()
-  @UseGuards(JwtGuard)
-  async findActiveServices(): Promise<ServiceResponseDto[]> {
-    return this.servicesService.findActiveServices();
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.CLIENTE, TipoUsuario.BARBEIRO)
+  async findActiveServices(
+    @Query() query: ListServicesQueryDto,
+  ): Promise<ServiceResponseDto[]> {
+    return this.servicesService.findActiveServicesByBarber(query.barbeiroId);
   }
 
   @Get('admin')
@@ -40,7 +52,8 @@ export class ServicesController {
   }
 
   @Get(':id')
-  @UseGuards(JwtGuard)
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.CLIENTE, TipoUsuario.BARBEIRO)
   async findActiveServiceById(
     @Param('id', ParseIntPipe) serviceId: number,
   ): Promise<ServiceResponseDto> {

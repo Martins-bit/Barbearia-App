@@ -11,7 +11,7 @@ const DAY_MON = '2099-01-12'; // segunda-feira
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function buildPrismaMock(): any {
   const prismaMock: any = {
-    barbeiro: { findUnique: jest.fn() },
+    barbeiro: { findUnique: jest.fn(), findFirst: jest.fn() },
     // Advisory lock do calendário (acquireCalendarLock usa $executeRaw).
     $executeRaw: jest.fn().mockResolvedValue(1),
     horarioFuncionamento: {
@@ -45,6 +45,9 @@ describe('ScheduleService', () => {
     prisma = buildPrismaMock();
     users = buildUsersMock();
     prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+    // A-2: o barbeiro alvo informado pelo cliente precisa existir e estar
+    // ativo (findFirst com { id, ativo: true }).
+    prisma.barbeiro.findFirst.mockResolvedValue({ id: BARBER_ID });
     service = new ScheduleService(
       prisma as unknown as PrismaService,
       users as unknown as UsersService,
@@ -605,6 +608,126 @@ describe('ScheduleService', () => {
           }),
         }),
       );
+    });
+
+    describe('horários passados (America/Sao_Paulo)', () => {
+      // Sistema fixado em 2025-06-16T15:00:00Z == 12:00 em São Paulo (UTC-3).
+      // 2025-06-16 é segunda-feira (diaSemana 1).
+      const TODAY_KEY = '2025-06-16';
+      const PAST_KEY = '2025-06-15'; // domingo
+      const FUTURE_KEY = '2099-01-12'; // segunda-feira distante
+      const SYSTEM_NOW_ISO = '2025-06-16T15:00:00.000Z';
+
+      beforeEach(() => {
+        jest.useFakeTimers().setSystemTime(new Date(SYSTEM_NOW_ISO));
+      });
+
+      afterEach(() => {
+        jest.useRealTimers();
+      });
+
+      it('data FUTURA preserva todos os slots válidos', async () => {
+        arrangeAvailability({
+          role: 'CLIENTE',
+          windows: [{ diaSemana: 1, horaInicio: '09:00', horaFim: '11:00' }],
+        });
+
+        const result = await service.getAvailability(7, {
+          data: FUTURE_KEY,
+          servicoId: 55,
+          barbeiroId: BARBER_ID,
+        });
+
+        expect(result.horariosLivres).toEqual([
+          '09:00',
+          '09:15',
+          '09:30',
+          '09:45',
+          '10:00',
+          '10:15',
+          '10:30',
+        ]);
+      });
+
+      it('data PASSADA retorna grade vazia', async () => {
+        arrangeAvailability({
+          role: 'CLIENTE',
+          // diaSemana 0 (domingo), igual ao PAST_KEY, com janela ampla.
+          windows: [{ diaSemana: 0, horaInicio: '09:00', horaFim: '18:00' }],
+        });
+
+        const result = await service.getAvailability(7, {
+          data: PAST_KEY,
+          servicoId: 55,
+          barbeiroId: BARBER_ID,
+        });
+
+        expect(result.horariosLivres).toEqual([]);
+      });
+
+      it('HOJE remove somente os slots cujo início já passou (12:00)', async () => {
+        arrangeAvailability({
+          role: 'CLIENTE',
+          windows: [{ diaSemana: 1, horaInicio: '09:00', horaFim: '15:00' }],
+        });
+
+        const result = await service.getAvailability(7, {
+          data: TODAY_KEY,
+          servicoId: 55,
+          barbeiroId: BARBER_ID,
+        });
+
+        // Somente inícios > 12:00 (com serviço de 30min cabendo até 15:00).
+        expect(result.horariosLivres).toEqual([
+          '12:15',
+          '12:30',
+          '12:45',
+          '13:00',
+          '13:15',
+          '13:30',
+          '13:45',
+          '14:00',
+          '14:15',
+          '14:30',
+        ]);
+        expect(result.horariosLivres).not.toContain('12:00');
+        expect(result.horariosLivres).not.toContain('11:45');
+        expect(result.horariosLivres).not.toContain('09:00');
+      });
+
+      it('slot EXATAMENTE no horário atual não é considerado disponível', async () => {
+        arrangeAvailability({
+          role: 'CLIENTE',
+          windows: [{ diaSemana: 1, horaInicio: '09:00', horaFim: '13:00' }],
+        });
+
+        const result = await service.getAvailability(7, {
+          data: TODAY_KEY,
+          servicoId: 55,
+          barbeiroId: BARBER_ID,
+        });
+
+        // 12:00 é o instante atual (não futuro) → excluído; 12:15 é futuro.
+        expect(result.horariosLivres).not.toContain('12:00');
+        expect(result.horariosLivres).not.toContain('11:45');
+        expect(result.horariosLivres).toContain('12:15');
+      });
+
+      it('HOJE sem nenhum slot futuro retorna grade vazia', async () => {
+        arrangeAvailability({
+          role: 'CLIENTE',
+          // Janela inteiramente no passado em relação a 12:00.
+          windows: [{ diaSemana: 1, horaInicio: '08:00', horaFim: '09:00' }],
+        });
+
+        const result = await service.getAvailability(7, {
+          data: TODAY_KEY,
+          servicoId: 55,
+          barbeiroId: BARBER_ID,
+        });
+
+        expect(result.horariosLivres).toEqual([]);
+      });
     });
   });
 });

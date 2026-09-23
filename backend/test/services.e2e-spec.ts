@@ -20,6 +20,9 @@ describe('Services (e2e)', () => {
   let inactiveServiceId: number;
   let barberAServiceId: number;
   let barberBServiceId: number;
+  // Barbeiro.id (não Usuario.id) usado como escopo da listagem por barbeiro.
+  let barberAId: number;
+  let inactiveBarberId: number;
   let createdServiceId: number | undefined;
   const createdUserIds: number[] = [];
   const createdBarberIds: number[] = [];
@@ -84,6 +87,9 @@ describe('Services (e2e)', () => {
     const barberA = await createBarber('Barbeiro A');
     const barberB = await createBarber('Barbeiro B');
     const inactiveBarber = await createBarber('Barbeiro Inativo', false);
+
+    barberAId = barberA.barbeiro!.id;
+    inactiveBarberId = inactiveBarber.barbeiro!.id;
 
     // Cliente usado para validar bloqueio de usuário com Usuario.ativo = false.
     const deactivatableClient = await prisma.usuario.create({
@@ -158,12 +164,17 @@ describe('Services (e2e)', () => {
   });
 
   it('exige JWT para listar serviços', async () => {
-    await request(app.getHttpServer()).get('/services').expect(401);
+    await request(app.getHttpServer())
+      .get('/services')
+      .query({ barbeiroId: barberAId })
+      .expect(401);
   });
 
-  it('cliente lista somente serviços ativos', async () => {
+  it('cliente lista somente os serviços ativos DO BARBEIRO informado', async () => {
+    // M-1: não existe catálogo global — serviços pertencem a um barbeiro.
     const response = await request(app.getHttpServer())
       .get('/services')
+      .query({ barbeiroId: barberAId })
       .set('Authorization', `Bearer ${clientToken}`)
       .expect(200);
 
@@ -172,8 +183,13 @@ describe('Services (e2e)', () => {
         expect.objectContaining({ id: activeServiceId, ativo: true }),
       ]),
     );
+    // Serviço inativo do MESMO barbeiro não aparece.
     expect(response.body).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: inactiveServiceId })]),
+    );
+    // Serviço ATIVO de OUTRO barbeiro nunca aparece no escopo do barbeiro A.
+    expect(response.body).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: barberBServiceId })]),
     );
     for (const service of response.body) {
       expect(service.ativo).toBe(true);
@@ -181,6 +197,39 @@ describe('Services (e2e)', () => {
       expect(service).not.toHaveProperty('dataCriacao');
       expect(service).not.toHaveProperty('dataAtualizacao');
     }
+  });
+
+  it('GET /services exige barbeiroId (sem catálogo global)', async () => {
+    await request(app.getHttpServer())
+      .get('/services')
+      .set('Authorization', `Bearer ${clientToken}`)
+      .expect(400);
+  });
+
+  it('GET /services de barbeiro inexistente retorna 404', async () => {
+    await request(app.getHttpServer())
+      .get('/services')
+      .query({ barbeiroId: 999999999 })
+      .set('Authorization', `Bearer ${clientToken}`)
+      .expect(404);
+  });
+
+  it('GET /services de barbeiro inativo retorna 404', async () => {
+    // Barbeiro existe como usuário (login OK) mas o perfil está inativo.
+    await request(app.getHttpServer())
+      .get('/services')
+      .query({ barbeiroId: inactiveBarberId })
+      .set('Authorization', `Bearer ${clientToken}`)
+      .expect(404);
+  });
+
+  it('barbeiro sem perfil ativo não lista serviços (403)', async () => {
+    // A-1: RolesGuard revalida o estado ATUAL — barbeiro inativo é bloqueado.
+    await request(app.getHttpServer())
+      .get('/services')
+      .query({ barbeiroId: barberAId })
+      .set('Authorization', `Bearer ${inactiveBarberToken}`)
+      .expect(403);
   });
 
   it('cliente não consulta serviço inativo', async () => {
@@ -541,9 +590,10 @@ describe('Services (e2e)', () => {
       createdServiceIds.push(serviceId);
       expect(createResponse.body.ativo).toBe(true);
 
-      // ativo: aparece na listagem pública
+      // ativo: aparece na listagem pública do barbeiro dono
       await request(app.getHttpServer())
         .get('/services')
+        .query({ barbeiroId: barberAId })
         .set('Authorization', `Bearer ${clientToken}`)
         .expect(200)
         .expect((response) => {
@@ -562,9 +612,10 @@ describe('Services (e2e)', () => {
         .expect(200)
         .expect((response) => expect(response.body.ativo).toBe(false));
 
-      // inativo: some da listagem pública
+      // inativo: some da listagem pública do barbeiro dono
       await request(app.getHttpServer())
         .get('/services')
+        .query({ barbeiroId: barberAId })
         .set('Authorization', `Bearer ${clientToken}`)
         .expect(200)
         .expect((response) => {
@@ -603,9 +654,10 @@ describe('Services (e2e)', () => {
         .expect(200)
         .expect((response) => expect(response.body.ativo).toBe(true));
 
-      // reativado: volta à listagem pública
+      // reativado: volta à listagem pública do barbeiro dono
       await request(app.getHttpServer())
         .get('/services')
+        .query({ barbeiroId: barberAId })
         .set('Authorization', `Bearer ${clientToken}`)
         .expect(200)
         .expect((response) => {
@@ -674,6 +726,7 @@ describe('Services (e2e)', () => {
     it('rejeita token inválido em rotas protegidas de Services', async () => {
       await request(app.getHttpServer())
         .get('/services')
+        .query({ barbeiroId: barberAId })
         .set('Authorization', 'Bearer token-invalido')
         .expect(401);
 
@@ -755,6 +808,7 @@ describe('Services (e2e)', () => {
       const publicListBody = (
         await request(app.getHttpServer())
           .get('/services')
+          .query({ barbeiroId: barberAId })
           .set('Authorization', `Bearer ${clientToken}`)
           .expect(200)
       ).body;

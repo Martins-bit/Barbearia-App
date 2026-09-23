@@ -371,7 +371,7 @@ O usuário deverá conseguir:
 - Enviar mensagem;
 - Identificar mensagens novas.
 
-O campo deverá respeitar o limite de 50 caracteres definido nas regras de negócio.
+O campo deverá respeitar o limite de 1 a 500 caracteres definido nas regras de negócio.
 
 ---
 

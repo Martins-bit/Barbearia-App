@@ -327,7 +327,7 @@ As notificações deverão ser claras e indicar:
 
 O sistema deverá possuir uma área simples para o cliente enviar um recado ao barbeiro.
 
-A especificação original determina uma caixa de mensagens com limite máximo de **50 caracteres**. 
+A especificação original mencionava uma caixa de mensagens com limite máximo de **50 caracteres**. O limite efetivamente implementado é de **1 a 500 caracteres** (após trim), conforme `REGRAS-DE-NEGOCIO.md` e `API.md`. 
 
 Essa funcionalidade deverá ser simples e objetiva.
 

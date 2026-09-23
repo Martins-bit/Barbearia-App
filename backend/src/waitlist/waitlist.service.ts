@@ -559,18 +559,34 @@ export class WaitlistService {
         throw new ConflictException('Claim expirado.');
       }
 
-      const appointment = await this.appointmentsService.createConfirmedForClient(
-        tx,
-        {
-          clienteId,
-          barbeiroId: current.barbeiroId,
-          servicoId: current.servicoId,
-          data: dateKey,
-          horaInicio: current.horaInicio,
-          horaFim: current.horaFim,
-          claimId: current.id,
-        },
-      );
+      let appointment;
+      try {
+        appointment = await this.appointmentsService.createConfirmedForClient(
+          tx,
+          {
+            clienteId,
+            barbeiroId: current.barbeiroId,
+            servicoId: current.servicoId,
+            data: dateKey,
+            horaInicio: current.horaInicio,
+            horaFim: current.horaFim,
+            claimId: current.id,
+          },
+        );
+      } catch (error) {
+        // M-4: a criação já valida barbeiro/serviço ativos. Se o barbeiro ou o
+        // serviço foi desativado entre a emissão do claim e o aceite, o 404
+        // genérico é confuso para o cliente. Traduzimos APENAS esse caso para
+        // 409 dizendo que a oportunidade não está mais disponível — a regra de
+        // negócio continua sendo uma só (a validação do createConfirmedForClient),
+        // sem duplicar checagens aqui.
+        if (error instanceof NotFoundException) {
+          throw new ConflictException(
+            'A oportunidade não está mais disponível.',
+          );
+        }
+        throw error;
+      }
 
       const accepted = await tx.waitlistClaim.updateMany({
         where: { id: claimId, status: StatusWaitlistClaim.ATIVO },
@@ -637,29 +653,48 @@ export class WaitlistService {
     });
   }
 
+  /**
+   * Cancela uma entrada da lista de espera (dono: o próprio cliente).
+   *
+   * Concorrência: a transição é feita por `updateMany` CONDICIONAL
+   * (id + clienteId + status ATIVA). Apenas `count === 1` é sucesso — duas
+   * requisições concorrentes não podem cancelar a mesma entrada duas vezes, e
+   * um estado terminal (ex.: ATENDIDA) NUNCA é sobrescrito para CANCELADA.
+   *
+   * Não usa advisory lock: a condição no próprio UPDATE é a atomicidade
+   * necessária aqui (não há decisão de agenda envolvida).
+   */
   async cancel(userId: number, waitlistId: number): Promise<any> {
     const clienteId = await this.resolveClienteId(userId);
 
-    const entry = await this.prisma.listaEspera.findUnique({
-      where: { id: waitlistId },
-    });
-
-    if (!entry || entry.clienteId !== clienteId) {
-      throw new NotFoundException('Entrada de lista de espera não encontrada.');
-    }
-
-    if (entry.status === StatusListaEspera.CANCELADA) {
-      throw new ConflictException('Esta entrada já está cancelada.');
-    }
-
-    const updated = await this.prisma.listaEspera.update({
-      where: { id: waitlistId },
+    const updated = await this.prisma.listaEspera.updateMany({
+      where: {
+        id: waitlistId,
+        clienteId,
+        status: StatusListaEspera.ATIVA,
+      },
       data: {
         status: StatusListaEspera.CANCELADA,
         dataAtualizacao: new Date(),
       },
     });
 
-    return this.toResponse(updated);
+    if (updated.count !== 1) {
+      // Não distingue "não existe", "de outro cliente" ou "já não está ATIVA"
+      // (ex.: NOTIFICADA/ATENDIDA/CANCELADA/EXPIRADA) para não revelar
+      // existência nem permitir sobrescrever um estado válido. Mesmo padrão de
+      // 404 genérico usado no restante do projeto para recurso não acessível.
+      throw new NotFoundException('Entrada de lista de espera não encontrada.');
+    }
+
+    const updatedEntry = await this.prisma.listaEspera.findUnique({
+      where: { id: waitlistId },
+    });
+
+    if (!updatedEntry) {
+      throw new NotFoundException('Entrada de lista de espera não encontrada.');
+    }
+
+    return this.toResponse(updatedEntry);
   }
 }

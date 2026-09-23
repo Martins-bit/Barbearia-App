@@ -83,6 +83,32 @@ export class UsersService {
     return usuarios.map((usuario) => this.sanitizeUser(usuario) as UserResponseDto);
   }
 
+  /**
+   * Barbeiros ELEGÍVEIS para escolha (GET /barbers): perfil de barbeiro ATIVO
+   * E usuário ATIVO. Retorna apenas o mínimo público (id do Barbeiro + nome),
+   * sem telefone, e-mail, hash, status ou qualquer dado administrativo.
+   * Não há filtro arbitrário: um barbeiro inativo (perfil ou usuário) nunca é
+   * listado, e o cliente não pode escolher quem aparece.
+   */
+  async findActiveBarbers(): Promise<{ id: number; nome: string }[]> {
+    const barbeiros = await this.prisma.barbeiro.findMany({
+      where: {
+        ativo: true,
+        usuario: { ativo: true },
+      },
+      select: {
+        id: true,
+        usuario: { select: { nome: true } },
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    return barbeiros.map((barbeiro) => ({
+      id: barbeiro.id,
+      nome: barbeiro.usuario.nome,
+    }));
+  }
+
   async updateUser(id: number, data: UpdateUserDto): Promise<UserResponseDto> {
     const existingUser = await this.prisma.usuario.findUnique({
       where: { id },

@@ -534,10 +534,37 @@ describe('Waitlist (e2e)', () => {
 
     expect(cancelled.body.status).toBe(StatusListaEspera.CANCELADA);
 
+    // M-3: o cancelamento é condicional (status ATIVA). A segunda tentativa não
+    // casa nenhuma linha (count = 0) e retorna 404 genérico — nunca sobrescreve
+    // um estado já terminal.
     await request(app.getHttpServer())
       .patch(`/waitlist/${created.body.id}/cancel`)
       .set('Authorization', `Bearer ${clientAToken}`)
-      .expect(409);
+      .expect(404);
+  });
+
+  it('M-3: entrada ATENDIDA não pode ser cancelada (404, sem sobrescrever estado)', async () => {
+    const created = await postWaitlist(clientAToken, {
+      barbeiroId: barberAId,
+      servicoId: serviceAId,
+      data: '2099-01-18',
+    }).expect(201);
+    waitlistIds.push(created.body.id);
+
+    await prisma.listaEspera.update({
+      where: { id: created.body.id },
+      data: { status: StatusListaEspera.ATENDIDA },
+    });
+
+    await request(app.getHttpServer())
+      .patch(`/waitlist/${created.body.id}/cancel`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(404);
+
+    const stored = await prisma.listaEspera.findUnique({
+      where: { id: created.body.id },
+    });
+    expect(stored?.status).toBe(StatusListaEspera.ATENDIDA);
   });
 
   it('não permite cancelar entrada de outro cliente', async () => {

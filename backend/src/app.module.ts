@@ -12,6 +12,7 @@ import { AppointmentsModule } from './appointments/appointments.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { MessagesModule } from './messages/messages.module';
+import { BarbersModule } from './barbers/barbers.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { MessagesModule } from './messages/messages.module';
     WaitlistModule,
     NotificationsModule,
     MessagesModule,
+    BarbersModule,
   ],
   controllers: [AppController],
   providers: [AppService],

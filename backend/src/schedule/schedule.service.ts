@@ -21,6 +21,7 @@ import { ScheduleBlockResponseDto } from './dto/schedule-block-response.dto';
 import {
   dateKeyFromUtcMidnight,
   formatLocalHHmm,
+  getZonedParts,
   isValidDateKey,
   localMinuteOfDay,
   prismaDateFilter,
@@ -460,8 +461,18 @@ export class ScheduleService {
     let targetBarberId: number;
     if (query.barbeiroId !== undefined) {
       // Consulta EXPLÍCITA (fluxo do CLIENTE). Somente leitura — não é
-      // operação administrativa, portanto não há risco de ownership.
-      targetBarberId = query.barbeiroId;
+      // operação administrativa, portanto não há risco de ownership. O
+      // barbeiro alvo, porém, precisa EXISTIR e estar ATIVO: caso contrário a
+      // consulta devolveria uma grade vazia como se ele estivesse disponível.
+      // 404 genérico, sem revelar dados do usuário.
+      const targetBarber = await this.prisma.barbeiro.findFirst({
+        where: { id: query.barbeiroId, ativo: true },
+        select: { id: true },
+      });
+      if (!targetBarber) {
+        throw new NotFoundException('Barbeiro não encontrado.');
+      }
+      targetBarberId = targetBarber.id;
     } else if (authState.tipoUsuario === TipoUsuario.BARBEIRO) {
       // BARBEIRO consulta a própria agenda sem informar barbeiroId.
       if (!authState.barbeiro || !authState.barbeiro.ativo) {
@@ -504,6 +515,23 @@ export class ScheduleService {
       return buildEmpty();
     }
 
+    // HORÁRIOS PASSADOS: um slot só é utilizável se o seu INÍCIO ainda for
+    // futuro. A comparação usa o fuso America/Sao_Paulo (partes locais do
+    // instante real), nunca hora local tratada como UTC:
+    //   - data consultada < hoje  → nenhum slot utilizável (grade vazia);
+    //   - data consultada = hoje  → remove slots cujo início já chegou;
+    //   - data consultada > hoje  → comportamento inalterado.
+    // Esta regra espelha a validação de POST /appointments (startInstant <= agora).
+    const agora = new Date();
+    const hojeParts = getZonedParts(agora);
+    const hojeKey = `${hojeParts.year}-${String(hojeParts.month).padStart(2, '0')}-${String(hojeParts.day).padStart(2, '0')}`;
+
+    if (query.data < hojeKey) {
+      return buildEmpty();
+    }
+
+    const isOnlyTodayCheck = query.data === hojeKey;
+
     const freeSlots = new Set<number>();
     for (const window of dayWindows) {
       let slotStart =
@@ -518,7 +546,16 @@ export class ScheduleService {
             slotStart < interval.fim && interval.ini < slotStart + duration,
         );
         if (!conflicts) {
-          freeSlots.add(slotStart);
+          const pad2 = (value: number): string => String(value).padStart(2, '0');
+          const slotHHmm = `${pad2(Math.floor(slotStart / 60))}:${pad2(slotStart % 60)}`;
+          // Só hoje precisa da checagem de passado; em datas futuras o slot é
+          // sempre futuro por construção.
+          const inicioFuturo =
+            !isOnlyTodayCheck ||
+            zonedWallTimeToUtc(query.data, slotHHmm) > agora;
+          if (inicioFuturo) {
+            freeSlots.add(slotStart);
+          }
         }
         slotStart += SLOT_GRANULARITY_MINUTES;
       }

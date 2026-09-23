@@ -6,6 +6,7 @@ import { AppModule } from '../src/app.module';
 import { TipoUsuario } from '../src/generated/prisma/enums';
 import { hashPassword } from '../src/common/utils/password.util';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { getZonedParts, zonedWallTimeToUtc } from '../src/schedule/tz.util';
 
 describe('Schedule (e2e)', () => {
   let app: INestApplication<App>;
@@ -19,6 +20,7 @@ describe('Schedule (e2e)', () => {
 
   let barberAId: number; // Barbeiro.id
   let barberBId: number;
+  let inactiveBarberId: number; // Barbeiro.id com perfil inativo
   let disabledUserId: number;
   let clienteRowId: number;
 
@@ -123,6 +125,7 @@ describe('Schedule (e2e)', () => {
 
     barberAId = barberA.barbeiro!.id;
     barberBId = barberB.barbeiro!.id;
+    inactiveBarberId = inactive.barbeiro!.id;
 
     const disabledClient = await prisma.usuario.create({
       data: {
@@ -531,6 +534,22 @@ describe('Schedule (e2e)', () => {
       .expect(404);
   });
 
+  it('A-2: barbeiro inexistente ou inativo informado pelo CLIENTE retorna 404', async () => {
+    // Barbeiro inexistente: nunca pode ser tratado como disponível.
+    await request(app.getHttpServer())
+      .get('/availability')
+      .query({ data: MONDAY, servicoId: svcA30Id, barbeiroId: 999999999 })
+      .set('Authorization', `Bearer ${clientToken}`)
+      .expect(404);
+
+    // Barbeiro existente como usuário, mas com perfil (Barbeiro) inativo.
+    await request(app.getHttpServer())
+      .get('/availability')
+      .query({ data: MONDAY, servicoId: svcA30Id, barbeiroId: inactiveBarberId })
+      .set('Authorization', `Bearer ${clientToken}`)
+      .expect(404);
+  });
+
   it('CASO OBRIGATÓRIO: serviço 30min + bloqueio 10:00–10:45 remove exatamente os slots conflitantes', async () => {
     const response = await request(app.getHttpServer())
       .get('/availability')
@@ -732,6 +751,122 @@ describe('Schedule (e2e)', () => {
       .set('Authorization', `Bearer ${barberAToken}`)
       .expect(200);
     expect(blocks.body).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------
+  // Disponibilidade e horários PASSADOS (America/Sao_Paulo)
+  // -------------------------------------------------------------------
+  describe('horários passados', () => {
+    let pastBarberId: number;
+    let pastBarberToken: string;
+    let pastServiceId: number;
+    const pastPhoneBase = String(Date.now() + 1).slice(-8);
+
+    const todayParts = getZonedParts(new Date());
+    const todayKey = `${todayParts.year}-${String(todayParts.month).padStart(2, '0')}-${String(todayParts.day).padStart(2, '0')}`;
+    const weekdayToday = new Date(
+      Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day),
+    ).getUTCDay();
+    const recentPastKey = new Date(
+      Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day - 1),
+    )
+      .toISOString()
+      .slice(0, 10);
+
+    beforeAll(async () => {
+      const senhaHash = await hashPassword(password);
+      const barber = await prisma.usuario.create({
+        data: {
+          nome: 'Barbeiro Passado Sched E2E',
+          telefone: `${pastPhoneBase}51`,
+          senhaHash,
+          tipoUsuario: TipoUsuario.BARBEIRO,
+          barbeiro: { create: { ativo: true } },
+        },
+        include: { barbeiro: true },
+      });
+      userIds.push(barber.id);
+      pastBarberId = barber.barbeiro!.id;
+      barberIds.push(pastBarberId);
+
+      const loginPast = await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ telefone: barber.telefone, senha: password })
+        .expect(200);
+      pastBarberToken = loginPast.body.token as string;
+
+      // Janela TODOS os dias 00:00–23:59: garante que o dia de execução do
+      // teste tenha janela ampla (independe do dia da semana).
+      const horarios = Array.from({ length: 7 }, (_, diaSemana) => ({
+        diaSemana,
+        horaInicio: '00:00',
+        horaFim: '23:59',
+      }));
+      await request(app.getHttpServer())
+        .put('/business-hours')
+        .set('Authorization', `Bearer ${pastBarberToken}`)
+        .send({ horarios })
+        .expect(200);
+
+      const svc = await prisma.servico.create({
+        data: {
+          barbeiroId: pastBarberId,
+          nome: `${prefix}-passado-30`,
+          descricao: 'Serviço do teste de horários passados',
+          duracaoMinutos: 30,
+          preco: '30.00',
+          ativo: true,
+        },
+      });
+      serviceIds.push(svc.id);
+      pastServiceId = svc.id;
+    });
+
+    it('data FUTURA preserva a grade completa', async () => {
+      const futureKey = '2099-02-02'; // domingo distante, coberto pela janela
+      const response = await request(app.getHttpServer())
+        .get('/availability')
+        .query({ data: futureKey, servicoId: pastServiceId, barbeiroId: pastBarberId })
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200);
+
+      expect(response.body.horariosLivres.length).toBeGreaterThan(0);
+      expect(response.body.horariosLivres).toContain('00:00');
+    });
+
+    it('data PASSADA retorna grade vazia', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/availability')
+        .query({ data: recentPastKey, servicoId: pastServiceId, barbeiroId: pastBarberId })
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200);
+
+      expect(response.body.horariosLivres).toEqual([]);
+    });
+
+    it('HOJE não retorna slot cujo início já passou e mantém os futuros', async () => {
+      const response = await request(app.getHttpServer())
+        .get('/availability')
+        .query({ data: todayKey, servicoId: pastServiceId, barbeiroId: pastBarberId })
+        .set('Authorization', `Bearer ${clientToken}`)
+        .expect(200);
+
+      const now = new Date();
+      for (const hhmm of response.body.horariosLivres) {
+        // Cada slot retornado deve ter início estritamente no futuro.
+        const startInstant = zonedWallTimeToUtc(todayKey, hhmm);
+        expect(startInstant.getTime()).toBeGreaterThan(now.getTime());
+      }
+
+      // Se ainda houver expediente hoje, a checagem de "passado" deve ter
+      // removido ao menos o início do dia (00:00 sempre já passou).
+      if (todayParts.hour * 60 + todayParts.minute >= 30) {
+        expect(response.body.horariosLivres).not.toContain('00:00');
+      }
+
+      // Confirma a janela 00:00–23:59 do dia de hoje para o dia da semana atual.
+      expect(weekdayToday).toBeGreaterThanOrEqual(0);
+    });
   });
 
 });

@@ -424,9 +424,18 @@ export class AppointmentsService {
         throw new ConflictException('Status incompatível para cancelamento.');
       }
 
-      const todayKey = this.dateKeyFromInstantLocal(new Date());
-      const appointmentDateKey = this.dateKeyFromInstantLocal(row.horaInicio);
-      if (appointmentDateKey <= todayKey) {
+      // REGRA DO CLIENTE (decisão de projeto): só é permitido cancelar até o
+      // dia CALENDÁRIO ANTERIOR ao agendamento, no fuso America/Sao_Paulo.
+      //
+      //   agendamento 20/08 → cancelar em 18/08 ou 19/08: permitido
+      //   agendamento 20/08 → cancelar em 20/08 (ou depois): BLOQUEADO
+      //
+      // A data do agendamento é derivada do INSTANTE persistido (horaInicio),
+      // nunca da coluna `data`, garantindo a comparação no fuso da barbearia.
+      // BARBEIRO não passa por esta checagem (pode cancelar no mesmo dia).
+      const hojeKey = this.dateKeyFromInstantLocal(new Date());
+      const dataAgendamentoKey = this.dateKeyFromInstantLocal(row.horaInicio);
+      if (dataAgendamentoKey <= hojeKey) {
         throw new BadRequestException(
           'Cliente só pode cancelar até o dia anterior ao agendamento.',
         );

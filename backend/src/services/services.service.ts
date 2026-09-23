@@ -47,9 +47,28 @@ export class ServicesService {
     return barber?.id ?? null;
   }
 
-  async findActiveServices(): Promise<ServiceResponseDto[]> {
+  /**
+   * Serviços ATIVOS de um barbeiro específico.
+   *
+   * Não existe catálogo global: serviços pertencem a um barbeiro. O barbeiro
+   * alvo precisa EXISTIR e estar ATIVO — sem isso, o retorno vazio seria
+   * ambíguo ("barbeiro inexistente" vs "sem serviços"). Barbeiro inexistente
+   * ou inativo retorna 404 genérico, sem revelar dados do usuário.
+   */
+  async findActiveServicesByBarber(
+    barbeiroId: number,
+  ): Promise<ServiceResponseDto[]> {
+    const barber = await this.prisma.barbeiro.findFirst({
+      where: { id: barbeiroId, ativo: true },
+      select: { id: true },
+    });
+
+    if (!barber) {
+      throw new NotFoundException('Barbeiro não encontrado.');
+    }
+
     const services = await this.prisma.servico.findMany({
-      where: { ativo: true },
+      where: { barbeiroId: barber.id, ativo: true },
       select: this.serviceSelect,
       orderBy: { id: 'asc' },
     });

@@ -259,7 +259,8 @@ Testar:
 
 Regra atual:
 
-O cliente poderá cancelar até um dia antes do atendimento.
+- **CLIENTE:** pode cancelar até o dia anterior ao atendimento e **não** pode cancelar no mesmo dia.
+- **BARBEIRO:** pode cancelar no mesmo dia.
 
 ---
 
@@ -307,7 +308,7 @@ Testar:
 
 Regra:
 
-A mensagem deverá possuir no máximo 50 caracteres.
+A mensagem deverá possuir de 1 a 500 caracteres (após trim).
 
 ---
 

@@ -9,7 +9,7 @@ describe('ServicesController', () => {
 
   beforeEach(() => {
     servicesService = {
-      findActiveServices: jest.fn(),
+      findActiveServicesByBarber: jest.fn(),
       findOwnServicesByUserId: jest.fn(),
       findActiveServiceById: jest.fn(),
       createService: jest.fn(),
@@ -17,6 +17,14 @@ describe('ServicesController', () => {
       updateOwnServiceStatus: jest.fn(),
     };
     controller = new ServicesController(servicesService as unknown as ServicesService);
+  });
+
+  it('encaminha listagem por barbeiro usando o barbeiroId da query', async () => {
+    servicesService.findActiveServicesByBarber.mockResolvedValue([]);
+
+    await controller.findActiveServices({ barbeiroId: 7 });
+
+    expect(servicesService.findActiveServicesByBarber).toHaveBeenCalledWith(7);
   });
 
   it('encaminha consulta administrativa para o usuário autenticado', async () => {

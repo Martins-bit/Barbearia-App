@@ -978,7 +978,7 @@ Permitir comunicação simples entre cliente e barbeiro.
 
 O cliente poderá enviar uma mensagem ao barbeiro utilizando a funcionalidade definida para comunicação.
 
-A especificação original estabelece limite de até 50 caracteres para a mensagem.
+A especificação original previa limite de até 50 caracteres para a mensagem; o limite efetivamente implementado é de 1 a 500 caracteres (após trim).
 
 ### Barbeiro
 

@@ -183,19 +183,52 @@ A resposta não deverá conter:
 
 # 7. SERVIÇOS
 
+## 7.0. Listar barbeiros
+
+Endpoint conceitual:
+
+`GET /api/barbers`
+
+### Objetivo
+
+Retornar os barbeiros **elegíveis para escolha** pelo cliente — o primeiro passo do fluxo de agendamento (escolher barbeiro → serviços do barbeiro → disponibilidade → agendamento).
+
+### Autenticação e autorização
+
+Requer autenticação (JWT) e é acessível a CLIENTE ativo ou BARBEIRO ativo com perfil de barbeiro ativo (mesmo `JwtGuard`/`RolesGuard` do restante do sistema; o estado atual do usuário é revalidado no banco, não apenas o JWT). Usuário inativo recebe `401`; BARBEIRO sem perfil ativo recebe `403`.
+
+### Regras de elegibilidade
+
+Aparecem somente barbeiros com **perfil de barbeiro ativo** e **usuário ativo**. Barbeiro inativo (perfil ou usuário) nunca é listado. Não há filtros arbitrários e o cliente não escolhe quem aparece.
+
+### Resposta
+
+Lista de objetos com o mínimo público necessário para identificar o barbeiro e usar o seu id:
+
+- `id` — identificador do barbeiro (usado em `GET /api/services?barbeiroId=` e em `POST /api/appointments`);
+- `nome` — nome público do barbeiro.
+
+Sem telefone, e-mail, `senhaHash`, `tipoUsuario`, timestamps, tokens ou qualquer dado administrativo. Lista vazia (`[]`) quando não houver barbeiros elegíveis.
+
+---
+
 ## 7.1. Listar serviços
 
 Endpoint conceitual:
 
-`GET /api/services`
+`GET /api/services?barbeiroId=<id>`
 
 ### Objetivo
 
-Retornar os serviços disponíveis para visualização e agendamento.
+Retornar os serviços **ativos de um barbeiro específico**, para visualização e agendamento.
 
 ### Regra
 
-Somente serviços ativos deverão aparecer para novos agendamentos.
+Serviços pertencem a um barbeiro: **não** existe catálogo global. O `barbeiroId` é obrigatório; o barbeiro alvo precisa existir e estar ativo (perfil de barbeiro ativo), caso contrário a resposta é `404`. Somente serviços ativos do barbeiro informado aparecem.
+
+Fluxo esperado do cliente: escolher barbeiro → receber os serviços ativos daquele barbeiro → escolher o serviço → consultar disponibilidade → criar agendamento.
+
+Requer autenticação de CLIENTE ativo ou BARBEIRO ativo com perfil ativo (o estado atual do usuário é revalidado, não apenas o JWT).
 
 ---
 
@@ -296,6 +329,14 @@ Poderão incluir:
 ### Resultado
 
 A API deverá retornar somente horários que possam realmente ser utilizados para novos agendamentos.
+
+### Regra de horários passados
+
+A disponibilidade nunca oferece um horário que a criação de agendamento rejeitaria por já ter passado (a comparação usa o fuso `America/Sao_Paulo`):
+
+- data consultada **igual a hoje** → somente slots cujo início ainda seja futuro (um slot exatamente no horário atual já não é oferecido);
+- data consultada **anterior a hoje** → nenhum horário (lista vazia);
+- data consultada **posterior a hoje** → grade completa conforme as demais regras.
 
 ---
 

@@ -191,7 +191,15 @@ O cliente poderá cancelar um agendamento quando estiver dentro do prazo permiti
 
 A regra atualmente definida é:
 
-O cancelamento deverá ser realizado até um dia antes do atendimento.
+- **CLIENTE:** pode cancelar até o **dia anterior** ao atendimento (inclusive).
+- **CLIENTE:** **não** pode cancelar no mesmo dia do atendimento (a data do agendamento no fuso `America/Sao_Paulo` é igual ou anterior à data atual).
+- **BARBEIRO:** pode cancelar no **mesmo dia** (inclusive).
+
+Exemplo (agendamento em 20/08):
+
+- 18/08 → permitido para o CLIENTE;
+- 19/08 → permitido para o CLIENTE;
+- 20/08 → **proibido** para o CLIENTE (permitido para o BARBEIRO).
 
 O sistema deverá impedir cancelamentos fora das regras estabelecidas.
 
