@@ -3,15 +3,15 @@ import type { Barbeiro, Servico, Disponibilidade } from '../../types/domain'
 
 /** Barbeiros elegíveis para escolha. GET /barbers. */
 export const barbersService = {
-  list(): Promise<Barbeiro[]> {
-    return http.get<Barbeiro[]>('/barbers')
+  list(signal?: AbortSignal): Promise<Barbeiro[]> {
+    return http.get<Barbeiro[]>('/barbers', { signal })
   },
 }
 
 /** Serviços ativos de um barbeiro. GET /services?barbeiroId=. */
 export const servicesService = {
-  listByBarber(barbeiroId: number): Promise<Servico[]> {
-    return http.get<Servico[]>('/services', { query: { barbeiroId } })
+  listByBarber(barbeiroId: number, signal?: AbortSignal): Promise<Servico[]> {
+    return http.get<Servico[]>('/services', { query: { barbeiroId }, signal })
   },
 }
 
@@ -23,7 +23,10 @@ export interface AvailabilityQuery {
 
 /** Disponibilidade de um barbeiro. GET /availability. */
 export const availabilityService = {
-  get(query: AvailabilityQuery): Promise<Disponibilidade> {
-    return http.get<Disponibilidade>('/availability', { query: { ...query } })
+  get(query: AvailabilityQuery, signal?: AbortSignal): Promise<Disponibilidade> {
+    return http.get<Disponibilidade>('/availability', {
+      query: { ...query },
+      signal,
+    })
   },
 }

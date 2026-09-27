@@ -1,45 +1,9 @@
 import { PagePlaceholder } from '../../components/layout/PagePlaceholder'
 
-/** Início do cliente — receberá resumo de próximos agendamentos na 8.2. */
-export function ClienteHomePage() {
-  return (
-    <PagePlaceholder
-      title="Início"
-      description="Visão geral dos seus próximos horários e atalhos."
-      note="Aqui entrarão o próximo agendamento, atalhos para agendar e o resumo da sua atividade."
-    />
-  )
-}
-
-export function BarbeirosPage() {
-  return (
-    <PagePlaceholder
-      title="Barbeiros"
-      description="Escolha com quem você quer cortar."
-      note="Lista dos barbeiros ativos (GET /barbers) com seleção para seguir ao agendamento."
-    />
-  )
-}
-
-export function AgendamentoPage() {
-  return (
-    <PagePlaceholder
-      title="Agendar horário"
-      description="Barbeiro, serviço e horário — em sequência."
-      note="Fluxo: escolher barbeiro, carregar serviços (GET /services), consultar disponibilidade (GET /availability) e criar o agendamento (POST /appointments)."
-    />
-  )
-}
-
-export function MeusAgendamentosPage() {
-  return (
-    <PagePlaceholder
-      title="Meus agendamentos"
-      description="Seus horários agendados e o histórico."
-      note="Listagem de GET /appointments/my, com destaque para o próximo e ação de cancelamento."
-    />
-  )
-}
+/* Telas do cliente ainda não implementadas (escopo das próximas etapas).
+   O fluxo principal — Início, Barbeiros, Agendamento e Meus agendamentos —
+   vive em seus próprios arquivos: ClienteHomePage, BarbeirosPage,
+   AgendamentoPage e MeusAgendamentosPage. */
 
 export function ClienteNotificacoesPage() {
   return (

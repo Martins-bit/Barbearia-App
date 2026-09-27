@@ -3,7 +3,7 @@ import styles from './Badge.module.css'
 
 type Tone = 'neutral' | 'gold' | 'success' | 'danger' | 'warning' | 'info'
 
-interface BadgeProps {
+export interface BadgeProps {
   tone?: Tone
   children: ReactNode
 }

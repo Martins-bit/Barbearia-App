@@ -5,14 +5,14 @@ import { ROUTES } from './routes'
 import { LoginPage } from '../pages/auth/LoginPage'
 import { RegisterPage } from '../pages/auth/RegisterPage'
 import {
-  AgendamentoPage,
-  BarbeirosPage,
-  ClienteHomePage,
   ClienteMensagensPage,
   ClienteNotificacoesPage,
   ClientePerfilPage,
-  MeusAgendamentosPage,
 } from '../pages/cliente/ClientePages'
+import { ClienteHomePage } from '../pages/cliente/ClienteHomePage'
+import { BarbeirosPage } from '../pages/cliente/BarbeirosPage'
+import { AgendamentoPage } from '../pages/cliente/AgendamentoPage'
+import { MeusAgendamentosPage } from '../pages/cliente/MeusAgendamentosPage'
 import {
   AgendaPage,
   BarbeiroHomePage,
