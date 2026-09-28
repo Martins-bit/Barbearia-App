@@ -509,3 +509,91 @@
 .profileDetails .summaryValue {
   overflow-wrap: anywhere;
 }
+
+/* ---- Notificações ---- */
+.notificationList {
+  display: flex;
+  flex-direction: column;
+}
+
+.notificationRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+/* Não lida: filete dourado discreto à esquerda + ponto + título em destaque. */
+.notificationUnread {
+  box-shadow: inset 2px 0 0 var(--color-gold-line);
+}
+
+.notificationRow:first-child {
+  padding-top: 0;
+}
+
+.notificationRow:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.notificationBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1;
+}
+
+.notificationTop {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.notificationDot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background-color: var(--color-gold);
+  flex-shrink: 0;
+}
+
+.notificationTitle {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.notificationTitleRead {
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+
+.notificationMessage {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.notificationDate {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+
+.notificationSide {
+  flex-shrink: 0;
+}
+
+@media (max-width: 640px) {
+  .notificationRow {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .notificationSide {
+    align-self: flex-start;
+  }
+}

@@ -103,3 +103,20 @@ export interface Agendamento {
   barbeiro: BarbeiroResumo
   cliente: ClienteResumo
 }
+
+/**
+ * Notificação do usuário autenticado — espelha o NotificationResponse real do
+ * backend (GET /notifications, PATCH /notifications/:id/read). Datas chegam
+ * serializadas como ISO; `claimId`/`agendamentoId` só existem quando não nulos.
+ */
+export interface Notificacao {
+  id: number
+  tipo: TipoNotificacao
+  titulo: string
+  mensagem: string
+  lida: boolean
+  dataCriacao: string
+  dataLeitura: string | null
+  claimId?: number
+  agendamentoId?: number
+}
