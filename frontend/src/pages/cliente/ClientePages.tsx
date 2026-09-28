@@ -1,9 +1,10 @@
 import { PagePlaceholder } from '../../components/layout/PagePlaceholder'
 
 /* Telas do cliente ainda não implementadas (escopo das próximas etapas).
-   O fluxo principal — Início, Barbeiros, Agendamento e Meus agendamentos —
-   vive em seus próprios arquivos: ClienteHomePage, BarbeirosPage,
-   AgendamentoPage e MeusAgendamentosPage. */
+   O Perfil vive em seu próprio arquivo: ClientePerfilPage.tsx. O fluxo
+   principal — Início, Barbeiros, Agendamento e Meus agendamentos — também tem
+   arquivos próprios: ClienteHomePage, BarbeirosPage, AgendamentoPage e
+   MeusAgendamentosPage. */
 
 export function ClienteNotificacoesPage() {
   return (
@@ -21,16 +22,6 @@ export function ClienteMensagensPage() {
       title="Mensagens"
       description="Conversa direta com o barbeiro."
       note="Conversas, histórico e envio (GET /messages/conversations, POST /messages) — e tempo real na etapa de WebSocket."
-    />
-  )
-}
-
-export function ClientePerfilPage() {
-  return (
-    <PagePlaceholder
-      title="Perfil"
-      description="Seus dados de contato."
-      note="Dados do usuário (GET /auth/me) e ajustes permitidos."
     />
   )
 }

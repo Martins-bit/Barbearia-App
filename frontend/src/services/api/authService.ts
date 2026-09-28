@@ -29,8 +29,8 @@ export const authService = {
     return http.post<Usuario>('/auth/register', input, { skipAuth: true })
   },
 
-  me(): Promise<Usuario> {
-    return http.get<Usuario>('/auth/me')
+  me(signal?: AbortSignal): Promise<Usuario> {
+    return http.get<Usuario>('/auth/me', { signal })
   },
 
   logout(): void {

@@ -442,3 +442,70 @@
     text-align: left;
   }
 }
+
+/* ---- Acesso rápido (Início) ---- */
+.quickLinks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-3);
+}
+
+.quickLink {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  transition:
+    border-color var(--transition-base),
+    background-color var(--transition-base);
+}
+
+.quickLink:hover {
+  border-color: var(--color-gold-line);
+  background-color: var(--color-surface-hover);
+}
+
+.quickLinkTitle {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.quickLinkDescription {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* ---- Perfil ---- */
+.profileIdentity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.profileIdentityInfo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.profileName {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.profileRole {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* E-mails e valores longos não podem estourar a linha do par rótulo/valor. */
+.profileDetails .summaryValue {
+  overflow-wrap: anywhere;
+}

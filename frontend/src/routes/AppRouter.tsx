@@ -7,9 +7,9 @@ import { RegisterPage } from '../pages/auth/RegisterPage'
 import {
   ClienteMensagensPage,
   ClienteNotificacoesPage,
-  ClientePerfilPage,
 } from '../pages/cliente/ClientePages'
 import { ClienteHomePage } from '../pages/cliente/ClienteHomePage'
+import { ClientePerfilPage } from '../pages/cliente/ClientePerfilPage'
 import { BarbeirosPage } from '../pages/cliente/BarbeirosPage'
 import { AgendamentoPage } from '../pages/cliente/AgendamentoPage'
 import { MeusAgendamentosPage } from '../pages/cliente/MeusAgendamentosPage'

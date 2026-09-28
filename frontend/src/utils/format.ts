@@ -48,3 +48,16 @@ export function formatPhone(digits: string): string {
   }
   return digits
 }
+
+/** Data/hora ISO completa (ex.: dataCriacao) → "dd/mm/aaaa". */
+export function formatDateFull(value: string | Date): string {
+  const date = typeof value === 'string' ? new Date(value) : value
+  if (Number.isNaN(date.getTime())) {
+    return typeof value === 'string' ? value : ''
+  }
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date)
+}

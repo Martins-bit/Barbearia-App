@@ -1,7 +1,6 @@
 import { Link } from 'react-router-dom'
 import { PageHeader } from '../../components/layout/PagePlaceholder'
 import { Button } from '../../components/ui/Button'
-import { Card } from '../../components/ui/Card'
 import { EmptyState, ErrorState } from '../../components/ui/States'
 import { Loading } from '../../components/ui/Loading'
 import { AlertIcon, CalendarIcon } from '../../components/ui/icons/Icon'
@@ -25,9 +24,25 @@ function primeiroAgendamentoAtivo(
   )
 }
 
+/** Período do dia no fuso da barbearia, para a saudação do início. */
+function saudacaoDoDia(): string {
+  const hora = Number(
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'America/Sao_Paulo',
+      hour: '2-digit',
+      hourCycle: 'h23',
+    }).format(new Date()),
+  )
+  if (Number.isNaN(hora)) return 'Olá'
+  if (hora < 12) return 'Bom dia'
+  if (hora < 18) return 'Boa tarde'
+  return 'Boa noite'
+}
+
 /**
  * Início do cliente — resumo real: próximo agendamento confirmado
- * (GET /appointments/my) e atalho para agendar. Nenhum dado é estimado.
+ * (GET /appointments/my) e acesso rápido às principais telas (agendar,
+ * meus agendamentos e perfil). Nenhum dado é estimado.
  */
 export function ClienteHomePage() {
   const { user } = useAuth()
@@ -44,7 +59,7 @@ export function ClienteHomePage() {
   return (
     <div className={styles.page}>
       <PageHeader
-        title={primeiroNome ? `Olá, ${primeiroNome}` : 'Início'}
+        title={primeiroNome ? `${saudacaoDoDia()}, ${primeiroNome}` : 'Início'}
         description="Sua agenda na Barbearia do Bruno."
         actions={
           <Link to={ROUTES.cliente.agendamento}>
@@ -94,20 +109,32 @@ export function ClienteHomePage() {
         )}
       </section>
 
-      <section className={styles.section} aria-labelledby="atalhos">
+      <section className={styles.section} aria-labelledby="acesso-rapido">
         <div className={styles.sectionHead}>
-          <h2 id="atalhos" className={styles.sectionTitle}>
-            Atalhos
+          <h2 id="acesso-rapido" className={styles.sectionTitle}>
+            Acesso rápido
           </h2>
         </div>
-        <Card className={styles.actions}>
-          <Link to={ROUTES.cliente.agendamento}>
-            <Button variant="secondary">Agendar horário</Button>
+        <div className={styles.quickLinks}>
+          <Link className={styles.quickLink} to={ROUTES.cliente.agendamento}>
+            <span className={styles.quickLinkTitle}>Agendar horário</span>
+            <span className={styles.quickLinkDescription}>
+              Escolha o barbeiro, o serviço e o horário.
+            </span>
           </Link>
-          <Link to={ROUTES.cliente.agendamentos}>
-            <Button variant="secondary">Meus agendamentos</Button>
+          <Link className={styles.quickLink} to={ROUTES.cliente.agendamentos}>
+            <span className={styles.quickLinkTitle}>Meus agendamentos</span>
+            <span className={styles.quickLinkDescription}>
+              Próximos horários e histórico de atendimentos.
+            </span>
           </Link>
-        </Card>
+          <Link className={styles.quickLink} to={ROUTES.cliente.perfil}>
+            <span className={styles.quickLinkTitle}>Perfil</span>
+            <span className={styles.quickLinkDescription}>
+              Dados da sua conta.
+            </span>
+          </Link>
+        </div>
       </section>
     </div>
   )
