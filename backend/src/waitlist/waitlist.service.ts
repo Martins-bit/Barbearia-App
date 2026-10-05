@@ -249,6 +249,48 @@ export class WaitlistService {
     return entries.map((entry) => this.toResponse(entry));
   }
 
+  private async resolveBarbeiroId(userId: number): Promise<number> {
+    const barbeiro = await this.prisma.barbeiro.findUnique({
+      where: { usuarioId: userId },
+      select: { id: true, ativo: true },
+    });
+
+    if (!barbeiro || !barbeiro.ativo) {
+      throw new NotFoundException('Barbeiro não encontrado.');
+    }
+
+    return barbeiro.id;
+  }
+
+  /**
+   * Lista de espera do BARBEIRO autenticado — GET /waitlist.
+   *
+   * Ordena por prioridade (data desejada e, dentro dela, ordem de chegada/FIFO),
+   * espelhando a mesma regra usada na escolha de elegíveis para um slot. Inclui
+   * cliente e serviço para que a tela do barbeiro exiba os dados da solicitação.
+   */
+  async findBarberWaitlist(userId: number): Promise<any[]> {
+    const barbeiroId = await this.resolveBarbeiroId(userId);
+
+    const entries = await this.prisma.listaEspera.findMany({
+      where: { barbeiroId },
+      orderBy: [{ dataDesejada: 'asc' }, { dataEntrada: 'asc' }, { id: 'asc' }],
+      include: {
+        servico: { select: { id: true, nome: true } },
+        cliente: {
+          select: { id: true, usuario: { select: { nome: true } } },
+        },
+      },
+    });
+
+    return entries.map((entry) => ({
+      ...this.toResponse(entry),
+      cliente: entry.cliente
+        ? { id: entry.cliente.id, nome: entry.cliente.usuario?.nome ?? '' }
+        : null,
+    }));
+  }
+
   async findEligibleEntriesForSlot(
     barbeiroId: number,
     servicoId: number,

@@ -13,6 +13,35 @@ export const servicesService = {
   listByBarber(barbeiroId: number, signal?: AbortSignal): Promise<Servico[]> {
     return http.get<Servico[]>('/services', { query: { barbeiroId }, signal })
   },
+  listOwn(signal?: AbortSignal): Promise<Servico[]> {
+    return http.get<Servico[]>('/services/admin', { signal })
+  },
+  create(
+    payload: {
+      nome: string
+      descricao?: string | null
+      duracaoMinutos: number
+      preco: string
+    },
+    signal?: AbortSignal,
+  ): Promise<Servico> {
+    return http.post<Servico>('/services', payload, { signal })
+  },
+  update(
+    serviceId: number,
+    payload: {
+      nome?: string
+      descricao?: string | null
+      duracaoMinutos?: number
+      preco?: string
+    },
+    signal?: AbortSignal,
+  ): Promise<Servico> {
+    return http.patch<Servico>(`/services/${serviceId}`, payload, { signal })
+  },
+  updateStatus(serviceId: number, ativo: boolean, signal?: AbortSignal): Promise<Servico> {
+    return http.patch<Servico>(`/services/${serviceId}/status`, { ativo }, { signal })
+  },
 }
 
 export interface AvailabilityQuery {

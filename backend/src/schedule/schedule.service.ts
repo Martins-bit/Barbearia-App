@@ -192,6 +192,50 @@ export class ScheduleService {
       // Serializa contra criação de agendamentos e bloqueios concorrentes.
       await acquireCalendarLock(tx, barberId);
 
+      const activeWindowsByDay = new Map<number, MinuteInterval[]>();
+      for (const window of dto.horarios) {
+        if (window.ativo === false) {
+          continue;
+        }
+
+        const dayWindows = activeWindowsByDay.get(window.diaSemana) ?? [];
+        dayWindows.push({
+          ini: this.parseHHmm(window.horaInicio),
+          fim: this.parseHHmm(window.horaFim),
+        });
+        activeWindowsByDay.set(window.diaSemana, dayWindows);
+      }
+
+      const confirmedAppointments = await tx.agendamento.findMany({
+        where: {
+          barbeiroId: barberId,
+          status: StatusAgendamento.CONFIRMADO,
+        },
+        select: {
+          data: true,
+          horaInicio: true,
+          horaFim: true,
+        },
+      });
+
+      for (const appointment of confirmedAppointments) {
+        const appointmentDay = weekdayFromDateKey(
+          dateKeyFromUtcMidnight(appointment.data),
+        );
+        const appointmentStart = localMinuteOfDay(appointment.horaInicio);
+        const appointmentEnd = localMinuteOfDay(appointment.horaFim);
+        const isCovered = (activeWindowsByDay.get(appointmentDay) ?? []).some(
+          (window) =>
+            appointmentStart >= window.ini && appointmentEnd <= window.fim,
+        );
+
+        if (!isCovered) {
+          throw new ConflictException(
+            'Os novos horários entram em conflito com agendamentos existentes.',
+          );
+        }
+      }
+
       await tx.horarioFuncionamento.deleteMany({
         where: { barbeiroId: barberId },
       });

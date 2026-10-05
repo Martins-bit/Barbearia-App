@@ -32,6 +32,14 @@ export class WaitlistController {
     return this.waitlistService.create(userId, dto);
   }
 
+  /** Lista de espera do barbeiro autenticado (ordem de prioridade). */
+  @Get()
+  @UseGuards(JwtGuard, RolesGuard)
+  @Roles(TipoUsuario.BARBEIRO)
+  async findBarberWaitlist(@CurrentUser() userId: number) {
+    return this.waitlistService.findBarberWaitlist(userId);
+  }
+
   @Get('my')
   @UseGuards(JwtGuard, RolesGuard)
   @Roles(TipoUsuario.CLIENTE)

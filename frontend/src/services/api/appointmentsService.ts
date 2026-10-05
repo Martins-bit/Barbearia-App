@@ -21,9 +21,24 @@ export const appointmentsService = {
     return http.post<Agendamento>('/appointments', input)
   },
 
+  /** GET /appointments — agenda do barbeiro autenticado. */
+  listForBarber(signal?: AbortSignal): Promise<Agendamento[]> {
+    return http.get<Agendamento[]>('/appointments', { signal })
+  },
+
   /** GET /appointments/my — somente os agendamentos do cliente autenticado. */
   listMine(signal?: AbortSignal): Promise<Agendamento[]> {
     return http.get<Agendamento[]>('/appointments/my', { signal })
+  },
+
+  /** PATCH /appointments/:id/complete — conclui um agendamento confirmado. */
+  complete(id: number): Promise<Agendamento> {
+    return http.patch<Agendamento>(`/appointments/${id}/complete`)
+  },
+
+  /** PATCH /appointments/:id/no-show — marca falta do cliente. */
+  noShow(id: number): Promise<Agendamento> {
+    return http.patch<Agendamento>(`/appointments/${id}/no-show`)
   },
 
   /**

@@ -3,7 +3,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
-import { TipoUsuario } from '../src/generated/prisma/enums';
+import { StatusAgendamento, TipoUsuario } from '../src/generated/prisma/enums';
 import { hashPassword } from '../src/common/utils/password.util';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { getZonedParts, zonedWallTimeToUtc } from '../src/schedule/tz.util';
@@ -57,6 +57,40 @@ describe('Schedule (e2e)', () => {
       { diaSemana: 6, horaInicio: '08:00', horaFim: '12:00' },
       { diaSemana: 6, horaInicio: '13:00', horaFim: '17:00' },
     ],
+  };
+
+  const createAppointmentForSchedule = async (
+    date: string,
+    horaInicio: string,
+    horaFim: string,
+    status: StatusAgendamento = StatusAgendamento.CONFIRMADO,
+  ) => {
+    const appointment = await prisma.agendamento.create({
+      data: {
+        clienteId: clienteRowId,
+        barbeiroId: barberAId,
+        servicoId: svcA30Id,
+        data: new Date(`${date}T00:00:00.000Z`),
+        horaInicio: zonedWallTimeToUtc(date, horaInicio),
+        horaFim: zonedWallTimeToUtc(date, horaFim),
+        status,
+      },
+    });
+    appointmentIds.push(appointment.id);
+    return appointment;
+  };
+
+  const deleteAppointmentForSchedule = async (id: number) => {
+    await prisma.agendamento.delete({ where: { id } });
+    appointmentIds.splice(appointmentIds.indexOf(id), 1);
+  };
+
+  const restoreWeekBusinessHours = async () => {
+    await request(app.getHttpServer())
+      .put('/business-hours')
+      .set('Authorization', `Bearer ${barberAToken}`)
+      .send(weekPayload)
+      .expect(200);
   };
 
   beforeAll(async () => {
@@ -323,6 +357,191 @@ describe('Schedule (e2e)', () => {
         ],
       })
       .expect(400);
+  });
+
+  it('PUT permite alteração quando o período confirmado fica integralmente coberto', async () => {
+    const appointment = await createAppointmentForSchedule(
+      WEDNESDAY,
+      '10:00',
+      '11:00',
+    );
+
+    try {
+      const response = await request(app.getHttpServer())
+        .put('/business-hours')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          horarios: [{ diaSemana: 3, horaInicio: '09:00', horaFim: '12:00' }],
+        })
+        .expect(200);
+
+      expect(response.body).toHaveLength(1);
+      expect(response.body[0]).toMatchObject({
+        diaSemana: 3,
+        horaInicio: '09:00',
+        horaFim: '12:00',
+      });
+    } finally {
+      await deleteAppointmentForSchedule(appointment.id);
+      await restoreWeekBusinessHours();
+    }
+  });
+
+  it('PUT rejeita período confirmado que ultrapassa o novo horário', async () => {
+    const appointment = await createAppointmentForSchedule(
+      WEDNESDAY,
+      '10:00',
+      '11:00',
+    );
+
+    try {
+      const response = await request(app.getHttpServer())
+        .put('/business-hours')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          horarios: [{ diaSemana: 3, horaInicio: '09:00', horaFim: '10:30' }],
+        })
+        .expect(409);
+
+      expect(response.body.message).toBe(
+        'Os novos horários entram em conflito com agendamentos existentes.',
+      );
+    } finally {
+      await deleteAppointmentForSchedule(appointment.id);
+      await restoreWeekBusinessHours();
+    }
+  });
+
+  it('PUT rejeita agendamento que atravessa o intervalo entre períodos', async () => {
+    const appointment = await createAppointmentForSchedule(
+      WEDNESDAY,
+      '11:30',
+      '13:30',
+    );
+
+    try {
+      await request(app.getHttpServer())
+        .put('/business-hours')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          horarios: [
+            { diaSemana: 3, horaInicio: '09:00', horaFim: '12:00' },
+            { diaSemana: 3, horaInicio: '13:00', horaFim: '18:00' },
+          ],
+        })
+        .expect(409);
+    } finally {
+      await deleteAppointmentForSchedule(appointment.id);
+      await restoreWeekBusinessHours();
+    }
+  });
+
+  it('PUT permite múltiplos períodos quando cobrem todos os confirmados', async () => {
+    const appointments = [
+      await createAppointmentForSchedule(WEDNESDAY, '10:00', '11:00'),
+      await createAppointmentForSchedule(WEDNESDAY, '13:30', '14:00'),
+    ];
+
+    try {
+      const response = await request(app.getHttpServer())
+        .put('/business-hours')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          horarios: [
+            { diaSemana: 3, horaInicio: '09:00', horaFim: '12:00' },
+            { diaSemana: 3, horaInicio: '13:00', horaFim: '18:00' },
+          ],
+        })
+        .expect(200);
+
+      expect(response.body).toHaveLength(2);
+    } finally {
+      for (const appointment of appointments) {
+        await deleteAppointmentForSchedule(appointment.id);
+      }
+      await restoreWeekBusinessHours();
+    }
+  });
+
+  it('PUT ignora agendamentos cancelados, concluídos e não comparecidos', async () => {
+    const appointments = [
+      await createAppointmentForSchedule(
+        WEDNESDAY,
+        '10:00',
+        '11:00',
+        StatusAgendamento.CANCELADO,
+      ),
+      await createAppointmentForSchedule(
+        WEDNESDAY,
+        '11:00',
+        '12:00',
+        StatusAgendamento.CONCLUIDO,
+      ),
+      await createAppointmentForSchedule(
+        WEDNESDAY,
+        '12:00',
+        '13:00',
+        StatusAgendamento.NAO_COMPARECEU,
+      ),
+    ];
+
+    try {
+      const response = await request(app.getHttpServer())
+        .put('/business-hours')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          horarios: [{ diaSemana: 3, horaInicio: '09:00', horaFim: '09:30' }],
+        })
+        .expect(200);
+
+      expect(response.body).toHaveLength(1);
+    } finally {
+      for (const appointment of appointments) {
+        await deleteAppointmentForSchedule(appointment.id);
+      }
+      await restoreWeekBusinessHours();
+    }
+  });
+
+  it('PUT mantém a configuração anterior quando há conflito', async () => {
+    await request(app.getHttpServer())
+      .put('/business-hours')
+      .set('Authorization', `Bearer ${barberAToken}`)
+      .send({
+        horarios: [{ diaSemana: 3, horaInicio: '09:00', horaFim: '18:00' }],
+      })
+      .expect(200);
+
+    const appointment = await createAppointmentForSchedule(
+      WEDNESDAY,
+      '10:00',
+      '11:00',
+    );
+
+    try {
+      const before = await request(app.getHttpServer())
+        .get('/business-hours')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .expect(200);
+
+      await request(app.getHttpServer())
+        .put('/business-hours')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .send({
+          horarios: [{ diaSemana: 3, horaInicio: '09:00', horaFim: '10:30' }],
+        })
+        .expect(409);
+
+      const after = await request(app.getHttpServer())
+        .get('/business-hours')
+        .set('Authorization', `Bearer ${barberAToken}`)
+        .expect(200);
+
+      expect(after.body).toEqual(before.body);
+    } finally {
+      await deleteAppointmentForSchedule(appointment.id);
+      await restoreWeekBusinessHours();
+    }
   });
 
 

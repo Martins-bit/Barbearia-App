@@ -74,6 +74,40 @@ export interface Disponibilidade {
   horariosLivres: string[]
 }
 
+/** GET/PUT /business-hours — janela semanal de funcionamento do barbeiro. */
+export interface HorarioFuncionamento {
+  id: number
+  diaSemana: number
+  horaInicio: string
+  horaFim: string
+  ativo: boolean
+}
+
+/** GET/POST /schedule-blocks — bloqueio pontual da agenda do barbeiro. */
+export interface BloqueioAgenda {
+  id: number
+  data: string
+  horaInicio: string
+  horaFim: string
+  motivo: string | null
+  ativo: boolean
+}
+
+/** GET /waitlist — lista de espera do BARBEIRO autenticado (ordem de prioridade). */
+export interface EntradaListaEspera {
+  id: number
+  barbeiroId: number
+  servicoId: number
+  status: StatusListaEspera
+  data: string
+  horaInicio: string | null
+  horaFim: string | null
+  dataEntrada: string
+  dataAtualizacao: string
+  servico?: { id: number; nome: string }
+  cliente?: { id: number; nome: string } | null
+}
+
 export interface ServicoInformativo {
   id: number
   nome: string

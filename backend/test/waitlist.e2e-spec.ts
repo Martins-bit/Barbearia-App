@@ -519,6 +519,46 @@ describe('Waitlist (e2e)', () => {
     expect(other.body.length).toBeGreaterThanOrEqual(0);
   });
 
+  it('lista a espera do barbeiro autenticado com cliente e serviço', async () => {
+    const created = await postWaitlist(clientAToken, {
+      barbeiroId: barberAId,
+      servicoId: serviceAId,
+      data: '2099-01-20',
+    }).expect(201);
+    waitlistIds.push(created.body.id);
+
+    const barberList = await request(app.getHttpServer())
+      .get('/waitlist')
+      .set('Authorization', `Bearer ${barberAToken}`)
+      .expect(200);
+
+    const entry = barberList.body.find(
+      (item: any) => item.id === created.body.id,
+    );
+    expect(entry).toBeDefined();
+    expect(entry.status).toBe(StatusListaEspera.ATIVA);
+    expect(entry.data).toBe('2099-01-20');
+    expect(entry.servico?.id).toBe(serviceAId);
+    expect(entry.cliente?.id).toBe(clientAId);
+    expect(entry.cliente?.nome).toBe('Cliente A Waitlist');
+
+    // Escopo: só retornam entradas deste barbeiro (não vaza a lista de outro).
+    expect(
+      barberList.body.every((item: any) => item.barbeiroId === barberAId),
+    ).toBe(true);
+  });
+
+  it('aplica autenticação e papel na lista do barbeiro', async () => {
+    // Sem token → 401.
+    await request(app.getHttpServer()).get('/waitlist').expect(401);
+
+    // CLIENTE não pode listar a lista do barbeiro → 403.
+    await request(app.getHttpServer())
+      .get('/waitlist')
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(403);
+  });
+
   it('cancela própria entrada e impede cancelamento repetido', async () => {
     const created = await postWaitlist(clientAToken, {
       barbeiroId: barberAId,
