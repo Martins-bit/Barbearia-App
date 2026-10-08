@@ -52,7 +52,10 @@ export interface LoginResponse {
 
 /** GET /barbers — barbeiro elegível para escolha. */
 export interface Barbeiro {
+  /** Barbeiro.id (usado em agendamentos). */
   id: number
+  /** Usuario.id (usado como destinatarioId em mensagens). */
+  usuarioId: number
   nome: string
 }
 
@@ -64,6 +67,33 @@ export interface Servico {
   duracaoMinutos: number
   preco: string
   ativo: boolean
+}
+
+/** Mensagem CLIENTE <-> BARBEIRO (`MessageResponseDto`). */
+export interface Mensagem {
+  id: number
+  /** Usuário que enviou (vindo do JWT no servidor). */
+  remetenteUsuarioId: number
+  /** Usuário que recebeu. */
+  destinatarioUsuarioId: number
+  /** Conteúdo (1..500 caracteres no servidor). */
+  conteudo: string
+  /** `true` quando o destinatário já leu. */
+  lida: boolean
+  dataCriacao: string
+  dataLeitura: string | null
+}
+
+/** `GET /messages/conversations` — outro participante de uma conversa. */
+export interface Conversa {
+  usuarioId: number
+  nome: string
+  /** `CLIENTE` ou `BARBEIRO`. */
+  tipoUsuario: TipoUsuario
+  ultimaMensagem: string
+  ultimaMensagemDataCriacao: string
+  /** Mensagens não lidas pelo usuário autenticado nesta conversa. */
+  naoLidas: number
 }
 
 /** GET /availability — horários livres de um barbeiro para data + serviço. */

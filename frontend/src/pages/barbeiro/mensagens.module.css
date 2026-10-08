@@ -1,0 +1,358 @@
+/* ============================================================================
+   Mensagens do barbeiro — lista de conversas + conversa aberta.
+   Identidade do app: fundo escuro, dourado discreto, sem exageros.
+   ============================================================================ */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* Duas colunas: lista à esquerda (fixa) e conversa à direita (fluida). */
+.colunas {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: var(--space-4);
+  align-items: stretch;
+  min-height: 0;
+}
+
+/* ---- Lista de conversas ---- */
+.lista {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-height: 560px;
+  overflow-y: auto;
+  padding: var(--space-2);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.itemConversa {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--duration-fast, 120ms) ease;
+}
+
+.itemConversa:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.itemConversa:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.itemAtivo {
+  background-color: var(--color-surface-inset);
+  box-shadow: inset 2px 0 0 var(--color-gold-line);
+}
+
+.itemCorpo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.itemTopo {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.itemNome {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemQuando {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+
+.itemResumo {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemBadge {
+  flex-shrink: 0;
+  min-width: 1.25rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-pill);
+  background-color: var(--color-gold);
+  color: var(--color-text-on-gold);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.2;
+  text-align: center;
+}
+
+/* ---- Conversa aberta ---- */
+.conversa {
+  display: flex;
+  flex-direction: column;
+  min-height: 480px;
+  max-height: 560px;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.conversaVazia {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+}
+
+.cabecalho {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background-color: var(--color-bg-elevated);
+}
+
+.cabecalhoNome {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cabecalhoTitulo {
+  font-size: var(--text-md);
+  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cabecalhoEstado {
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+}
+
+.cabecalhoEstadoOn {
+  color: var(--color-gold);
+}
+
+.historico {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+  background-color: var(--color-bg-elevated);
+}
+
+/* ---- Bolhas de mensagem ---- */
+.bolha {
+  max-width: 75%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal, 1.55);
+}
+
+/* Mensagens do próprio barbeiro: fundo dourado suave, alinhadas à direita. */
+.bolhaMinha {
+  align-self: flex-end;
+  background-color: var(--color-gold-soft);
+  border: 1px solid var(--color-gold-line);
+  color: var(--color-text);
+}
+
+/* Mensagens recebidas do cliente: superfície neutra, alinhadas à esquerda. */
+.bolhaDele {
+  align-self: flex-start;
+  background-color: var(--color-surface-inset);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+.bolhaTexto {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.bolhaHora {
+  display: block;
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  color: var(--color-text-faint);
+  text-align: right;
+}
+
+/* ---- Painel: iniciar nova conversa (cliente) ---- */
+.painelNovo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.painelTopo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.painelTitulo {
+  margin: 0;
+  font-size: var(--text-lg);
+  color: var(--color-text);
+}
+
+.painelCorpo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.painelBarbeiros {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.painelBarbeiro {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-surface-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color var(--duration-fast, 120ms) ease;
+}
+
+.painelBarbeiro:hover {
+  border-color: var(--color-border-strong);
+}
+
+.painelBarbeiro:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.painelBarbeiroAtivo {
+  border-color: var(--color-gold-line);
+  box-shadow: inset 0 0 0 1px var(--color-gold-line);
+}
+
+.painelBarbeiroNome {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.painelErro {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--color-gold-strong);
+}
+
+.painelAcoes {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ---- Compositor ---- */
+.compositor {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border-subtle);
+  background-color: var(--color-bg-elevated);
+}
+
+.compositorEntrada {
+  flex: 1;
+  min-width: 0;
+  max-height: 8rem;
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-surface-inset);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  resize: vertical;
+}
+
+.compositorEntrada::placeholder {
+  color: var(--color-text-faint);
+}
+
+.compositorEntrada:focus-visible {
+  outline: none;
+  border-color: var(--color-gold-line);
+  box-shadow: var(--focus-ring);
+}
+
+/* ---- Responsividade ---- */
+@media (max-width: 900px) {
+  .colunas {
+    grid-template-columns: 260px 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .colunas {
+    grid-template-columns: 1fr;
+  }
+
+  .lista {
+    max-height: 260px;
+  }
+
+  .conversa {
+    min-height: 380px;
+  }
+
+  .bolha {
+    max-width: 88%;
+  }
+}

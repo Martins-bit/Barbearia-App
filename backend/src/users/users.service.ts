@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TipoUsuario } from '../generated/prisma/enums';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { BarberResponseDto } from '../barbers/dto/barber-response.dto';
 
 @Injectable()
 export class UsersService {
@@ -90,7 +91,7 @@ export class UsersService {
    * Não há filtro arbitrário: um barbeiro inativo (perfil ou usuário) nunca é
    * listado, e o cliente não pode escolher quem aparece.
    */
-  async findActiveBarbers(): Promise<{ id: number; nome: string }[]> {
+  async findActiveBarbers(): Promise<BarberResponseDto[]> {
     const barbeiros = await this.prisma.barbeiro.findMany({
       where: {
         ativo: true,
@@ -98,6 +99,7 @@ export class UsersService {
       },
       select: {
         id: true,
+        usuarioId: true,
         usuario: { select: { nome: true } },
       },
       orderBy: { id: 'asc' },
@@ -105,6 +107,7 @@ export class UsersService {
 
     return barbeiros.map((barbeiro) => ({
       id: barbeiro.id,
+      usuarioId: barbeiro.usuarioId,
       nome: barbeiro.usuario.nome,
     }));
   }

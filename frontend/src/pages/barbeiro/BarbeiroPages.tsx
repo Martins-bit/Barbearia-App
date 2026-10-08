@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { PageHeader, PagePlaceholder } from '../../components/layout/PagePlaceholder'
 import { Button } from '../../components/ui/Button'
+import { Card } from '../../components/ui/Card'
 import { EmptyState, ErrorState } from '../../components/ui/States'
 import { Loading } from '../../components/ui/Loading'
 import { Modal } from '../../components/ui/Modal'
@@ -15,6 +16,8 @@ import {
 } from '../../components/ui/icons/Icon'
 import { useApiResource } from '../../hooks/useApiResource'
 import { useAuth } from '../../contexts/useAuth'
+import { useToast } from '../../contexts/useToast'
+import { useUnreadNotifications } from '../../contexts/unread-notifications'
 import { appointmentsService } from '../../services/api/appointmentsService'
 import { barberScheduleService } from '../../services/api/barberScheduleService'
 import { notificationsService } from '../../services/api/notificationsService'
@@ -22,9 +25,10 @@ import { scheduleBlocksService } from '../../services/api/scheduleBlocksService'
 import { waitlistService } from '../../services/api/waitlistService'
 import { servicesService } from '../../services/api/catalogService'
 import { ApiError } from '../../services/api/ApiError'
-import type { Agendamento, BloqueioAgenda, EntradaListaEspera, Servico } from '../../types/domain'
-import type { HorarioFuncionamento } from '../../types/domain'
+import type { Agendamento, BloqueioAgenda, EntradaListaEspera, Notificacao, Servico } from '../../types/domain'
+import type { HorarioFuncionamento, TipoNotificacao } from '../../types/domain'
 import { todayDateKey } from '../../utils/date'
+import { formatDateFull, formatTime } from '../../utils/format'
 import styles from './barbeiro.module.css'
 
 function sortAppointments(a: Agendamento, b: Agendamento): number {
@@ -97,6 +101,31 @@ function formatEntryTimestamp(iso: string): string {
     hour: '2-digit',
     minute: '2-digit',
   }).format(new Date(iso))
+}
+
+/**
+ * Rótulo de apresentação do tipo de notificação. É apenas tradução de
+ * exibição do enum real do backend (TipoNotificacao) — nenhuma regra de
+ * negócio é decidida aqui.
+ */
+const NOTIFICATION_KIND_LABELS: Record<TipoNotificacao, string> = {
+  WAITLIST_OPPORTUNITY: 'Oportunidade',
+  AGENDAMENTO: 'Agendamento',
+  CANCELAMENTO: 'Cancelamento',
+  LEMBRETE: 'Lembrete',
+  LISTA_ESPERA: 'Lista de espera',
+  EMERGENCIA: 'Emergência',
+  AVISO: 'Aviso',
+  ALTERACAO_HORARIO: 'Alteração de horário',
+}
+
+function formatNotificationKind(tipo: TipoNotificacao): string {
+  return NOTIFICATION_KIND_LABELS[tipo] ?? tipo
+}
+
+/** Mensagem legível de uma falha da camada de API (mesma convenção da área). */
+function mensagemDeErro(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback
 }
 
 /** Início do barbeiro — painel resumido da operação. */
@@ -1754,25 +1783,221 @@ export function ListaEsperaPage() {
   )
 }
 
+/**
+ * Notificações do BARBEIRO — dados reais de `GET /notifications` (o backend
+ * valida a titularidade a partir do JWT; o controller não declara `@Roles`,
+ * então o endpoint atende qualquer usuário autenticado).
+ *
+ * A marcação de leitura usa os retornos do próprio backend
+ * (`PATCH /notifications/:id/read` e `PATCH /notifications/read-all`): a lista
+ * local é atualizada com a resposta CONFIRMADA do servidor, sem refetch que
+ * recarregue a tela inteira. Após cada ação bem-sucedida o indicador do menu
+ * é ressincronizado via `GET /notifications/unread-count`.
+ *
+ * Nenhum polling, nenhum laço de requisição, nenhum dado inventado.
+ */
 export function BarbeiroNotificacoesPage() {
+  const toast = useToast()
+  const contador = useUnreadNotifications()
+  const carregamento = useApiResource('barbeiro:notifications:mine', (signal) =>
+    notificationsService.list(signal),
+  )
+
+  // Cópia local da lista devolvida pela API; cada marcação de leitura
+  // substitui o item pela resposta confirmada do servidor.
+  const [itens, setItens] = useState<Notificacao[]>([])
+  const [lendoId, setLendoId] = useState<number | null>(null)
+  const [marcandoTodas, setMarcandoTodas] = useState(false)
+
+  useEffect(() => {
+    if (carregamento.data) setItens(carregamento.data)
+  }, [carregamento.data])
+
+  const naoLidas = itens.filter((item) => !item.lida)
+
+  async function marcarComoLida(notificacao: Notificacao) {
+    if (lendoId !== null) return
+    setLendoId(notificacao.id)
+    try {
+      const atualizada = await notificationsService.markAsRead(notificacao.id)
+      setItens((atual) =>
+        atual.map((item) => (item.id === atualizada.id ? atualizada : item)),
+      )
+      contador.refresh()
+    } catch (error) {
+      toast.error(
+        mensagemDeErro(error, 'Não foi possível marcar como lida.'),
+        'Falha ao atualizar',
+      )
+    } finally {
+      setLendoId(null)
+    }
+  }
+
+  async function marcarTodasComoLidas() {
+    if (marcandoTodas) return
+    setMarcandoTodas(true)
+    try {
+      await notificationsService.markAllAsRead()
+      setItens((atual) =>
+        atual.map((item) => (item.lida ? item : { ...item, lida: true })),
+      )
+      contador.refresh()
+      toast.success('Todas as notificações foram marcadas como lidas.')
+    } catch (error) {
+      toast.error(
+        mensagemDeErro(error, 'Não foi possível marcar todas como lidas.'),
+        'Falha ao atualizar',
+      )
+    } finally {
+      setMarcandoTodas(false)
+    }
+  }
+
+  const unauthorized =
+    carregamento.error?.status === 401 || carregamento.error?.status === 403
+  const errorMessage = unauthorized
+    ? 'Você não tem permissão para visualizar as notificações.'
+    : carregamento.error?.message ??
+      'Não foi possível carregar as notificações.'
+
   return (
-    <PagePlaceholder
-      title="Notificações"
-      description="Avisos da sua operação."
-      note="Lista de GET /notifications e marcação de leitura."
-    />
+    <div className={styles.page}>
+      <PageHeader
+        title="Notificações"
+        description="Avisos sobre a agenda e o funcionamento da barbearia."
+        actions={
+          !carregamento.loading &&
+          !carregamento.error &&
+          naoLidas.length > 0 ? (
+            <Button
+              variant="secondary"
+              loading={marcandoTodas}
+              onClick={marcarTodasComoLidas}
+            >
+              Marcar todas como lidas
+            </Button>
+          ) : null
+        }
+      />
+
+      <section
+        className={styles.section}
+        aria-labelledby="notificacoes-barbeiro"
+      >
+        <div className={styles.sectionHead}>
+          <span className="eyebrow">Caixa de entrada</span>
+          <h2 id="notificacoes-barbeiro" className={styles.sectionTitle}>
+            Notificações da operação
+          </h2>
+          {!carregamento.loading &&
+            !carregamento.error &&
+            naoLidas.length > 0 && (
+              <p className={styles.notificationSummary}>
+                {naoLidas.length}{' '}
+                {naoLidas.length === 1 ? 'não lida' : 'não lidas'}
+              </p>
+            )}
+        </div>
+
+        {carregamento.loading && <Loading label="Carregando notificações" />}
+
+        {!carregamento.loading && carregamento.error && (
+          <ErrorState
+            title="Não foi possível carregar as notificações"
+            description={errorMessage}
+            icon={<AlertIcon size={22} />}
+            action={
+              <Button variant="secondary" onClick={carregamento.reload}>
+                Tentar novamente
+              </Button>
+            }
+          />
+        )}
+
+        {!carregamento.loading && !carregamento.error && itens.length === 0 && (
+          <EmptyState
+            title="Nenhuma notificação"
+            description="Avisos sobre agendamentos, cancelamentos e o funcionamento da barbearia aparecem aqui."
+            icon={<BellIcon size={22} />}
+          />
+        )}
+
+        {!carregamento.loading && !carregamento.error && itens.length > 0 && (
+          <Card className={styles.notificationList}>
+            {itens.map((notificacao) => (
+              <article
+                key={notificacao.id}
+                className={[
+                  styles.notificationRow,
+                  notificacao.lida ? '' : styles.notificationUnread,
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+              >
+                <div className={styles.notificationBody}>
+                  <div className={styles.notificationTop}>
+                    {!notificacao.lida && (
+                      <>
+                        <span
+                          className={styles.notificationDot}
+                          aria-hidden="true"
+                        />
+                        <span className="visually-hidden">Não lida.</span>
+                      </>
+                    )}
+                    <span
+                      className={[
+                        styles.notificationTitle,
+                        notificacao.lida ? styles.notificationTitleRead : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    >
+                      {notificacao.titulo}
+                    </span>
+                  </div>
+
+                  <p className={styles.notificationMessage}>
+                    {notificacao.mensagem}
+                  </p>
+
+                  <p className={styles.notificationMeta}>
+                    <span className={styles.notificationKind}>
+                      {formatNotificationKind(notificacao.tipo)}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <time dateTime={notificacao.dataCriacao}>
+                      {formatDateFull(notificacao.dataCriacao)} às{' '}
+                      {formatTime(notificacao.dataCriacao)}
+                    </time>
+                  </p>
+                </div>
+
+                {!notificacao.lida && (
+                  <div className={styles.notificationSide}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      loading={lendoId === notificacao.id}
+                      disabled={lendoId !== null}
+                      onClick={() => marcarComoLida(notificacao)}
+                    >
+                      Marcar como lida
+                    </Button>
+                  </div>
+                )}
+              </article>
+            ))}
+          </Card>
+        )}
+      </section>
+    </div>
   )
 }
 
-export function BarbeiroMensagensPage() {
-  return (
-    <PagePlaceholder
-      title="Mensagens"
-      description="Conversas com os clientes."
-      note="Conversas e envio (GET /messages/conversations, POST /messages)."
-    />
-  )
-}
+// A implementação da página de mensagens vive no arquivo dedicado.
+export { BarbeiroMensagensPage } from './MensagensPage'
 
 export function BarbeiroPerfilPage() {
   return (

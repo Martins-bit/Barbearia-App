@@ -12,6 +12,11 @@ export interface NavItem {
   to: string
   icon: ReactNode
   end?: boolean
+  /**
+   * Contador discreto exibido ao lado do rótulo (ex.: notificações não lidas).
+   * Ausente ou ≤ 0 nada é renderizado — o item segue exatamente como antes.
+   */
+  badge?: number
 }
 
 interface AppLayoutProps {
@@ -83,7 +88,15 @@ export function AppLayout({
               onClick={() => mobileOpen && onToggleMobile()}
             >
               <span className={styles.navIcon}>{item.icon}</span>
-              <span>{item.label}</span>
+              <span className={styles.navLabel}>{item.label}</span>
+              {typeof item.badge === 'number' && item.badge > 0 && (
+                <span
+                  className={styles.navBadge}
+                  aria-label={`${item.badge} não lidas`}
+                >
+                  {item.badge > 99 ? '99+' : item.badge}
+                </span>
+              )}
             </NavLink>
           ))}
         </nav>
