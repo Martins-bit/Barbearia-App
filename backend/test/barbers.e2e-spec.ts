@@ -17,6 +17,7 @@ describe('Barbers (e2e)', () => {
   let disabledUserId: number;
 
   let barbeiroAtivoId: number;
+  let barbeiroAtivoUsuarioId: number; // Usuario.id (destinatário de mensagens)
   let barbeiroInativoId: number;
   let barbeiroSemPerfilAtivoToken: string;
 
@@ -74,6 +75,7 @@ describe('Barbers (e2e)', () => {
     const barberAtivo = await createBarber('Barbeiro Ativo Barbers E2E', true);
     const barberInativo = await createBarber('Barbeiro Inativo Barbers E2E', false);
     barbeiroAtivoId = barberAtivo.barbeiro!.id;
+    barbeiroAtivoUsuarioId = barberAtivo.id; // Usuario.id (não Barbeiro.id)
     barbeiroInativoId = barberInativo.barbeiro!.id;
 
     // Cliente desativável: usado para validar bloqueio de Usuario.ativo = false.
@@ -139,7 +141,13 @@ describe('Barbers (e2e)', () => {
     expect(Array.isArray(response.body)).toBe(true);
     expect(response.body).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: barbeiroAtivoId, nome: 'Barbeiro Ativo Barbers E2E' }),
+        expect.objectContaining({
+          id: barbeiroAtivoId,
+          // `usuarioId` é o Usuario.id do barbeiro — o destinatário correto do
+          // domínio de mensagens (GET /barbers alimenta o fluxo de conversa).
+          usuarioId: barbeiroAtivoUsuarioId,
+          nome: 'Barbeiro Ativo Barbers E2E',
+        }),
       ]),
     );
   });
@@ -201,7 +209,7 @@ describe('Barbers (e2e)', () => {
       .expect(200);
 
     for (const barber of response.body) {
-      expect(Object.keys(barber).sort()).toEqual(['id', 'nome']);
+      expect(Object.keys(barber).sort()).toEqual(['id', 'nome', 'usuarioId']);
       expect(barber).not.toHaveProperty('senhaHash');
       expect(barber).not.toHaveProperty('telefone');
       expect(barber).not.toHaveProperty('email');

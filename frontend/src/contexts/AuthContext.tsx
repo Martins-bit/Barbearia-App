@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { authService } from '../services/api/authService'
 import { authTokenStorage } from '../services/api/http'
+import { messagesSocket } from '../services/api/messagesSocket'
 import type { LoginInput } from '../services/api/authService'
 import type { Usuario } from '../types/domain'
 import { AuthContext, type AuthContextValue, type AuthStatus } from './auth-context'
@@ -49,6 +50,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (input: LoginInput) => {
     const response = await authService.login(input)
+    // Sessão nova: derruba qualquer socket herdado da sessão anterior. A
+    // identidade do socket vem do JWT do handshake — mantê-la causaria envios
+    // atribuídos ao usuário anterior (Etapa 8.9).
+    messagesSocket.disconnect()
     setUser(response.user)
     setStatus('authenticated')
     return response.user
@@ -56,6 +61,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(() => {
     authService.logout()
+    // Sem sessão não deve restar conexão autenticada: sem este teardown o
+    // socket sobreviveria ao logout com o JWT/identidade do usuário que saiu.
+    messagesSocket.disconnect()
     setUser(null)
     setStatus('unauthenticated')
   }, [])

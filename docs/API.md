@@ -206,6 +206,7 @@ Aparecem somente barbeiros com **perfil de barbeiro ativo** e **usuário ativo**
 Lista de objetos com o mínimo público necessário para identificar o barbeiro e usar o seu id:
 
 - `id` — identificador do barbeiro (usado em `GET /api/services?barbeiroId=` e em `POST /api/appointments`);
+- `usuarioId` — `Usuario.id` do barbeiro (usado como `destinatarioId` no fluxo de mensagens — o domínio de mensagens opera com `Usuario.id`, não com `Barbeiro.id`);
 - `nome` — nome público do barbeiro.
 
 Sem telefone, e-mail, `senhaHash`, `tipoUsuario`, timestamps, tokens ou qualquer dado administrativo. Lista vazia (`[]`) quando não houver barbeiros elegíveis.
