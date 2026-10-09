@@ -8,6 +8,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -34,6 +35,19 @@ export class MessagesController {
   constructor(private readonly messagesService: MessagesService) {}
 
   @Post()
+  // Rate limit (ETAPA 2): 30 envios / minuto, rastreados pelo usuário
+  // autenticado (req.user.sub), não por IP — mesma semântica do evento
+  // message:send do WebSocket. O JwtGuard (nível de classe) popula req.user
+  // ANTES deste guard, por isso o tracker por usuário é seguro aqui.
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    default: {
+      limit: 30,
+      ttl: 60_000,
+      getTracker: (req: { user?: { sub?: unknown } }) =>
+        `usuario:${String(req?.user?.sub ?? 'anon')}`,
+    },
+  })
   async sendMessage(
     @CurrentUser() usuarioId: number,
     @Body() dto: SendMessageDto,

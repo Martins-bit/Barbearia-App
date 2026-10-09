@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule as NestScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -19,6 +20,11 @@ import { BarbersModule } from './barbers/barbers.module';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    // Rate limiting (ETAPA 2): registra provider/storage do throttler para que
+    // o ThrottlerGuard funcione onde for aplicado via @UseGuards (login,
+    // register, POST /messages). NÃO é guard global — os limites por rota vêm
+    // de @Throttle. O default abaixo é só fallback.
+    ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }]),
     // Scheduler oficial do Nest (alias NestScheduleModule para não colidir
     // com o ScheduleModule de domínio da agenda). Habilita o job periódico
     // de lembretes definido em NotificationsModule.

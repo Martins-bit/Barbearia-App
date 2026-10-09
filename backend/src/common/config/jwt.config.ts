@@ -1,14 +1,13 @@
-import { config } from 'dotenv';
-import { resolve } from 'path';
-
-config({
-  path: resolve(process.cwd(), '.env'),
-});
-
 export function validateAndGetJwtSecret(): string {
   const secret = process.env.JWT_SECRET;
 
-  if (!secret || secret.trim().length < 32) {
+  if (typeof secret !== 'string') {
+    throw new Error(
+      'JWT_SECRET must be defined and contain at least 32 characters.',
+    );
+  }
+
+  if (secret.trim().length < 32) {
     throw new Error(
       'JWT_SECRET must be defined and contain at least 32 characters.',
     );

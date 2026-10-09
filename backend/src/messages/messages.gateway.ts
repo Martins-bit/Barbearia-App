@@ -20,6 +20,8 @@ import { MessageResponseDto } from './dto/message-response.dto';
 import { SendMessageSocketDto } from './dto/send-message-socket.dto';
 import { MessagesService } from './messages.service';
 import { MessagesSocketRegistry } from './messages.socket-registry';
+import { resolveAllowedOrigins } from '../common/config/cors.config';
+import { SlidingWindowRateLimiter } from '../common/utils/sliding-window-rate-limiter';
 
 /** Identidade anexada ao socket exclusivamente a partir do JWT validado. */
 export interface SocketIdentity {
@@ -68,11 +70,21 @@ interface PingPongDto {
  * - NÃO há read/unread-count via socket, fila offline, presença,
  *   typing indicator, Redis, push, e-mail ou WhatsApp nesta etapa.
  */
-@WebSocketGateway({ namespace: '/messages' })
+@WebSocketGateway({
+  namespace: '/messages',
+  // Mesmas origens autorizadas do CORS REST (ETAPA 2), com credenciais.
+  // A autenticação JWT no handshake (afterInit) permanece inalterada.
+  cors: { origin: resolveAllowedOrigins(), credentials: true },
+})
 export class MessagesGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
 {
   private readonly logger = new Logger(MessagesGateway.name);
+
+  // Rate limit do evento message:send (ETAPA 2): 30 envios / minuto por
+  // usuário autenticado. O ThrottlerGuard do Nest só cobre rotas HTTP, por
+  // isso eventos WebSocket usam este limitador em memória.
+  private readonly sendRateLimiter = new SlidingWindowRateLimiter(30, 60_000);
 
   @WebSocketServer()
   server?: Server;
@@ -304,6 +316,16 @@ export class MessagesGateway
     // emitido ao cliente dentro da revalidação.
     const identity = await this.assertCurrentAuthorization(client);
     if (!identity) {
+      return;
+    }
+
+    // Rate limit (ETAPA 2): identidade vem do JWT (usuário autenticado), não
+    // de IP. Excedido → aviso genérico e retorno, sem persistir.
+    if (!this.sendRateLimiter.tryConsume(String(identity.usuarioId))) {
+      client.emit('exception', {
+        status: 'error',
+        message: 'Muitas mensagens enviadas. Aguarde um momento.',
+      });
       return;
     }
 
