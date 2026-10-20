@@ -4,9 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import {
-  SLOT_GRANULARITY_MINUTES,
-} from '../schedule/schedule.service';
+import { SLOT_GRANULARITY_MINUTES } from '../schedule/schedule.service';
 import { StatusListaEspera } from '../generated/prisma/enums';
 import { WaitlistService } from './waitlist.service';
 
@@ -34,7 +32,9 @@ export class WaitlistOpportunityService {
     return `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
   }
 
-  async tryCreateForReleasedWindow(window: ReleasedWindow): Promise<any | null> {
+  async tryCreateForReleasedWindow(
+    window: ReleasedWindow,
+  ): Promise<any | null> {
     const releasedStart = this.parseHHmm(window.horaInicio);
     const releasedEnd = this.parseHHmm(window.horaFim);
     if (releasedEnd <= releasedStart) {
@@ -72,8 +72,9 @@ export class WaitlistOpportunityService {
         ? this.parseHHmm(entry.horaFim)
         : releasedEnd;
       const firstStart = Math.max(
-        Math.ceil(Math.max(releasedStart, desiredStart) / SLOT_GRANULARITY_MINUTES) *
-          SLOT_GRANULARITY_MINUTES,
+        Math.ceil(
+          Math.max(releasedStart, desiredStart) / SLOT_GRANULARITY_MINUTES,
+        ) * SLOT_GRANULARITY_MINUTES,
       );
       const lastStart = Math.min(
         releasedEnd - entry.servico.duracaoMinutos,
@@ -109,7 +110,10 @@ export class WaitlistOpportunityService {
             horaFim,
           );
         } catch (error) {
-          if (error instanceof NotFoundException || error instanceof ConflictException) {
+          if (
+            error instanceof NotFoundException ||
+            error instanceof ConflictException
+          ) {
             continue;
           }
           throw error;
@@ -119,16 +123,20 @@ export class WaitlistOpportunityService {
         }
 
         try {
-          const claim = await this.waitlistService.claimNextEligibleEntryForSlot(
-            window.barbeiroId,
-            entry.servicoId,
-            window.dateKey,
-            horaInicio,
-            horaFim,
-          );
+          const claim =
+            await this.waitlistService.claimNextEligibleEntryForSlot(
+              window.barbeiroId,
+              entry.servicoId,
+              window.dateKey,
+              horaInicio,
+              horaFim,
+            );
           return claim;
         } catch (error) {
-          if (error instanceof NotFoundException || error instanceof ConflictException) {
+          if (
+            error instanceof NotFoundException ||
+            error instanceof ConflictException
+          ) {
             continue;
           }
           throw error;

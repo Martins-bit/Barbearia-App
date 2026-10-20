@@ -9,7 +9,12 @@ describe('ServicesService', () => {
   let service: ServicesService;
   let prisma: {
     barbeiro: { findUnique: jest.Mock; findFirst: jest.Mock };
-    servico: { findMany: jest.Mock; findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
+    servico: {
+      findMany: jest.Mock;
+      findFirst: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+    };
   };
 
   const serviceRecord = (overrides: Partial<Record<string, unknown>> = {}) => ({
@@ -65,10 +70,14 @@ describe('ServicesService', () => {
   it('não retorna serviço inativo por id', async () => {
     prisma.servico.findFirst.mockResolvedValue(null);
 
-    await expect(service.findActiveServiceById(1)).rejects.toThrow(NotFoundException);
-    expect(prisma.servico.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 1, ativo: true },
-    }));
+    await expect(service.findActiveServiceById(1)).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(prisma.servico.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 1, ativo: true },
+      }),
+    );
   });
 
   it('converte Usuario.id para Barbeiro.id', async () => {
@@ -90,9 +99,11 @@ describe('ServicesService', () => {
 
     const result = await service.findOwnServicesByUserId(4);
 
-    expect(prisma.servico.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { barbeiroId: 8 },
-    }));
+    expect(prisma.servico.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { barbeiroId: 8 },
+      }),
+    );
     expect(result).toHaveLength(2);
     expect(result[1].ativo).toBe(false);
   });
@@ -110,9 +121,14 @@ describe('ServicesService', () => {
     await expect(service.createService(4, data)).resolves.toMatchObject({
       preco: '35.00',
     });
-    expect(prisma.servico.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ barbeiroId: 8, preco: new Prisma.Decimal('35.00') }),
-    }));
+    expect(prisma.servico.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          barbeiroId: 8,
+          preco: new Prisma.Decimal('35.00'),
+        }),
+      }),
+    );
   });
 
   it('restringe atualização ao serviço do barbeiro autenticado', async () => {
@@ -120,10 +136,14 @@ describe('ServicesService', () => {
     prisma.barbeiro.findUnique.mockResolvedValue({ id: 8 });
     prisma.servico.findFirst.mockResolvedValue(null);
 
-    await expect(service.updateOwnService(4, 99, data)).rejects.toThrow(NotFoundException);
-    expect(prisma.servico.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 99, barbeiroId: 8 },
-    }));
+    await expect(service.updateOwnService(4, 99, data)).rejects.toThrow(
+      NotFoundException,
+    );
+    expect(prisma.servico.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 99, barbeiroId: 8 },
+      }),
+    );
     expect(prisma.servico.update).not.toHaveBeenCalled();
   });
 
@@ -132,16 +152,22 @@ describe('ServicesService', () => {
     prisma.servico.findFirst.mockResolvedValue(serviceRecord());
     prisma.servico.update.mockResolvedValue(serviceRecord({ ativo: false }));
 
-    await expect(service.updateOwnServiceStatus(4, 1, false)).resolves.toMatchObject({
+    await expect(
+      service.updateOwnServiceStatus(4, 1, false),
+    ).resolves.toMatchObject({
       ativo: false,
     });
-    expect(prisma.servico.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: { ativo: false },
-    }));
+    expect(prisma.servico.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { ativo: false },
+      }),
+    );
   });
 
   it('rejeita atualização vazia', async () => {
-    await expect(service.updateOwnService(4, 1, {})).rejects.toThrow(BadRequestException);
+    await expect(service.updateOwnService(4, 1, {})).rejects.toThrow(
+      BadRequestException,
+    );
     expect(prisma.barbeiro.findUnique).not.toHaveBeenCalled();
   });
 

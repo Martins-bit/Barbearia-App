@@ -18,7 +18,7 @@ interface MessageBody {
   [key: string]: unknown;
 }
 
- describe('Messages (e2e)', () => {
+describe('Messages (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
 
@@ -128,11 +128,17 @@ interface MessageBody {
     if (prisma) {
       // Mensagem referencia Usuario (FK): apagar antes de cliente/barbeiro.
       await prisma.mensagem.deleteMany({
-        where: { OR: [ { id: { in: messageIds } }, { remetenteId: { in: userIds } }, { destinatarioId: { in: userIds } } ] },
+        where: {
+          OR: [
+            { id: { in: messageIds } },
+            { remetenteId: { in: userIds } },
+            { destinatarioId: { in: userIds } },
+          ],
+        },
       });
-      await prisma.barbeiro.deleteMany({ where: { id: { in: barberIds } }});
-      await prisma.cliente.deleteMany({ where: { id: { in: clientIds } }});
-      await prisma.usuario.deleteMany({ where: { id: { in: userIds } }});
+      await prisma.barbeiro.deleteMany({ where: { id: { in: barberIds } } });
+      await prisma.cliente.deleteMany({ where: { id: { in: clientIds } } });
+      await prisma.usuario.deleteMany({ where: { id: { in: userIds } } });
     }
     if (app) {
       await app.close();
@@ -346,12 +352,12 @@ interface MessageBody {
         { destinatarioId: barberAUserId, conteudo: ['a', 'b'] },
         400,
       );
-      await sendMessage(clientAToken, { destinatarioId: 0, conteudo: 'Oi' }, 400);
       await sendMessage(
         clientAToken,
-        { destinatarioId: barberAUserId },
+        { destinatarioId: 0, conteudo: 'Oi' },
         400,
       );
+      await sendMessage(clientAToken, { destinatarioId: barberAUserId }, 400);
     });
 
     it('aceita exatamente 500 caracteres', async () => {
@@ -432,9 +438,7 @@ interface MessageBody {
       const partners = response.body as Array<Record<string, unknown>>;
 
       expect(partners.length).toBeGreaterThanOrEqual(1);
-      const partner = partners.find(
-        (item) => item.usuarioId === barberAUserId,
-      );
+      const partner = partners.find((item) => item.usuarioId === barberAUserId);
       expect(partner).toBeTruthy();
       expect(partner!.tipoUsuario).toBe(TipoUsuario.BARBEIRO);
       // usuarioId/nome/tipoUsuario + última mensagem + não lidas, sem dados
@@ -449,9 +453,7 @@ interface MessageBody {
       ]);
       // Nunca expõe conversa de outro par como se fosse própria.
       expect(
-        partners.every(
-          (item) => item.tipoUsuario === TipoUsuario.BARBEIRO,
-        ),
+        partners.every((item) => item.tipoUsuario === TipoUsuario.BARBEIRO),
       ).toBe(true);
     });
 
@@ -464,13 +466,11 @@ interface MessageBody {
 
       expect(partners.length).toBeGreaterThanOrEqual(1);
       expect(
-        partners.every(
-          (item) => item.tipoUsuario === TipoUsuario.CLIENTE,
-        ),
+        partners.every((item) => item.tipoUsuario === TipoUsuario.CLIENTE),
       ).toBe(true);
-      expect(
-        partners.some((item) => item.usuarioId === clientAUserId),
-      ).toBe(true);
+      expect(partners.some((item) => item.usuarioId === clientAUserId)).toBe(
+        true,
+      );
     });
 
     it('não retorna conversa de terceiros nem conversa inexistente', async () => {
@@ -706,8 +706,8 @@ interface MessageBody {
 
       // Ponto de vista do CLIENTE: última mensagem é a resposta dele; a não
       // lida é a pergunta recebida do barbeiro.
-      const clientConversations = ((await getConversations(clientVToken))
-        .body) as ConversationBody[];
+      const clientConversations = (await getConversations(clientVToken))
+        .body as ConversationBody[];
       const clientSide = clientConversations.find(
         (conversation) => conversation.usuarioId === barber1UserId,
       );
@@ -719,8 +719,8 @@ interface MessageBody {
 
       // Ponto de vista do BARBEIRO: mesma última mensagem; a não lida dele é
       // a resposta recebida do cliente.
-      const barberConversations = ((await getConversations(barber1Token))
-        .body) as ConversationBody[];
+      const barberConversations = (await getConversations(barber1Token))
+        .body as ConversationBody[];
       const barberSide = barberConversations.find(
         (conversation) => conversation.usuarioId === clientVUserId,
       );
@@ -741,8 +741,8 @@ interface MessageBody {
         201,
       );
 
-      const conversations = ((await getConversations(clientVToken))
-        .body) as ConversationBody[];
+      const conversations = (await getConversations(clientVToken))
+        .body as ConversationBody[];
 
       expect(conversations).toHaveLength(2);
       expect(conversations[0].usuarioId).toBe(barber2UserId);
@@ -777,8 +777,8 @@ interface MessageBody {
       // Após ler uma, sobram 'Pergunta' e 'Mensagem mais recente aqui'.
       await getUnreadCount(clientVToken, 2);
 
-      const conversations = ((await getConversations(clientVToken))
-        .body) as ConversationBody[];
+      const conversations = (await getConversations(clientVToken))
+        .body as ConversationBody[];
       const side1 = conversations.find(
         (conversation) => conversation.usuarioId === barber1UserId,
       )!;
@@ -798,8 +798,8 @@ interface MessageBody {
 
       await getUnreadCount(clientVToken, 1);
 
-      const conversations = ((await getConversations(clientVToken))
-        .body) as ConversationBody[];
+      const conversations = (await getConversations(clientVToken))
+        .body as ConversationBody[];
       const side1 = conversations.find(
         (conversation) => conversation.usuarioId === barber1UserId,
       )!;
@@ -809,8 +809,8 @@ interface MessageBody {
     });
 
     it('usuário sem mensagens não gera conversa artificial', async () => {
-      const conversations = ((await getConversations(clientVToken))
-        .body) as ConversationBody[];
+      const conversations = (await getConversations(clientVToken))
+        .body as ConversationBody[];
       expect(
         conversations.some(
           (conversation) => conversation.usuarioId === barber3UserId,
@@ -818,8 +818,8 @@ interface MessageBody {
       ).toBe(false);
 
       // Cliente isolado continua sem conversas, mesmo com barber3 existente.
-      const isoConversations = ((await getConversations(clientIsoToken))
-        .body) as ConversationBody[];
+      const isoConversations = (await getConversations(clientIsoToken))
+        .body as ConversationBody[];
       expect(isoConversations).toEqual([]);
       await getUnreadCount(clientIsoToken, 0);
     });
@@ -832,8 +832,8 @@ interface MessageBody {
       );
 
       // A conversa entre o par de terceiros não vaza para o cliente isolado...
-      const isoConversations = ((await getConversations(clientIsoToken))
-        .body) as ConversationBody[];
+      const isoConversations = (await getConversations(clientIsoToken))
+        .body as ConversationBody[];
       expect(
         isoConversations.some(
           (conversation) => conversation.usuarioId === barberFUserId,
@@ -848,8 +848,8 @@ interface MessageBody {
       await getUnreadCount(clientIsoToken, 0);
 
       // E o cliente principal continua vendo apenas as próprias conversas.
-      const conversations = ((await getConversations(clientVToken))
-        .body) as ConversationBody[];
+      const conversations = (await getConversations(clientVToken))
+        .body as ConversationBody[];
       expect(
         conversations.some(
           (conversation) => conversation.usuarioId === barberFUserId,
@@ -867,8 +867,8 @@ interface MessageBody {
 
       await getUnreadCount(clientVToken, 1);
 
-      const conversations = ((await getConversations(clientVToken))
-        .body) as ConversationBody[];
+      const conversations = (await getConversations(clientVToken))
+        .body as ConversationBody[];
       const side3 = conversations.find(
         (conversation) => conversation.usuarioId === barber3UserId,
       )!;

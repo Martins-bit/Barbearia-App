@@ -30,9 +30,8 @@ export class AuthService {
     }
 
     // Verifica se o telefone já existe
-    const usuarioExistente = await this.usersService.findByPhoneWithPasswordHash(
-      registerDto.telefone,
-    );
+    const usuarioExistente =
+      await this.usersService.findByPhoneWithPasswordHash(registerDto.telefone);
 
     if (usuarioExistente) {
       throw new ConflictException('Telefone já cadastrado');
@@ -89,7 +88,7 @@ export class AuthService {
     const { senhaHash: _senhaHash, ...usuarioSemHash } = usuario;
 
     return {
-      user: usuarioSemHash as AuthResponseDto,
+      user: usuarioSemHash,
       token,
       expiresIn: JWT_CONFIG.expiresIn,
     };

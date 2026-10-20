@@ -73,7 +73,10 @@ describe('Barbers (e2e)', () => {
     };
 
     const barberAtivo = await createBarber('Barbeiro Ativo Barbers E2E', true);
-    const barberInativo = await createBarber('Barbeiro Inativo Barbers E2E', false);
+    const barberInativo = await createBarber(
+      'Barbeiro Inativo Barbers E2E',
+      false,
+    );
     barbeiroAtivoId = barberAtivo.barbeiro!.id;
     barbeiroAtivoUsuarioId = barberAtivo.id; // Usuario.id (não Barbeiro.id)
     barbeiroInativoId = barberInativo.barbeiro!.id;
@@ -112,9 +115,15 @@ describe('Barbers (e2e)', () => {
 
   afterAll(async () => {
     if (prisma) {
-      await prisma.barbeiro.deleteMany({ where: { id: { in: createdBarberIds } } });
-      await prisma.cliente.deleteMany({ where: { usuarioId: { in: createdUserIds } } });
-      await prisma.usuario.deleteMany({ where: { id: { in: createdUserIds } } });
+      await prisma.barbeiro.deleteMany({
+        where: { id: { in: createdBarberIds } },
+      });
+      await prisma.cliente.deleteMany({
+        where: { usuarioId: { in: createdUserIds } },
+      });
+      await prisma.usuario.deleteMany({
+        where: { id: { in: createdUserIds } },
+      });
     }
     if (app) {
       await app.close();
@@ -166,7 +175,9 @@ describe('Barbers (e2e)', () => {
       .expect(200);
 
     expect(response.body).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: barbeiroInativoId })]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: barbeiroInativoId }),
+      ]),
     );
   });
 

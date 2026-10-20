@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, ForbiddenException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { TipoUsuario } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
@@ -8,7 +14,6 @@ import { prismaDateFilter, zonedWallTimeToUtc } from './tz.util';
 const BARBER_ID = 101;
 const DAY_MON = '2099-01-12'; // segunda-feira
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 function buildPrismaMock(): any {
   const prismaMock: any = {
     barbeiro: { findUnique: jest.fn(), findFirst: jest.fn() },
@@ -48,10 +53,7 @@ describe('ScheduleService', () => {
     // A-2: o barbeiro alvo informado pelo cliente precisa existir e estar
     // ativo (findFirst com { id, ativo: true }).
     prisma.barbeiro.findFirst.mockResolvedValue({ id: BARBER_ID });
-    service = new ScheduleService(
-      prisma as unknown as PrismaService,
-      users as unknown as UsersService,
-    );
+    service = new ScheduleService(prisma, users);
   });
 
   describe('identidade Usuario -> Barbeiro', () => {
@@ -69,8 +71,20 @@ describe('ScheduleService', () => {
   describe('horários de funcionamento', () => {
     it('lista somente os horarios proprios', async () => {
       prisma.horarioFuncionamento.findMany.mockResolvedValue([
-        { id: 1, diaSemana: 1, horaInicio: '09:00', horaFim: '12:00', ativo: true },
-        { id: 2, diaSemana: 1, horaInicio: '13:00', horaFim: '18:00', ativo: true },
+        {
+          id: 1,
+          diaSemana: 1,
+          horaInicio: '09:00',
+          horaFim: '12:00',
+          ativo: true,
+        },
+        {
+          id: 2,
+          diaSemana: 1,
+          horaInicio: '13:00',
+          horaFim: '18:00',
+          ativo: true,
+        },
       ]);
 
       const result = await service.findOwnBusinessHours(7);
@@ -122,9 +136,27 @@ describe('ScheduleService', () => {
       });
       expect(prisma.horarioFuncionamento.createMany).toHaveBeenCalledWith({
         data: [
-          { barbeiroId: BARBER_ID, diaSemana: 1, horaInicio: '09:00', horaFim: '12:00', ativo: true },
-          { barbeiroId: BARBER_ID, diaSemana: 1, horaInicio: '12:00', horaFim: '15:00', ativo: true },
-          { barbeiroId: BARBER_ID, diaSemana: 3, horaInicio: '08:00', horaFim: '11:00', ativo: false },
+          {
+            barbeiroId: BARBER_ID,
+            diaSemana: 1,
+            horaInicio: '09:00',
+            horaFim: '12:00',
+            ativo: true,
+          },
+          {
+            barbeiroId: BARBER_ID,
+            diaSemana: 1,
+            horaInicio: '12:00',
+            horaFim: '15:00',
+            ativo: true,
+          },
+          {
+            barbeiroId: BARBER_ID,
+            diaSemana: 3,
+            horaInicio: '08:00',
+            horaFim: '11:00',
+            ativo: false,
+          },
         ],
       });
     });
@@ -141,7 +173,13 @@ describe('ScheduleService', () => {
       expect(prisma.horarioFuncionamento.createMany).toHaveBeenCalledTimes(2);
       expect(prisma.horarioFuncionamento.createMany).toHaveBeenLastCalledWith({
         data: [
-          { barbeiroId: BARBER_ID, diaSemana: 2, horaInicio: '10:00', horaFim: '16:00', ativo: true },
+          {
+            barbeiroId: BARBER_ID,
+            diaSemana: 2,
+            horaInicio: '10:00',
+            horaFim: '16:00',
+            ativo: true,
+          },
         ],
       });
     });
@@ -341,7 +379,11 @@ describe('ScheduleService', () => {
       barbeiroAtivo?: boolean;
       userAtivo?: boolean;
       service?: any;
-      windows?: Array<{ diaSemana: number; horaInicio: string; horaFim: string }>;
+      windows?: Array<{
+        diaSemana: number;
+        horaInicio: string;
+        horaFim: string;
+      }>;
       blocks?: Array<{ horaInicio: string; horaFim: string }>;
       appointments?: Array<{ horaInicio: string; horaFim: string }>;
     }) {
@@ -358,7 +400,8 @@ describe('ScheduleService', () => {
       users.findAuthorizationStateById.mockResolvedValue({
         id: 7,
         ativo: userAtivo,
-        tipoUsuario: role === 'CLIENTE' ? TipoUsuario.CLIENTE : TipoUsuario.BARBEIRO,
+        tipoUsuario:
+          role === 'CLIENTE' ? TipoUsuario.CLIENTE : TipoUsuario.BARBEIRO,
         barbeiro: role === 'BARBEIRO' ? { ativo: barbeiroAtivo } : null,
       });
 

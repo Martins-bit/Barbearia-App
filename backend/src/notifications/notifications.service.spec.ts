@@ -1,8 +1,5 @@
 import { NotFoundException } from '@nestjs/common';
-import {
-  StatusAgendamento,
-  TipoNotificacao,
-} from '../generated/prisma/enums';
+import { StatusAgendamento, TipoNotificacao } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from './notifications.service';
 
@@ -43,7 +40,7 @@ describe('NotificationsService', () => {
 
   beforeEach(() => {
     prisma = buildPrismaMock();
-    service = new NotificationsService(prisma as unknown as PrismaService);
+    service = new NotificationsService(prisma);
   });
 
   it('lista somente as próprias notificações em ordem recente', async () => {
@@ -128,7 +125,7 @@ describe('NotificationsService', () => {
     tx.cliente.findUnique.mockResolvedValue({ usuarioId: 10 });
     tx.notificacao.create.mockResolvedValue(notification);
 
-    const result = await service.createWaitlistOpportunity(tx as any, 7, 20);
+    const result = await service.createWaitlistOpportunity(tx, 7, 20);
 
     expect(tx.notificacao.create).toHaveBeenCalledWith({
       data: {
@@ -156,7 +153,7 @@ describe('NotificationsService', () => {
       mensagem: 'Seu agendamento foi confirmado.',
     });
 
-    const result = await service.createAppointmentConfirmed(tx as any, 7, 77);
+    const result = await service.createAppointmentConfirmed(tx, 7, 77);
 
     expect(tx.cliente.findUnique).toHaveBeenCalledWith({
       where: { id: 7 },
@@ -190,7 +187,7 @@ describe('NotificationsService', () => {
       mensagem: 'Seu agendamento foi cancelado.',
     });
 
-    const result = await service.createAppointmentCancelled(tx as any, 7, 77);
+    const result = await service.createAppointmentCancelled(tx, 7, 77);
 
     expect(tx.notificacao.create).toHaveBeenCalledWith({
       data: {

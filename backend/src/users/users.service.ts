@@ -20,7 +20,9 @@ export class UsersService {
     dataAtualizacao: true,
   } as const;
 
-  private sanitizeUser<T extends Record<string, any>>(usuario: T | null): UserResponseDto | null {
+  private sanitizeUser<T extends Record<string, any>>(
+    usuario: T | null,
+  ): UserResponseDto | null {
     if (!usuario) {
       return null;
     }
@@ -70,7 +72,9 @@ export class UsersService {
     });
 
     if (!usuario) {
-      throw new NotFoundException(`Usuário com telefone ${telefone} não encontrado.`);
+      throw new NotFoundException(
+        `Usuário com telefone ${telefone} não encontrado.`,
+      );
     }
 
     return this.sanitizeUser(usuario);
@@ -81,7 +85,9 @@ export class UsersService {
       select: this.publicUserSelect,
     });
 
-    return usuarios.map((usuario) => this.sanitizeUser(usuario) as UserResponseDto);
+    return usuarios.map(
+      (usuario) => this.sanitizeUser(usuario) as UserResponseDto,
+    );
   }
 
   /**

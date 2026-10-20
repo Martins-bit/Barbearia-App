@@ -16,7 +16,9 @@ describe('ServicesController', () => {
       updateOwnService: jest.fn(),
       updateOwnServiceStatus: jest.fn(),
     };
-    controller = new ServicesController(servicesService as unknown as ServicesService);
+    controller = new ServicesController(
+      servicesService as unknown as ServicesService,
+    );
   });
 
   it('encaminha listagem por barbeiro usando o barbeiroId da query', async () => {
@@ -55,6 +57,10 @@ describe('ServicesController', () => {
 
     await controller.updateServiceStatus(8, 3, { ativo: false });
 
-    expect(servicesService.updateOwnServiceStatus).toHaveBeenCalledWith(8, 3, false);
+    expect(servicesService.updateOwnServiceStatus).toHaveBeenCalledWith(
+      8,
+      3,
+      false,
+    );
   });
 });

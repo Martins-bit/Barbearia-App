@@ -1,4 +1,11 @@
-import { IsInt, IsOptional, IsString, Matches, MaxLength, Min } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 const DATE_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/;
 const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;

@@ -15,7 +15,7 @@ import { NotificationsService } from '../src/notifications/notifications.service
 import { PrismaService } from '../src/prisma/prisma.service';
 import { WaitlistService } from '../src/waitlist/waitlist.service';
 
- describe('Notifications (e2e)', () => {
+describe('Notifications (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let waitlistService: WaitlistService;
@@ -83,8 +83,14 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
     waitlistService = app.get(WaitlistService);
     notificationsService = app.get(NotificationsService);
 
-    const clientA = await createUser('Cliente A Notifications', `${phoneBase}51`);
-    const clientB = await createUser('Cliente B Notifications', `${phoneBase}52`);
+    const clientA = await createUser(
+      'Cliente A Notifications',
+      `${phoneBase}51`,
+    );
+    const clientB = await createUser(
+      'Cliente B Notifications',
+      `${phoneBase}52`,
+    );
     clientAId = clientA.clientId;
     clientBId = clientB.clientId;
     clientAUserId = clientA.userId;
@@ -132,11 +138,32 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
 
   afterAll(async () => {
     if (prisma) {
-      await prisma.notificacao.deleteMany({ where: { OR: [{ id: { in: notificationIds } }, { usuarioId: { in: userIds } }] } });
-      await prisma.agendamento.deleteMany({ where: { OR: [{ clienteId: { in: clientIds } }, { barbeiroId: { in: barberIds } }] } });
-      await prisma.waitlistClaim.deleteMany({ where: { OR: [{ id: { in: claimIds } }, { barbeiroId: { in: barberIds } }] } });
-      await prisma.listaEspera.deleteMany({ where: { OR: [{ id: { in: waitlistIds } }, { clienteId: { in: clientIds } }] } });
-      await prisma.horarioFuncionamento.deleteMany({ where: { barbeiroId: { in: barberIds } } });
+      await prisma.notificacao.deleteMany({
+        where: {
+          OR: [{ id: { in: notificationIds } }, { usuarioId: { in: userIds } }],
+        },
+      });
+      await prisma.agendamento.deleteMany({
+        where: {
+          OR: [
+            { clienteId: { in: clientIds } },
+            { barbeiroId: { in: barberIds } },
+          ],
+        },
+      });
+      await prisma.waitlistClaim.deleteMany({
+        where: {
+          OR: [{ id: { in: claimIds } }, { barbeiroId: { in: barberIds } }],
+        },
+      });
+      await prisma.listaEspera.deleteMany({
+        where: {
+          OR: [{ id: { in: waitlistIds } }, { clienteId: { in: clientIds } }],
+        },
+      });
+      await prisma.horarioFuncionamento.deleteMany({
+        where: { barbeiroId: { in: barberIds } },
+      });
       await prisma.servico.deleteMany({ where: { id: { in: serviceIds } } });
       await prisma.barbeiro.deleteMany({ where: { id: { in: barberIds } } });
       await prisma.cliente.deleteMany({ where: { id: { in: clientIds } } });
@@ -201,18 +228,20 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
 
   it('cria uma notificação ao criar claim válido', async () => {
     const dateKey = '2099-05-10';
-    await prisma.listaEspera.create({
-      data: {
-        clienteId: clientAId,
-        barbeiroId: barberId,
-        servicoId: serviceId,
-        dataDesejada: new Date(`${dateKey}T00:00:00.000Z`),
-        horaInicio: '08:00',
-        horaFim: '18:00',
-      },
-    }).then((entry) => {
-      waitlistIds.push(entry.id);
-    });
+    await prisma.listaEspera
+      .create({
+        data: {
+          clienteId: clientAId,
+          barbeiroId: barberId,
+          servicoId: serviceId,
+          dataDesejada: new Date(`${dateKey}T00:00:00.000Z`),
+          horaInicio: '08:00',
+          horaFim: '18:00',
+        },
+      })
+      .then((entry) => {
+        waitlistIds.push(entry.id);
+      });
 
     const claim = await waitlistService.claimNextEligibleEntryForSlot(
       barberId,
@@ -238,10 +267,14 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
       .get('/notifications')
       .set('Authorization', `Bearer ${clientAToken}`)
       .expect(200);
-    expect(own.body).toEqual(expect.arrayContaining([
-      expect.objectContaining({ claimId, lida: false }),
-    ]));
-    expect(own.body.every((item: any) => item.usuarioId === undefined)).toBe(true);
+    expect(own.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ claimId, lida: false }),
+      ]),
+    );
+    expect(own.body.every((item: any) => item.usuarioId === undefined)).toBe(
+      true,
+    );
 
     await request(app.getHttpServer())
       .get('/notifications')
@@ -255,7 +288,9 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
       .expect(200)
       .then((response) => expect(response.body.count).toBe(1));
 
-    const notification = await prisma.notificacao.findFirst({ where: { claimId } });
+    const notification = await prisma.notificacao.findFirst({
+      where: { claimId },
+    });
     notificationIds.push(notification!.id);
     await request(app.getHttpServer())
       .patch(`/notifications/${notification!.id}/read`)
@@ -264,7 +299,9 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
   });
 
   it('marca como lida de forma idempotente e marca todas as próprias', async () => {
-    const notification = await prisma.notificacao.findFirst({ where: { claimId } });
+    const notification = await prisma.notificacao.findFirst({
+      where: { claimId },
+    });
     const firstRead = await request(app.getHttpServer())
       .patch(`/notifications/${notification!.id}/read`)
       .set('Authorization', `Bearer ${clientAToken}`)
@@ -288,21 +325,25 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
       },
     });
     notificationIds.push(other.id);
-    await prisma.notificacao.create({
-      data: {
-        usuarioId: clientBUserId,
-        tipo: TipoNotificacao.AVISO,
-        titulo: 'Aviso de outro usuário',
-        mensagem: 'Mensagem de teste',
-      },
-    }).then((created) => notificationIds.push(created.id));
+    await prisma.notificacao
+      .create({
+        data: {
+          usuarioId: clientBUserId,
+          tipo: TipoNotificacao.AVISO,
+          titulo: 'Aviso de outro usuário',
+          mensagem: 'Mensagem de teste',
+        },
+      })
+      .then((created) => notificationIds.push(created.id));
 
     await request(app.getHttpServer())
       .patch('/notifications/read-all')
       .set('Authorization', `Bearer ${clientAToken}`)
       .expect(200)
       .then((response) => expect(response.body.updated).toBe(1));
-    expect((await prisma.notificacao.findUnique({ where: { id: other.id } }))?.lida).toBe(true);
+    expect(
+      (await prisma.notificacao.findUnique({ where: { id: other.id } }))?.lida,
+    ).toBe(true);
   });
 
   it('concorrência de claims cria um claim e uma notificação', async () => {
@@ -310,11 +351,27 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
     const first = await createEntryFixture(dateKey, clientAId);
     const second = await createEntryFixture(dateKey, clientBId);
     const results = await Promise.allSettled([
-      waitlistService.claimNextEligibleEntryForSlot(barberId, serviceId, dateKey, '10:00', '10:30'),
-      waitlistService.claimNextEligibleEntryForSlot(barberId, serviceId, dateKey, '10:00', '10:30'),
+      waitlistService.claimNextEligibleEntryForSlot(
+        barberId,
+        serviceId,
+        dateKey,
+        '10:00',
+        '10:30',
+      ),
+      waitlistService.claimNextEligibleEntryForSlot(
+        barberId,
+        serviceId,
+        dateKey,
+        '10:00',
+        '10:30',
+      ),
     ]);
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === 'rejected'),
+    ).toHaveLength(1);
     const activeClaims = await prisma.waitlistClaim.findMany({
       where: {
         barbeiroId: barberId,
@@ -327,11 +384,18 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
       },
     });
     expect(activeClaims).toHaveLength(1);
-    expect(await prisma.notificacao.count({ where: { claimId: activeClaims[0].id } })).toBe(1);
+    expect(
+      await prisma.notificacao.count({
+        where: { claimId: activeClaims[0].id },
+      }),
+    ).toBe(1);
     expect([first.id, second.id]).toContain(activeClaims[0].listaEsperaId);
   });
 
-  const createAppointmentFixture = async (dateKey: string, horaInicio: string) => {
+  const createAppointmentFixture = async (
+    dateKey: string,
+    horaInicio: string,
+  ) => {
     await prisma.horarioFuncionamento.create({
       data: {
         barbeiroId: barberId,
@@ -344,7 +408,12 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
     const response = await request(app.getHttpServer())
       .post('/appointments')
       .set('Authorization', `Bearer ${clientAToken}`)
-      .send({ barbeiroId: barberId, servicoId: serviceId, data: dateKey, horaInicio })
+      .send({
+        barbeiroId: barberId,
+        servicoId: serviceId,
+        data: dateKey,
+        horaInicio,
+      })
       .expect(201);
     return response.body.id as number;
   };
@@ -371,7 +440,9 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
     expect(match).toEqual(
       expect.objectContaining({ tipo: TipoNotificacao.AGENDAMENTO }),
     );
-    expect(listed.body.every((item: any) => item.usuarioId === undefined)).toBe(true);
+    expect(listed.body.every((item: any) => item.usuarioId === undefined)).toBe(
+      true,
+    );
   });
 
   it('aceite de claim gera exatamente 1 AGENDAMENTO e preserva a notificação de oportunidade', async () => {
@@ -396,7 +467,10 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
     // Regressão: WAITLIST_OPPORTUNITY permanece única e não é regenerada.
     expect(
       await prisma.notificacao.count({
-        where: { claimId: claim.id, tipo: TipoNotificacao.WAITLIST_OPPORTUNITY },
+        where: {
+          claimId: claim.id,
+          tipo: TipoNotificacao.WAITLIST_OPPORTUNITY,
+        },
       }),
     ).toBe(1);
 
@@ -436,11 +510,18 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
       waitlistService.acceptClaim(clientAUserId, claim.id),
       waitlistService.acceptClaim(clientAUserId, claim.id),
     ]);
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === 'rejected'),
+    ).toHaveLength(1);
 
     const appointments = await prisma.agendamento.findMany({
-      where: { clienteId: clientAId, data: new Date(`${dateKey}T00:00:00.000Z`) },
+      where: {
+        clienteId: clientAId,
+        data: new Date(`${dateKey}T00:00:00.000Z`),
+      },
     });
     expect(appointments).toHaveLength(1);
     const notifications = await prisma.notificacao.findMany({
@@ -465,7 +546,10 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
       .expect(409);
 
     const notifications = await prisma.notificacao.findMany({
-      where: { agendamentoId: appointmentId, tipo: TipoNotificacao.CANCELAMENTO },
+      where: {
+        agendamentoId: appointmentId,
+        tipo: TipoNotificacao.CANCELAMENTO,
+      },
     });
     expect(notifications).toHaveLength(1);
     expect(notifications[0].tipo).toBe(TipoNotificacao.CANCELAMENTO);
@@ -484,7 +568,10 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
       .expect(404);
     expect(
       await prisma.notificacao.count({
-        where: { agendamentoId: appointmentId, tipo: TipoNotificacao.CANCELAMENTO },
+        where: {
+          agendamentoId: appointmentId,
+          tipo: TipoNotificacao.CANCELAMENTO,
+        },
       }),
     ).toBe(0);
 
@@ -494,7 +581,9 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
       .set('Authorization', `Bearer ${clientBToken}`)
       .expect(200);
     expect(
-      clientBList.body.some((item: any) => item.agendamentoId === appointmentId),
+      clientBList.body.some(
+        (item: any) => item.agendamentoId === appointmentId,
+      ),
     ).toBe(false);
   });
 
@@ -523,11 +612,26 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
   };
 
   it('motor de lembretes: cria LEMBRETE somente para CONFIRMADO na janela de 1 hora', async () => {
-    const inWindow = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 30);
-    const outWindow = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 120);
-    const cancelled = await createReminderCandidate(StatusAgendamento.CANCELADO, 30);
-    const completed = await createReminderCandidate(StatusAgendamento.CONCLUIDO, 30);
-    const noShow = await createReminderCandidate(StatusAgendamento.NAO_COMPARECEU, 30);
+    const inWindow = await createReminderCandidate(
+      StatusAgendamento.CONFIRMADO,
+      30,
+    );
+    const outWindow = await createReminderCandidate(
+      StatusAgendamento.CONFIRMADO,
+      120,
+    );
+    const cancelled = await createReminderCandidate(
+      StatusAgendamento.CANCELADO,
+      30,
+    );
+    const completed = await createReminderCandidate(
+      StatusAgendamento.CONCLUIDO,
+      30,
+    );
+    const noShow = await createReminderCandidate(
+      StatusAgendamento.NAO_COMPARECEU,
+      30,
+    );
 
     const result = await notificationsService.processAppointmentReminders();
 
@@ -555,7 +659,10 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
   });
 
   it('motor de lembretes: corrida e reexecução não duplicam lembrete', async () => {
-    const inWindow = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 45);
+    const inWindow = await createReminderCandidate(
+      StatusAgendamento.CONFIRMADO,
+      45,
+    );
 
     // Duas execuções concorrentes: o advisory lock transacional serializa;
     // apenas uma cria o lembrete.
@@ -577,8 +684,14 @@ import { WaitlistService } from '../src/waitlist/waitlist.service';
   });
 
   it('motor de lembretes: vários elegíveis geram um lembrete cada, visíveis via API sem usuarioId', async () => {
-    const first = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 20);
-    const second = await createReminderCandidate(StatusAgendamento.CONFIRMADO, 40);
+    const first = await createReminderCandidate(
+      StatusAgendamento.CONFIRMADO,
+      20,
+    );
+    const second = await createReminderCandidate(
+      StatusAgendamento.CONFIRMADO,
+      40,
+    );
 
     const result = await notificationsService.processAppointmentReminders();
     expect(result.created).toBe(2);

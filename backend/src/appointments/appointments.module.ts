@@ -13,4 +13,3 @@ import { AppointmentsService } from './appointments.service';
   exports: [AppointmentsService],
 })
 export class AppointmentsModule {}
-

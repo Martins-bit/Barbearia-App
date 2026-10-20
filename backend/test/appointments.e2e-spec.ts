@@ -143,9 +143,7 @@ describe('Appointments (e2e)', () => {
       return service;
     };
 
-    svcA30Id = (
-      await createService(barberAId, `${prefix}-corte-a`, true)
-    ).id;
+    svcA30Id = (await createService(barberAId, `${prefix}-corte-a`, true)).id;
     svcAInactiveId = (
       await createService(barberAId, `${prefix}-inativo`, false)
     ).id;
@@ -211,7 +209,6 @@ describe('Appointments (e2e)', () => {
       await app.close();
     }
   });
-
 
   // -------------------------------------------------------------------
   // POST /appointments
@@ -425,8 +422,6 @@ describe('Appointments (e2e)', () => {
     }).expect(400);
   });
 
-
-
   it('exige JWT para listar meus agendamentos', async () => {
     await request(app.getHttpServer()).get('/appointments/my').expect(401);
   });
@@ -639,7 +634,10 @@ describe('Appointments (e2e)', () => {
     });
     appointmentIds.push(appointment.id);
 
-    const response = await getAppointmentById(clientAToken, appointment.id).expect(200);
+    const response = await getAppointmentById(
+      clientAToken,
+      appointment.id,
+    ).expect(200);
     expect(response.body.id).toBe(appointment.id);
     expect(response.body.cliente.id).toBe(clientAClienteId);
     expect(response.body.servico.precoInformativo).toMatch(/^\d+\.\d{2}$/);
@@ -676,7 +674,10 @@ describe('Appointments (e2e)', () => {
     });
     appointmentIds.push(appointment.id);
 
-    const response = await getAppointmentById(barberAToken, appointment.id).expect(200);
+    const response = await getAppointmentById(
+      barberAToken,
+      appointment.id,
+    ).expect(200);
     expect(response.body.barbeiro.id).toBe(barberAId);
     expect(response.body.cliente.id).toBe(clientBClienteId);
   });
@@ -752,8 +753,12 @@ describe('Appointments (e2e)', () => {
     expect(response.body.map((item: any) => item.id)).toEqual(
       expect.arrayContaining([ownA.id, ownB.id]),
     );
-    expect(response.body.every((item: any) => item.barbeiro.id === barberAId)).toBe(true);
-    expect(JSON.stringify(response.body)).not.toMatch(/senhaHash|pagamento|pix|checkout/i);
+    expect(
+      response.body.every((item: any) => item.barbeiro.id === barberAId),
+    ).toBe(true);
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /senhaHash|pagamento|pix|checkout/i,
+    );
   });
 
   it('GET /appointments inclui diferentes status e ordenação cronológica', async () => {
@@ -789,13 +794,19 @@ describe('Appointments (e2e)', () => {
       .sort();
 
     expect(statuses).toEqual(['CONCLUIDO', 'NAO_COMPARECEU'].sort());
-    expect(response.body.find((item: any) => item.id === first.id).horaInicio).toBe('09:30');
-    expect(response.body.find((item: any) => item.id === second.id).horaInicio).toBe('10:00');
+    expect(
+      response.body.find((item: any) => item.id === first.id).horaInicio,
+    ).toBe('09:30');
+    expect(
+      response.body.find((item: any) => item.id === second.id).horaInicio,
+    ).toBe('10:00');
   });
 
   describe('ETAPA 4B — transições de status', () => {
     it('PATCH /appointments/:id/cancel exige JWT', async () => {
-      await request(app.getHttpServer()).patch('/appointments/1/cancel').expect(401);
+      await request(app.getHttpServer())
+        .patch('/appointments/1/cancel')
+        .expect(401);
     });
 
     it('CLIENTE cancela próprio CONFIRMADO antes do dia -> 200', async () => {
@@ -813,7 +824,10 @@ describe('Appointments (e2e)', () => {
       });
       appointmentIds.push(appointment.id);
 
-      const response = await cancelAppointment(clientAToken, appointment.id).expect(200);
+      const response = await cancelAppointment(
+        clientAToken,
+        appointment.id,
+      ).expect(200);
       expect(response.body.status).toBe(StatusAgendamento.CANCELADO);
       expect(response.body.cliente.id).toBe(clientAClienteId);
     });
@@ -867,7 +881,10 @@ describe('Appointments (e2e)', () => {
       });
       appointmentIds.push(appointment.id);
 
-      const response = await cancelAppointment(barberAToken, appointment.id).expect(200);
+      const response = await cancelAppointment(
+        barberAToken,
+        appointment.id,
+      ).expect(200);
       expect(response.body.status).toBe(StatusAgendamento.CANCELADO);
       expect(response.body.barbeiro.id).toBe(barberAId);
     });
@@ -907,7 +924,9 @@ describe('Appointments (e2e)', () => {
     });
 
     it('PATCH /appointments/:id/complete exige JWT e 403 para CLIENTE', async () => {
-      await request(app.getHttpServer()).patch('/appointments/1/complete').expect(401);
+      await request(app.getHttpServer())
+        .patch('/appointments/1/complete')
+        .expect(401);
       await completeAppointment(clientAToken, 1).expect(403);
     });
 
@@ -926,12 +945,19 @@ describe('Appointments (e2e)', () => {
       });
       appointmentIds.push(appointment.id);
 
-      const response = await completeAppointment(barberAToken, appointment.id).expect(400);
-      expect(response.body.message).toContain('Só é possível concluir após o fim do agendamento');
+      const response = await completeAppointment(
+        barberAToken,
+        appointment.id,
+      ).expect(400);
+      expect(response.body.message).toContain(
+        'Só é possível concluir após o fim do agendamento',
+      );
     });
 
     it('PATCH /appointments/:id/no-show exige JWT e 403 para CLIENTE', async () => {
-      await request(app.getHttpServer()).patch('/appointments/1/no-show').expect(401);
+      await request(app.getHttpServer())
+        .patch('/appointments/1/no-show')
+        .expect(401);
       await noShowAppointment(clientAToken, 1).expect(403);
     });
 
@@ -950,7 +976,10 @@ describe('Appointments (e2e)', () => {
       });
       appointmentIds.push(appointment.id);
 
-      const response = await noShowAppointment(barberAToken, appointment.id).expect(200);
+      const response = await noShowAppointment(
+        barberAToken,
+        appointment.id,
+      ).expect(200);
       expect(response.body.status).toBe(StatusAgendamento.NAO_COMPARECEU);
     });
   });
@@ -979,14 +1008,15 @@ describe('Appointments (e2e)', () => {
       const statusCodes = results.map((item) =>
         item.status === 'fulfilled'
           ? item.value.status
-          : item.reason?.response?.status ?? 0,
+          : (item.reason?.response?.status ?? 0),
       );
 
       expect(statusCodes.filter((code) => code === 201)).toHaveLength(1);
       expect(statusCodes.filter((code) => code === 409)).toHaveLength(1);
 
       const successful = results.filter(
-        (item): item is PromiseFulfilledResult<any> => item.status === 'fulfilled',
+        (item): item is PromiseFulfilledResult<any> =>
+          item.status === 'fulfilled',
       );
       for (const result of successful) {
         if (result.value.status === 201) {
@@ -1028,7 +1058,7 @@ describe('Appointments (e2e)', () => {
       const statusCodes = results.map((item) =>
         item.status === 'fulfilled'
           ? item.value.status
-          : item.reason?.response?.status ?? 0,
+          : (item.reason?.response?.status ?? 0),
       );
       expect(statusCodes.filter((code) => code === 201)).toHaveLength(1);
       expect(statusCodes.filter((code) => code === 409)).toHaveLength(1);
@@ -1070,7 +1100,7 @@ describe('Appointments (e2e)', () => {
       const statusCodes = results.map((item) =>
         item.status === 'fulfilled'
           ? item.value.status
-          : item.reason?.response?.status ?? 0,
+          : (item.reason?.response?.status ?? 0),
       );
       expect(statusCodes.filter((code) => code === 201)).toHaveLength(2);
       expect(statusCodes.some((code) => code === 409)).toBe(false);
@@ -1111,7 +1141,7 @@ describe('Appointments (e2e)', () => {
       const statusCodes = results.map((item) =>
         item.status === 'fulfilled'
           ? item.value.status
-          : item.reason?.response?.status ?? 0,
+          : (item.reason?.response?.status ?? 0),
       );
       expect(statusCodes.filter((code) => code === 201)).toHaveLength(2);
       expect(statusCodes.some((code) => code === 409)).toBe(false);

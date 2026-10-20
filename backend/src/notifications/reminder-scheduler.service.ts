@@ -30,9 +30,8 @@ export class ReminderSchedulerService {
   @Interval(REMINDER_INTERVAL_MS)
   async handleReminders(): Promise<void> {
     try {
-      const result = await this.notificationsService.processAppointmentReminders(
-        new Date(),
-      );
+      const result =
+        await this.notificationsService.processAppointmentReminders(new Date());
       if (result.created > 0) {
         this.logger.log(
           `Motor de lembretes criou ${result.created} notificação(ões) LEMBRETE.`,

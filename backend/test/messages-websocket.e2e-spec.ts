@@ -160,12 +160,27 @@ describe('Messages WebSocket — fundação autenticada (e2e)', () => {
     registry = app.get(MessagesSocketRegistry);
 
     const client = await createClient('Cliente WS', `${phoneBase}81`);
-    const clientDisc = await createClient('Cliente WS Desconecta', `${phoneBase}82`);
-    const clientOff = await createClient('Cliente WS Inativo', `${phoneBase}83`);
-    const clientSecond = await createClient('Cliente WS Segundo', `${phoneBase}86`);
+    const clientDisc = await createClient(
+      'Cliente WS Desconecta',
+      `${phoneBase}82`,
+    );
+    const clientOff = await createClient(
+      'Cliente WS Inativo',
+      `${phoneBase}83`,
+    );
+    const clientSecond = await createClient(
+      'Cliente WS Segundo',
+      `${phoneBase}86`,
+    );
     const barber = await createBarber('Barbeiro WS', `${phoneBase}84`);
-    const barberSecond = await createBarber('Barbeiro WS Segundo', `${phoneBase}87`);
-    const barberOff = await createBarber('Barbeiro WS Perfil Inativo', `${phoneBase}85`);
+    const barberSecond = await createBarber(
+      'Barbeiro WS Segundo',
+      `${phoneBase}87`,
+    );
+    const barberOff = await createBarber(
+      'Barbeiro WS Perfil Inativo',
+      `${phoneBase}85`,
+    );
 
     clientUserId = client.userId;
     clientDiscUserId = clientDisc.userId;
@@ -463,9 +478,9 @@ describe('Messages WebSocket — fundação autenticada (e2e)', () => {
         .get(`/messages/${clientUserId}`)
         .set('Authorization', `Bearer ${barberToken}`)
         .expect(200);
-      expect(
-        viaRest.body.some((item: any) => item.id === payload.id),
-      ).toBe(true);
+      expect(viaRest.body.some((item: any) => item.id === payload.id)).toBe(
+        true,
+      );
     });
 
     it('múltiplas conexões do destinatário recebem a mesma mensagem', async () => {
@@ -474,7 +489,8 @@ describe('Messages WebSocket — fundação autenticada (e2e)', () => {
       const barberSocketB = await connectAs(barberToken);
       await waitUntil(
         () =>
-          registry.count(clientUserId) > 0 && registry.count(barberUserId) === 2,
+          registry.count(clientUserId) > 0 &&
+          registry.count(barberUserId) === 2,
       );
 
       const recebidoA = waitEvent(barberSocketA, 'message:received');
@@ -508,13 +524,21 @@ describe('Messages WebSocket — fundação autenticada (e2e)', () => {
       await waitUntil(() => registry.count(clientUserId) > 0);
 
       const attempts = [
-        { destinatarioId: barberUserId, conteudo: 'spoof', remetenteId: barberUserId },
+        {
+          destinatarioId: barberUserId,
+          conteudo: 'spoof',
+          remetenteId: barberUserId,
+        },
         {
           destinatarioId: barberUserId,
           conteudo: 'spoof',
           remetenteUsuarioId: barberUserId,
         },
-        { destinatarioId: barberUserId, conteudo: 'spoof', usuarioId: barberUserId },
+        {
+          destinatarioId: barberUserId,
+          conteudo: 'spoof',
+          usuarioId: barberUserId,
+        },
         {
           destinatarioId: barberUserId,
           conteudo: 'spoof',
@@ -829,4 +853,3 @@ describe('Messages WebSocket — fundação autenticada (e2e)', () => {
     });
   });
 });
-

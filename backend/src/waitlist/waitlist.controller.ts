@@ -25,10 +25,7 @@ export class WaitlistController {
   @HttpCode(201)
   @UseGuards(JwtGuard, RolesGuard)
   @Roles(TipoUsuario.CLIENTE)
-  async create(
-    @CurrentUser() userId: number,
-    @Body() dto: CreateWaitlistDto,
-  ) {
+  async create(@CurrentUser() userId: number, @Body() dto: CreateWaitlistDto) {
     return this.waitlistService.create(userId, dto);
   }
 

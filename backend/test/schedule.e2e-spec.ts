@@ -193,16 +193,16 @@ describe('Schedule (e2e)', () => {
       return service;
     };
 
-    svcA30Id = (await createService(barberAId, `${prefix}-corte-30`, 30, true)).id;
+    svcA30Id = (await createService(barberAId, `${prefix}-corte-30`, 30, true))
+      .id;
     svcA240Id = (
       await createService(barberAId, `${prefix}-combo-240`, 240, true)
     ).id;
     svcAInactiveId = (
       await createService(barberAId, `${prefix}-inativo`, 30, false)
     ).id;
-    svcB30Id = (
-      await createService(barberBId, `${prefix}-barba-b`, 30, true)
-    ).id;
+    svcB30Id = (await createService(barberBId, `${prefix}-barba-b`, 30, true))
+      .id;
 
     const login = async (telefone: string): Promise<string> => {
       const response = await request(app.getHttpServer())
@@ -231,10 +231,7 @@ describe('Schedule (e2e)', () => {
       });
       await prisma.bloqueioAgenda.deleteMany({
         where: {
-          OR: [
-            { id: { in: blockIds } },
-            { barbeiroId: { in: barberIds } },
-          ],
+          OR: [{ id: { in: blockIds } }, { barbeiroId: { in: barberIds } }],
         },
       });
       await prisma.servico.deleteMany({ where: { id: { in: serviceIds } } });
@@ -252,7 +249,6 @@ describe('Schedule (e2e)', () => {
       await app.close();
     }
   });
-
 
   // -------------------------------------------------------------------
   // Horários de funcionamento
@@ -274,9 +270,9 @@ describe('Schedule (e2e)', () => {
       '13:00',
     ]);
     // Domingo não foi enviado e não existe na configuração.
-    expect(
-      response.body.some((window: any) => window.diaSemana === 0),
-    ).toBe(false);
+    expect(response.body.some((window: any) => window.diaSemana === 0)).toBe(
+      false,
+    );
   });
 
   it('GET retorna somente os horários do próprio barbeiro', async () => {
@@ -309,10 +305,7 @@ describe('Schedule (e2e)', () => {
   });
 
   it.each([
-    [
-      'hora inválida',
-      { diaSemana: 1, horaInicio: '25:00', horaFim: '18:00' },
-    ],
+    ['hora inválida', { diaSemana: 1, horaInicio: '25:00', horaFim: '18:00' }],
     [
       'ordem invertida',
       { diaSemana: 1, horaInicio: '12:00', horaFim: '09:00' },
@@ -544,7 +537,6 @@ describe('Schedule (e2e)', () => {
     }
   });
 
-
   // -------------------------------------------------------------------
   // Bloqueios
   // -------------------------------------------------------------------
@@ -580,7 +572,9 @@ describe('Schedule (e2e)', () => {
         horaFim: '11:00',
       })
       .expect(409);
-    expect(overlap.body.message).toBe('Já existe um bloqueio para esse período.');
+    expect(overlap.body.message).toBe(
+      'Já existe um bloqueio para esse período.',
+    );
 
     const touching = await request(app.getHttpServer())
       .post('/schedule-blocks')
@@ -595,12 +589,26 @@ describe('Schedule (e2e)', () => {
   });
 
   it.each([
-    ['data inexistente no calendário', { horaInicio: '10:00', horaFim: '11:00', data: '2099-02-30' }],
-    ['horas invertidas', { data: MONDAY, horaInicio: '11:00', horaFim: '10:00' }],
+    [
+      'data inexistente no calendário',
+      { horaInicio: '10:00', horaFim: '11:00', data: '2099-02-30' },
+    ],
+    [
+      'horas invertidas',
+      { data: MONDAY, horaInicio: '11:00', horaFim: '10:00' },
+    ],
     // Literal obrigatório: esta tabela é avaliada durante a REGISTRO da suíte,
     // antes do beforeAll — variáveis de fixture ainda seriam `undefined` e a
     // chave sumiria do JSON em vez de chegar como campo extra ao servidor.
-    ['campo extra', { data: MONDAY, horaInicio: '10:00', horaFim: '11:00', barbeiroId: 999999 }],
+    [
+      'campo extra',
+      {
+        data: MONDAY,
+        horaInicio: '10:00',
+        horaFim: '11:00',
+        barbeiroId: 999999,
+      },
+    ],
     ['sem horaFim', { data: MONDAY, horaInicio: '10:00' }],
   ])('rejeita bloqueio com %s', async (_name, payload) => {
     await request(app.getHttpServer())
@@ -696,7 +704,6 @@ describe('Schedule (e2e)', () => {
     }
   });
 
-
   // -------------------------------------------------------------------
   // Disponibilidade
   // -------------------------------------------------------------------
@@ -764,7 +771,11 @@ describe('Schedule (e2e)', () => {
     // Barbeiro existente como usuário, mas com perfil (Barbeiro) inativo.
     await request(app.getHttpServer())
       .get('/availability')
-      .query({ data: MONDAY, servicoId: svcA30Id, barbeiroId: inactiveBarberId })
+      .query({
+        data: MONDAY,
+        servicoId: svcA30Id,
+        barbeiroId: inactiveBarberId,
+      })
       .set('Authorization', `Bearer ${clientToken}`)
       .expect(404);
   });
@@ -918,8 +929,6 @@ describe('Schedule (e2e)', () => {
     expect(response.body.horariosLivres).toEqual([]);
   });
 
-
-
   // -------------------------------------------------------------------
   // Mutação final da configuração (dias omitidos são removidos)
   // -------------------------------------------------------------------
@@ -946,9 +955,7 @@ describe('Schedule (e2e)', () => {
       .put('/business-hours')
       .set('Authorization', `Bearer ${barberAToken}`)
       .send({
-        horarios: [
-          { diaSemana: 2, horaInicio: '10:00', horaFim: '16:00' },
-        ],
+        horarios: [{ diaSemana: 2, horaInicio: '10:00', horaFim: '16:00' }],
       })
       .expect(200);
 
@@ -1045,7 +1052,11 @@ describe('Schedule (e2e)', () => {
       const futureKey = '2099-02-02'; // domingo distante, coberto pela janela
       const response = await request(app.getHttpServer())
         .get('/availability')
-        .query({ data: futureKey, servicoId: pastServiceId, barbeiroId: pastBarberId })
+        .query({
+          data: futureKey,
+          servicoId: pastServiceId,
+          barbeiroId: pastBarberId,
+        })
         .set('Authorization', `Bearer ${clientToken}`)
         .expect(200);
 
@@ -1056,7 +1067,11 @@ describe('Schedule (e2e)', () => {
     it('data PASSADA retorna grade vazia', async () => {
       const response = await request(app.getHttpServer())
         .get('/availability')
-        .query({ data: recentPastKey, servicoId: pastServiceId, barbeiroId: pastBarberId })
+        .query({
+          data: recentPastKey,
+          servicoId: pastServiceId,
+          barbeiroId: pastBarberId,
+        })
         .set('Authorization', `Bearer ${clientToken}`)
         .expect(200);
 
@@ -1066,7 +1081,11 @@ describe('Schedule (e2e)', () => {
     it('HOJE não retorna slot cujo início já passou e mantém os futuros', async () => {
       const response = await request(app.getHttpServer())
         .get('/availability')
-        .query({ data: todayKey, servicoId: pastServiceId, barbeiroId: pastBarberId })
+        .query({
+          data: todayKey,
+          servicoId: pastServiceId,
+          barbeiroId: pastBarberId,
+        })
         .set('Authorization', `Bearer ${clientToken}`)
         .expect(200);
 
@@ -1087,5 +1106,4 @@ describe('Schedule (e2e)', () => {
       expect(weekdayToday).toBeGreaterThanOrEqual(0);
     });
   });
-
 });

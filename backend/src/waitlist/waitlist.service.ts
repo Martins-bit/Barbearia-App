@@ -373,7 +373,9 @@ export class WaitlistService {
         continue;
       }
 
-      const entryStart = entry.horaInicio ? this.parseHHmm(entry.horaInicio) : null;
+      const entryStart = entry.horaInicio
+        ? this.parseHHmm(entry.horaInicio)
+        : null;
       const entryEnd = entry.horaFim ? this.parseHHmm(entry.horaFim) : null;
 
       if (entryStart !== null && entryEnd !== null) {
@@ -438,7 +440,9 @@ export class WaitlistService {
 
       const agora = new Date();
       if (slotStartInstant <= agora) {
-        throw new BadRequestException('Não é possível reivindicar um horário que já passou.');
+        throw new BadRequestException(
+          'Não é possível reivindicar um horário que já passou.',
+        );
       }
 
       const service = await tx.servico.findFirst({
@@ -450,7 +454,9 @@ export class WaitlistService {
       }
 
       if (service.duracaoMinutos !== slotEnd - slotStart) {
-        throw new BadRequestException('O slot não corresponde à duração do serviço.');
+        throw new BadRequestException(
+          'O slot não corresponde à duração do serviço.',
+        );
       }
 
       const snapshot = await this.scheduleService.getDateSnapshot(
@@ -646,7 +652,13 @@ export class WaitlistService {
         throw new ConflictException('Entrada da lista não está ativa.');
       }
 
-      return { appointment, claim: this.claimResponse({ ...current, status: StatusWaitlistClaim.ACEITO }) };
+      return {
+        appointment,
+        claim: this.claimResponse({
+          ...current,
+          status: StatusWaitlistClaim.ACEITO,
+        }),
+      };
     });
   }
 
@@ -691,7 +703,10 @@ export class WaitlistService {
         throw new ConflictException('Claim foi atualizado por outra operação.');
       }
 
-      return this.claimResponse({ ...current, status: StatusWaitlistClaim.RECUSADO });
+      return this.claimResponse({
+        ...current,
+        status: StatusWaitlistClaim.RECUSADO,
+      });
     });
   }
 

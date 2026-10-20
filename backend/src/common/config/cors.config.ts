@@ -55,7 +55,9 @@ export function resolveAllowedOrigins(
     );
   }
 
-  const invalidCount = origins.filter((origin) => !isValidOrigin(origin)).length;
+  const invalidCount = origins.filter(
+    (origin) => !isValidOrigin(origin),
+  ).length;
   if (invalidCount > 0) {
     throw new Error(
       `CORS_ALLOWED_ORIGINS contém ${invalidCount} origem(ns) inválida(s); use o formato http(s)://host[:porta].`,

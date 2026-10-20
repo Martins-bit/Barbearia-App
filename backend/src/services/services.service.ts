@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateServiceDto } from './dto/create-service.dto';
@@ -73,7 +77,7 @@ export class ServicesService {
       orderBy: { id: 'asc' },
     });
 
-    return services.map((service) => this.toResponse(service as ServiceRecord));
+    return services.map((service) => this.toResponse(service));
   }
 
   async findActiveServiceById(serviceId: number): Promise<ServiceResponseDto> {
@@ -86,7 +90,7 @@ export class ServicesService {
       throw new NotFoundException('Serviço não encontrado.');
     }
 
-    return this.toResponse(service as ServiceRecord);
+    return this.toResponse(service);
   }
 
   async findOwnServicesByUserId(userId: number): Promise<ServiceResponseDto[]> {
@@ -102,7 +106,7 @@ export class ServicesService {
       orderBy: { id: 'asc' },
     });
 
-    return services.map((service) => this.toResponse(service as ServiceRecord));
+    return services.map((service) => this.toResponse(service));
   }
 
   async createService(
@@ -126,7 +130,7 @@ export class ServicesService {
       select: this.serviceSelect,
     });
 
-    return this.toResponse(service as ServiceRecord);
+    return this.toResponse(service);
   }
 
   async updateOwnService(
@@ -139,7 +143,9 @@ export class ServicesService {
     );
 
     if (Object.keys(updateData).length === 0) {
-      throw new BadRequestException('Informe ao menos um campo para atualizar.');
+      throw new BadRequestException(
+        'Informe ao menos um campo para atualizar.',
+      );
     }
 
     const barberId = await this.findBarberIdByUserId(userId);
@@ -170,7 +176,7 @@ export class ServicesService {
       select: this.serviceSelect,
     });
 
-    return this.toResponse(updatedService as ServiceRecord);
+    return this.toResponse(updatedService);
   }
 
   async updateOwnServiceStatus(
@@ -199,6 +205,6 @@ export class ServicesService {
       select: this.serviceSelect,
     });
 
-    return this.toResponse(updatedService as ServiceRecord);
+    return this.toResponse(updatedService);
   }
 }

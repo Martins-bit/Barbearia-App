@@ -152,10 +152,18 @@ describe('Services (e2e)', () => {
 
   afterAll(async () => {
     if (prisma) {
-      await prisma.servico.deleteMany({ where: { id: { in: createdServiceIds } } });
-      await prisma.barbeiro.deleteMany({ where: { id: { in: createdBarberIds } } });
-      await prisma.cliente.deleteMany({ where: { usuarioId: { in: createdUserIds } } });
-      await prisma.usuario.deleteMany({ where: { id: { in: createdUserIds } } });
+      await prisma.servico.deleteMany({
+        where: { id: { in: createdServiceIds } },
+      });
+      await prisma.barbeiro.deleteMany({
+        where: { id: { in: createdBarberIds } },
+      });
+      await prisma.cliente.deleteMany({
+        where: { usuarioId: { in: createdUserIds } },
+      });
+      await prisma.usuario.deleteMany({
+        where: { id: { in: createdUserIds } },
+      });
     }
 
     if (app) {
@@ -185,11 +193,15 @@ describe('Services (e2e)', () => {
     );
     // Serviço inativo do MESMO barbeiro não aparece.
     expect(response.body).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: inactiveServiceId })]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: inactiveServiceId }),
+      ]),
     );
     // Serviço ATIVO de OUTRO barbeiro nunca aparece no escopo do barbeiro A.
     expect(response.body).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: barberBServiceId })]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: barberBServiceId }),
+      ]),
     );
     for (const service of response.body) {
       expect(service.ativo).toBe(true);
@@ -250,7 +262,9 @@ describe('Services (e2e)', () => {
     expect(response.body).not.toHaveProperty('barbeiroId');
     expect(response.body).not.toHaveProperty('dataCriacao');
     expect(response.body).not.toHaveProperty('dataAtualizacao');
-    expect(JSON.stringify(response.body)).not.toMatch(/pagamento|pix|checkout|transação/i);
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /pagamento|pix|checkout|transação/i,
+    );
   });
 
   it('cliente recebe 403 nas operações administrativas', async () => {
@@ -290,7 +304,9 @@ describe('Services (e2e)', () => {
       ]),
     );
     expect(response.body).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: barberBServiceId })]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: barberBServiceId }),
+      ]),
     );
   });
 
@@ -352,7 +368,9 @@ describe('Services (e2e)', () => {
       .expect(404);
 
     expect(response.body.message).toBe('Serviço não encontrado.');
-    expect(JSON.stringify(response.body)).not.toMatch(/barbeiro|proprietário|owner/i);
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /barbeiro|proprietário|owner/i,
+    );
   });
 
   it.each([
@@ -620,7 +638,9 @@ describe('Services (e2e)', () => {
         .expect(200)
         .expect((response) => {
           expect(response.body).not.toEqual(
-            expect.arrayContaining([expect.objectContaining({ id: serviceId })]),
+            expect.arrayContaining([
+              expect.objectContaining({ id: serviceId }),
+            ]),
           );
           for (const service of response.body) {
             expect(service.ativo).toBe(true);
@@ -757,7 +777,11 @@ describe('Services (e2e)', () => {
         await request(app.getHttpServer())
           .post('/services')
           .set('Authorization', `Bearer ${disabledUserToken}`)
-          .send({ nome: 'Usuario desativado', duracaoMinutos: 30, preco: '20.00' })
+          .send({
+            nome: 'Usuario desativado',
+            duracaoMinutos: 30,
+            preco: '20.00',
+          })
           .expect(401);
       } finally {
         // Restaura o estado para não deixar dado permanente alterado.

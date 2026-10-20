@@ -356,11 +356,7 @@ export class MessagesGateway
    * já está persistida e será recuperada via REST (sem fila offline nesta
    * etapa).
    */
-  private emitToUser(
-    usuarioId: number,
-    event: string,
-    data: unknown,
-  ): void {
+  private emitToUser(usuarioId: number, event: string, data: unknown): void {
     const socketIds = this.socketRegistry.getSocketIds(usuarioId);
     if (socketIds.length === 0 || !this.server) {
       return;
@@ -407,7 +403,9 @@ export class MessagesGateway
     const status = (error as { getStatus?: () => number })?.getStatus?.();
     const publicMessage =
       typeof status === 'number' ? (error as Error).message : undefined;
-    return new WsException(publicMessage || 'Não foi possível enviar a mensagem.');
+    return new WsException(
+      publicMessage || 'Não foi possível enviar a mensagem.',
+    );
   }
 
   private getIdentity(client: Socket): SocketIdentity | null {

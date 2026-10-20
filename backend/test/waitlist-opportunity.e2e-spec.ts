@@ -13,7 +13,7 @@ import { hashPassword } from '../src/common/utils/password.util';
 import { getZonedParts } from '../src/schedule/tz.util';
 import { PrismaService } from '../src/prisma/prisma.service';
 
- describe('Waitlist opportunity orchestration (e2e)', () => {
+describe('Waitlist opportunity orchestration (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let clientToken: string;
@@ -37,7 +37,9 @@ import { PrismaService } from '../src/prisma/prisma.service';
 
   function futureDateKey(offsetDays: number): string {
     const parts = getZonedParts(new Date());
-    const date = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + offsetDays));
+    const date = new Date(
+      Date.UTC(parts.year, parts.month - 1, parts.day + offsetDays),
+    );
     const pad = (value: number): string => String(value).padStart(2, '0');
     return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
   }
@@ -66,14 +68,18 @@ import { PrismaService } from '../src/prisma/prisma.service';
   }
 
   beforeAll(async () => {
-    const moduleFixture = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    const moduleFixture = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
     app = moduleFixture.createNestApplication();
-    app.useGlobalPipes(new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-      transformOptions: { enableImplicitConversion: true },
-    }));
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+        transformOptions: { enableImplicitConversion: true },
+      }),
+    );
     await app.init();
     prisma = app.get(PrismaService);
     const senhaHash = await hashPassword(password);
@@ -144,12 +150,38 @@ import { PrismaService } from '../src/prisma/prisma.service';
 
   afterAll(async () => {
     if (prisma) {
-      await prisma.notificacao.deleteMany({ where: { OR: [{ id: { in: notificationIds } }, { usuarioId: { in: userIds } }] } });
-      await prisma.agendamento.deleteMany({ where: { OR: [{ id: { in: appointmentIds } }, { clienteId: { in: clientIds } }, { barbeiroId: { in: barberIds } }] } });
-      await prisma.waitlistClaim.deleteMany({ where: { OR: [{ id: { in: claimIds } }, { barbeiroId: { in: barberIds } }] } });
-      await prisma.listaEspera.deleteMany({ where: { OR: [{ id: { in: waitlistIds } }, { clienteId: { in: clientIds } }] } });
-      await prisma.bloqueioAgenda.deleteMany({ where: { OR: [{ id: { in: blockIds } }, { barbeiroId: { in: barberIds } }] } });
-      await prisma.horarioFuncionamento.deleteMany({ where: { barbeiroId: { in: barberIds } } });
+      await prisma.notificacao.deleteMany({
+        where: {
+          OR: [{ id: { in: notificationIds } }, { usuarioId: { in: userIds } }],
+        },
+      });
+      await prisma.agendamento.deleteMany({
+        where: {
+          OR: [
+            { id: { in: appointmentIds } },
+            { clienteId: { in: clientIds } },
+            { barbeiroId: { in: barberIds } },
+          ],
+        },
+      });
+      await prisma.waitlistClaim.deleteMany({
+        where: {
+          OR: [{ id: { in: claimIds } }, { barbeiroId: { in: barberIds } }],
+        },
+      });
+      await prisma.listaEspera.deleteMany({
+        where: {
+          OR: [{ id: { in: waitlistIds } }, { clienteId: { in: clientIds } }],
+        },
+      });
+      await prisma.bloqueioAgenda.deleteMany({
+        where: {
+          OR: [{ id: { in: blockIds } }, { barbeiroId: { in: barberIds } }],
+        },
+      });
+      await prisma.horarioFuncionamento.deleteMany({
+        where: { barbeiroId: { in: barberIds } },
+      });
       await prisma.servico.deleteMany({ where: { id: { in: serviceIds } } });
       await prisma.barbeiro.deleteMany({ where: { id: { in: barberIds } } });
       await prisma.cliente.deleteMany({ where: { id: { in: clientIds } } });
@@ -163,7 +195,12 @@ import { PrismaService } from '../src/prisma/prisma.service';
     const appointment = await request(app.getHttpServer())
       .post('/appointments')
       .set('Authorization', `Bearer ${clientToken}`)
-      .send({ barbeiroId: barberId, servicoId: service60Id, data: dateKey, horaInicio: '10:00' })
+      .send({
+        barbeiroId: barberId,
+        servicoId: service60Id,
+        data: dateKey,
+        horaInicio: '10:00',
+      })
       .expect(201);
     appointmentIds.push(appointment.body.id);
     const entry = await createWaitlist(dateKey, service30Id);
@@ -181,7 +218,9 @@ import { PrismaService } from '../src/prisma/prisma.service';
     expect(claim?.horaFim).toBe('10:30');
     claimIds.push(claim!.id);
 
-    const notification = await prisma.notificacao.findFirst({ where: { claimId: claim!.id } });
+    const notification = await prisma.notificacao.findFirst({
+      where: { claimId: claim!.id },
+    });
     expect(notification?.tipo).toBe(TipoNotificacao.WAITLIST_OPPORTUNITY);
     notificationIds.push(notification!.id);
   });
@@ -191,7 +230,12 @@ import { PrismaService } from '../src/prisma/prisma.service';
     const appointment = await request(app.getHttpServer())
       .post('/appointments')
       .set('Authorization', `Bearer ${clientToken}`)
-      .send({ barbeiroId: barberId, servicoId: service30Id, data: dateKey, horaInicio: '12:00' })
+      .send({
+        barbeiroId: barberId,
+        servicoId: service30Id,
+        data: dateKey,
+        horaInicio: '12:00',
+      })
       .expect(201);
     appointmentIds.push(appointment.body.id);
 
@@ -199,7 +243,11 @@ import { PrismaService } from '../src/prisma/prisma.service';
       .patch(`/appointments/${appointment.body.id}/cancel`)
       .set('Authorization', `Bearer ${clientToken}`)
       .expect(200);
-    expect(await prisma.waitlistClaim.count({ where: { data: new Date(`${dateKey}T00:00:00.000Z`) } })).toBe(0);
+    expect(
+      await prisma.waitlistClaim.count({
+        where: { data: new Date(`${dateKey}T00:00:00.000Z`) },
+      }),
+    ).toBe(0);
   });
 
   it('remoção de bloqueio cria claim e notificação', async () => {
@@ -224,7 +272,9 @@ import { PrismaService } from '../src/prisma/prisma.service';
     expect(claim?.horaInicio).toBe('14:00');
     expect(claim?.horaFim).toBe('14:30');
     claimIds.push(claim!.id);
-    const notification = await prisma.notificacao.findFirst({ where: { claimId: claim!.id } });
+    const notification = await prisma.notificacao.findFirst({
+      where: { claimId: claim!.id },
+    });
     expect(notification?.tipo).toBe(TipoNotificacao.WAITLIST_OPPORTUNITY);
     notificationIds.push(notification!.id);
   });
@@ -242,7 +292,11 @@ import { PrismaService } from '../src/prisma/prisma.service';
       .delete(`/schedule-blocks/${block.body.id}`)
       .set('Authorization', `Bearer ${barberToken}`)
       .expect(200);
-    expect(await prisma.waitlistClaim.count({ where: { data: new Date(`${dateKey}T00:00:00.000Z`) } })).toBe(0);
+    expect(
+      await prisma.waitlistClaim.count({
+        where: { data: new Date(`${dateKey}T00:00:00.000Z`) },
+      }),
+    ).toBe(0);
   });
 
   it('corrida entre cancelamento e novo appointment não cria claim inválido', async () => {
@@ -250,7 +304,12 @@ import { PrismaService } from '../src/prisma/prisma.service';
     const appointment = await request(app.getHttpServer())
       .post('/appointments')
       .set('Authorization', `Bearer ${clientToken}`)
-      .send({ barbeiroId: barberId, servicoId: service30Id, data: dateKey, horaInicio: '10:00' })
+      .send({
+        barbeiroId: barberId,
+        servicoId: service30Id,
+        data: dateKey,
+        horaInicio: '10:00',
+      })
       .expect(201);
     appointmentIds.push(appointment.body.id);
     await createWaitlist(dateKey, service30Id);
@@ -262,10 +321,17 @@ import { PrismaService } from '../src/prisma/prisma.service';
       request(app.getHttpServer())
         .post('/appointments')
         .set('Authorization', `Bearer ${clientToken}`)
-        .send({ barbeiroId: barberId, servicoId: service30Id, data: dateKey, horaInicio: '10:00' }),
+        .send({
+          barbeiroId: barberId,
+          servicoId: service30Id,
+          data: dateKey,
+          horaInicio: '10:00',
+        }),
     ]);
 
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(2);
     const confirmed = await prisma.agendamento.count({
       where: {
         barbeiroId: barberId,

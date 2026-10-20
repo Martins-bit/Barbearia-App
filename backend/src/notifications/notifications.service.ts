@@ -1,12 +1,6 @@
-import {
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, PrismaClient } from '../generated/prisma/client';
-import {
-  StatusAgendamento,
-  TipoNotificacao,
-} from '../generated/prisma/enums';
+import { StatusAgendamento, TipoNotificacao } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type NotificationsDbClient = PrismaClient | Prisma.TransactionClient;
@@ -214,7 +208,10 @@ export class NotificationsService {
     return { count };
   }
 
-  async markAsRead(userId: number, notificationId: number): Promise<NotificationResponse> {
+  async markAsRead(
+    userId: number,
+    notificationId: number,
+  ): Promise<NotificationResponse> {
     await this.prisma.notificacao.updateMany({
       where: { id: notificationId, usuarioId: userId, lida: false },
       data: { lida: true, dataLeitura: new Date() },

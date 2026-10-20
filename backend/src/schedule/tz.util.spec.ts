@@ -33,9 +33,7 @@ describe('tz.util (America/Sao_Paulo)', () => {
     expect(afterDst.toISOString()).toBe('2019-02-17T23:00:00.000Z');
 
     // Entre as duas meias-noites locais houve a "hora extra" da transição.
-    expect(afterDst.getTime() - duringDst.getTime()).toBe(
-      25 * 60 * 60 * 1000,
-    );
+    expect(afterDst.getTime() - duringDst.getTime()).toBe(25 * 60 * 60 * 1000);
   });
 
   it('getZonedParts devolve os componentes locais do fuso da barbearia', () => {

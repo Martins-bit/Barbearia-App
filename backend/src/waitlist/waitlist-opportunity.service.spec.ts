@@ -31,10 +31,7 @@ describe('WaitlistOpportunityService', () => {
         listaEsperaId: 1,
       }),
     };
-    service = new WaitlistOpportunityService(
-      prisma as unknown as PrismaService,
-      waitlistService as unknown as WaitlistService,
-    );
+    service = new WaitlistOpportunityService(prisma, waitlistService);
     prisma.listaEspera.findMany.mockResolvedValue([
       {
         id: 1,
@@ -92,11 +89,15 @@ describe('WaitlistOpportunityService', () => {
     ]);
     waitlistService.findEligibleEntriesForSlot.mockResolvedValue([]);
 
-    await expect(service.tryCreateForReleasedWindow({
-      ...releasedWindow,
-      horaFim: '11:00',
-    })).resolves.toBeNull();
-    expect(waitlistService.claimNextEligibleEntryForSlot).not.toHaveBeenCalled();
+    await expect(
+      service.tryCreateForReleasedWindow({
+        ...releasedWindow,
+        horaFim: '11:00',
+      }),
+    ).resolves.toBeNull();
+    expect(
+      waitlistService.claimNextEligibleEntryForSlot,
+    ).not.toHaveBeenCalled();
   });
 
   it('respeita a faixa de horário desejada', async () => {
@@ -126,9 +127,13 @@ describe('WaitlistOpportunityService', () => {
   it('não tenta nova oportunidade para entrada com claim ativo', async () => {
     prisma.waitlistClaim.findFirst.mockResolvedValue({ id: 40 });
 
-    await expect(service.tryCreateForReleasedWindow(releasedWindow)).resolves.toBeNull();
+    await expect(
+      service.tryCreateForReleasedWindow(releasedWindow),
+    ).resolves.toBeNull();
     expect(waitlistService.findEligibleEntriesForSlot).not.toHaveBeenCalled();
-    expect(waitlistService.claimNextEligibleEntryForSlot).not.toHaveBeenCalled();
+    expect(
+      waitlistService.claimNextEligibleEntryForSlot,
+    ).not.toHaveBeenCalled();
   });
 
   it('trata ausência de candidato e slot ocupado como resultado normal', async () => {
@@ -139,18 +144,22 @@ describe('WaitlistOpportunityService', () => {
       new ConflictException(),
     );
 
-    await expect(service.tryCreateForReleasedWindow({
-      ...releasedWindow,
-      horaFim: '12:00',
-    })).resolves.toBeNull();
+    await expect(
+      service.tryCreateForReleasedWindow({
+        ...releasedWindow,
+        horaFim: '12:00',
+      }),
+    ).resolves.toBeNull();
   });
 
   it('não engole erro de infraestrutura', async () => {
     const infrastructureError = new Error('database unavailable');
-    waitlistService.findEligibleEntriesForSlot.mockRejectedValue(infrastructureError);
-
-    await expect(service.tryCreateForReleasedWindow(releasedWindow)).rejects.toBe(
+    waitlistService.findEligibleEntriesForSlot.mockRejectedValue(
       infrastructureError,
     );
+
+    await expect(
+      service.tryCreateForReleasedWindow(releasedWindow),
+    ).rejects.toBe(infrastructureError);
   });
 });

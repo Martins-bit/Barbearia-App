@@ -93,9 +93,12 @@ export class AppointmentsService {
       return;
     }
 
-    const opportunityService = this.moduleRef.get('WAITLIST_OPPORTUNITY_SERVICE', {
-      strict: false,
-    });
+    const opportunityService = this.moduleRef.get(
+      'WAITLIST_OPPORTUNITY_SERVICE',
+      {
+        strict: false,
+      },
+    );
     await opportunityService.tryCreateForReleasedWindow({
       barbeiroId: row.barbeiroId,
       dateKey: dateKeyFromUtcMidnight(row.data),
@@ -179,8 +182,13 @@ export class AppointmentsService {
     }
 
     const endMinutes = startMinutes + service.duracaoMinutos;
-    if (input.horaFim !== undefined && input.horaFim !== this.minutesToHHmm(endMinutes)) {
-      throw new BadRequestException('O horário final não corresponde à duração do serviço.');
+    if (
+      input.horaFim !== undefined &&
+      input.horaFim !== this.minutesToHHmm(endMinutes)
+    ) {
+      throw new BadRequestException(
+        'O horário final não corresponde à duração do serviço.',
+      );
     }
 
     const { windows, busy } = await this.scheduleService.getDateSnapshot(
@@ -216,9 +224,7 @@ export class AppointmentsService {
           ini: localMinuteOfDay(
             zonedWallTimeToUtc(input.data, claim.horaInicio),
           ),
-          fim: localMinuteOfDay(
-            zonedWallTimeToUtc(input.data, claim.horaFim),
-          ),
+          fim: localMinuteOfDay(zonedWallTimeToUtc(input.data, claim.horaFim)),
         }),
       )
     ) {
@@ -240,7 +246,9 @@ export class AppointmentsService {
         }),
       )
     ) {
-      throw new ConflictException('Horário não está disponível para o cliente.');
+      throw new ConflictException(
+        'Horário não está disponível para o cliente.',
+      );
     }
 
     const created = await tx.agendamento.create({
@@ -411,8 +419,12 @@ export class AppointmentsService {
         where: { id: appointmentId },
         include: {
           servico: { select: { id: true, nome: true, preco: true } },
-          barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-          cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+          barbeiro: {
+            select: { id: true, usuario: { select: { nome: true } } },
+          },
+          cliente: {
+            select: { id: true, usuario: { select: { nome: true } } },
+          },
         },
       });
 
@@ -472,8 +484,12 @@ export class AppointmentsService {
         where: { id: appointmentId },
         include: {
           servico: { select: { id: true, nome: true, preco: true } },
-          barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-          cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+          barbeiro: {
+            select: { id: true, usuario: { select: { nome: true } } },
+          },
+          cliente: {
+            select: { id: true, usuario: { select: { nome: true } } },
+          },
         },
       });
 
@@ -584,7 +600,9 @@ export class AppointmentsService {
     }
 
     if (row.horaFim > new Date()) {
-      throw new BadRequestException('Só é possível concluir após o fim do agendamento.');
+      throw new BadRequestException(
+        'Só é possível concluir após o fim do agendamento.',
+      );
     }
 
     const updated = await this.prisma.agendamento.updateMany({
@@ -597,7 +615,9 @@ export class AppointmentsService {
     });
 
     if (updated.count === 0) {
-      throw new ConflictException('Agendamento foi atualizado por outra operação.');
+      throw new ConflictException(
+        'Agendamento foi atualizado por outra operação.',
+      );
     }
 
     const refreshed = await this.prisma.agendamento.findUnique({
@@ -662,7 +682,9 @@ export class AppointmentsService {
     });
 
     if (updated.count === 0) {
-      throw new ConflictException('Agendamento foi atualizado por outra operação.');
+      throw new ConflictException(
+        'Agendamento foi atualizado por outra operação.',
+      );
     }
 
     const refreshed = await this.prisma.agendamento.findUnique({

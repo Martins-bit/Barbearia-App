@@ -64,9 +64,7 @@ export class MessagesController {
 
   // Declarado ANTES de @Get(':userId') para não ser capturado como parâmetro.
   @Get('unread-count')
-  async unreadCount(
-    @CurrentUser() usuarioId: number,
-  ): Promise<UnreadCountDto> {
+  async unreadCount(@CurrentUser() usuarioId: number): Promise<UnreadCountDto> {
     return this.messagesService.unreadCount(usuarioId);
   }
 

@@ -1,6 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { JwtService } from '@nestjs/jwt';
-import { ConflictException, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  BadRequestException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import * as bcrypt from 'bcrypt';
@@ -21,7 +25,8 @@ describe('AuthService', () => {
   beforeEach(async () => {
     // Ensure JWT_SECRET is set for tests
     if (!process.env.JWT_SECRET) {
-      process.env.JWT_SECRET = 'test-jwt-secret-key-for-testing-purposes-only-minimum-32-chars';
+      process.env.JWT_SECRET =
+        'test-jwt-secret-key-for-testing-purposes-only-minimum-32-chars';
     }
 
     const mockUsersService = {
@@ -76,13 +81,19 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(null);
-      (usersService.createUser as jest.Mock).mockResolvedValue(usuarioRetornado);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        null,
+      );
+      (usersService.createUser as jest.Mock).mockResolvedValue(
+        usuarioRetornado,
+      );
 
       const result = await service.register(registerDto);
 
       expect(result).toEqual(usuarioRetornado);
-      expect(usersService.findByPhoneWithPasswordHash).toHaveBeenCalledWith(registerDto.telefone);
+      expect(usersService.findByPhoneWithPasswordHash).toHaveBeenCalledWith(
+        registerDto.telefone,
+      );
       expect(usersService.createUser).toHaveBeenCalledWith(
         expect.objectContaining({
           nome: registerDto.nome,
@@ -111,9 +122,13 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(usuarioExistente);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuarioExistente,
+      );
 
-      await expect(service.register(registerDto)).rejects.toThrow(ConflictException);
+      await expect(service.register(registerDto)).rejects.toThrow(
+        ConflictException,
+      );
     });
 
     it('should throw BadRequestException when required fields are missing', async () => {
@@ -123,7 +138,7 @@ describe('AuthService', () => {
         senha: 'senha12345',
       };
 
-      await expect(service.register(invalidDto as RegisterDto)).rejects.toThrow(
+      await expect(service.register(invalidDto)).rejects.toThrow(
         BadRequestException,
       );
     });
@@ -146,8 +161,12 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(null);
-      (usersService.createUser as jest.Mock).mockResolvedValue(usuarioRetornado);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        null,
+      );
+      (usersService.createUser as jest.Mock).mockResolvedValue(
+        usuarioRetornado,
+      );
 
       const result = await service.register(registerDto);
 
@@ -174,7 +193,9 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(usuario);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuario,
+      );
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
       (jwtService.sign as jest.Mock).mockReturnValue('token123');
 
@@ -193,9 +214,13 @@ describe('AuthService', () => {
         senha: 'senha12345',
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(null);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        null,
+      );
 
-      await expect(service.login(loginDto)).rejects.toThrow(UnauthorizedException);
+      await expect(service.login(loginDto)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
 
     it('should throw UnauthorizedException when password is incorrect', async () => {
@@ -216,10 +241,14 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(usuario);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuario,
+      );
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
 
-      await expect(service.login(loginDto)).rejects.toThrow(UnauthorizedException);
+      await expect(service.login(loginDto)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
 
     it('should use generic error message without revealing if phone or password was wrong', async () => {
@@ -240,7 +269,9 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(usuario);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuario,
+      );
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
 
       try {
@@ -268,7 +299,9 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(usuario);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuario,
+      );
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
       (jwtService.sign as jest.Mock).mockReturnValue('token123');
 
@@ -295,11 +328,17 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(usuarioInativo);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuarioInativo,
+      );
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
-      await expect(service.login(loginDto)).rejects.toThrow(UnauthorizedException);
-      await expect(service.login(loginDto)).rejects.toThrow('Telefone ou senha incorretos');
+      await expect(service.login(loginDto)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      await expect(service.login(loginDto)).rejects.toThrow(
+        'Telefone ou senha incorretos',
+      );
     });
 
     it('should use generic error message when user is inactive (does not reveal account status)', async () => {
@@ -320,7 +359,9 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(usuarioInativo);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuarioInativo,
+      );
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
       try {
@@ -349,11 +390,17 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(usuarioInativo);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuarioInativo,
+      );
       (bcrypt.compare as jest.Mock).mockResolvedValue(false);
 
-      await expect(service.login(wrongPasswordDto)).rejects.toThrow(UnauthorizedException);
-      await expect(service.login(wrongPasswordDto)).rejects.toThrow('Telefone ou senha incorretos');
+      await expect(service.login(wrongPasswordDto)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      await expect(service.login(wrongPasswordDto)).rejects.toThrow(
+        'Telefone ou senha incorretos',
+      );
     });
 
     it('should not issue a token for a disabled user', async () => {
@@ -374,10 +421,14 @@ describe('AuthService', () => {
         dataAtualizacao: new Date(),
       };
 
-      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(usuarioInativo);
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuarioInativo,
+      );
       (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
-      await expect(service.login(loginDto)).rejects.toThrow(UnauthorizedException);
+      await expect(service.login(loginDto)).rejects.toThrow(
+        UnauthorizedException,
+      );
       expect(jwtService.sign).not.toHaveBeenCalled();
     });
   });
@@ -406,7 +457,9 @@ describe('AuthService', () => {
     it('should throw UnauthorizedException when user not found', async () => {
       (usersService.findById as jest.Mock).mockResolvedValue(null);
 
-      await expect(service.getCurrentUser(999)).rejects.toThrow(UnauthorizedException);
+      await expect(service.getCurrentUser(999)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
 
     it('should throw UnauthorizedException when user is inactive', async () => {
@@ -423,7 +476,9 @@ describe('AuthService', () => {
 
       (usersService.findById as jest.Mock).mockResolvedValue(usuarioInativo);
 
-      await expect(service.getCurrentUser(1)).rejects.toThrow(UnauthorizedException);
+      await expect(service.getCurrentUser(1)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
 
     it('should never expose senhaHash in getCurrentUser response', async () => {
@@ -460,7 +515,9 @@ describe('AuthService', () => {
 
       (usersService.findById as jest.Mock).mockResolvedValue(usuarioInativo);
 
-      await expect(service.getCurrentUser(1)).rejects.toThrow(UnauthorizedException);
+      await expect(service.getCurrentUser(1)).rejects.toThrow(
+        UnauthorizedException,
+      );
     });
   });
 });

@@ -82,7 +82,7 @@ describe('WaitlistService', () => {
       createWaitlistOpportunity: jest.fn().mockResolvedValue({ id: 900 }),
     };
     service = new WaitlistService(
-      prisma as unknown as PrismaService,
+      prisma,
       scheduleService,
       appointmentsService,
       notificationsService,
@@ -198,7 +198,9 @@ describe('WaitlistService', () => {
 
     await expect(
       service.create(1, { ...validDto, horaInicio: '10:30', horaFim: '10:00' }),
-    ).rejects.toThrow(new BadRequestException('horaFim deve ser posterior a horaInicio.'));
+    ).rejects.toThrow(
+      new BadRequestException('horaFim deve ser posterior a horaInicio.'),
+    );
   });
 
   it('rejeita duplicidade ativa do mesmo cliente, serviço e data', async () => {
@@ -220,7 +222,9 @@ describe('WaitlistService', () => {
     });
 
     await expect(service.create(1, validDto)).rejects.toThrow(
-      new ConflictException('Já existe uma entrada ativa para este cliente, serviço e data.'),
+      new ConflictException(
+        'Já existe uma entrada ativa para este cliente, serviço e data.',
+      ),
     );
   });
 
@@ -260,7 +264,11 @@ describe('WaitlistService', () => {
         status: StatusListaEspera.ATIVA,
         dataEntrada: new Date('2099-01-01T00:00:00.000Z'),
         dataAtualizacao: new Date('2099-01-02T00:00:00.000Z'),
-        servico: { id: 20, nome: 'Corte', barbeiro: { id: 10, usuario: { nome: 'Barbeiro A' } } },
+        servico: {
+          id: 20,
+          nome: 'Corte',
+          barbeiro: { id: 10, usuario: { nome: 'Barbeiro A' } },
+        },
       },
     ]);
 
@@ -344,12 +352,11 @@ describe('WaitlistService', () => {
           }),
         }),
       );
-      expect(notificationsService.createWaitlistOpportunity).toHaveBeenCalledWith(
-        expect.anything(),
-        101,
-        50,
-      );
-      const expiresAt = prisma.waitlistClaim.create.mock.calls[0][0].data.expiraEm;
+      expect(
+        notificationsService.createWaitlistOpportunity,
+      ).toHaveBeenCalledWith(expect.anything(), 101, 50);
+      const expiresAt =
+        prisma.waitlistClaim.create.mock.calls[0][0].data.expiraEm;
       expect(expiresAt.getTime() - createdAt.getTime()).toBeGreaterThanOrEqual(
         5 * 60 * 1000,
       );
@@ -369,7 +376,9 @@ describe('WaitlistService', () => {
           slot.horaInicio,
           slot.horaFim,
         ),
-      ).rejects.toThrow(new NotFoundException('Nenhuma entrada elegível para este slot.'));
+      ).rejects.toThrow(
+        new NotFoundException('Nenhuma entrada elegível para este slot.'),
+      );
       expect(prisma.waitlistClaim.create).not.toHaveBeenCalled();
     });
 
@@ -394,7 +403,9 @@ describe('WaitlistService', () => {
           slot.horaInicio,
           slot.horaFim,
         ),
-      ).rejects.toThrow(new ConflictException('Já existe um claim ativo para este slot.'));
+      ).rejects.toThrow(
+        new ConflictException('Já existe um claim ativo para este slot.'),
+      );
 
       prisma.waitlistClaim.findFirst.mockResolvedValueOnce(null);
       prisma.waitlistClaim.create.mockResolvedValue({
@@ -434,7 +445,9 @@ describe('WaitlistService', () => {
           slot.horaInicio,
           slot.horaFim,
         ),
-      ).rejects.toThrow(new ConflictException('O slot não está mais disponível.'));
+      ).rejects.toThrow(
+        new ConflictException('O slot não está mais disponível.'),
+      );
       expect(prisma.waitlistClaim.create).not.toHaveBeenCalled();
     });
   });
@@ -497,7 +510,9 @@ describe('WaitlistService', () => {
       const result = await service.rejectClaim(1, claim.id);
 
       expect(result.status).toBe(StatusWaitlistClaim.RECUSADO);
-      expect(appointmentsService.createConfirmedForClient).not.toHaveBeenCalled();
+      expect(
+        appointmentsService.createConfirmedForClient,
+      ).not.toHaveBeenCalled();
       expect(prisma.listaEspera.updateMany).not.toHaveBeenCalled();
       expect(prisma.waitlistClaim.updateMany).toHaveBeenCalledWith({
         where: { id: claim.id, status: StatusWaitlistClaim.ATIVO },
@@ -515,7 +530,9 @@ describe('WaitlistService', () => {
       await expect(service.acceptClaim(1, claim.id)).rejects.toThrow(
         new ConflictException('Claim expirado.'),
       );
-      expect(appointmentsService.createConfirmedForClient).not.toHaveBeenCalled();
+      expect(
+        appointmentsService.createConfirmedForClient,
+      ).not.toHaveBeenCalled();
       expect(prisma.waitlistClaim.updateMany).not.toHaveBeenCalled();
     });
 
@@ -531,7 +548,9 @@ describe('WaitlistService', () => {
         await expect(service.acceptClaim(1, claim.id)).rejects.toThrow(
           new ConflictException('Claim não está ativo.'),
         );
-        expect(appointmentsService.createConfirmedForClient).not.toHaveBeenCalled();
+        expect(
+          appointmentsService.createConfirmedForClient,
+        ).not.toHaveBeenCalled();
       },
     );
 
@@ -955,30 +974,36 @@ describe('WaitlistService', () => {
         ativo: true,
         duracaoMinutos: 30,
       });
-      prisma.listaEspera.findMany.mockResolvedValue([
-        {
-          id: 6,
-          clienteId: 21,
-          barbeiroId: 10,
-          servicoId: 20,
-          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
-          dataEntrada: new Date('2099-01-04T00:00:00.000Z'),
-          status: StatusListaEspera.ATIVA,
-          horaInicio: '09:00',
-          horaFim: '18:00',
-        },
-        {
-          id: 5,
-          clienteId: 20,
-          barbeiroId: 10,
-          servicoId: 20,
-          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
-          dataEntrada: new Date('2099-01-01T00:00:00.000Z'),
-          status: StatusListaEspera.ATIVA,
-          horaInicio: '09:00',
-          horaFim: '18:00',
-        },
-      ].sort((a, b) => new Date(a.dataEntrada).getTime() - new Date(b.dataEntrada).getTime()));
+      prisma.listaEspera.findMany.mockResolvedValue(
+        [
+          {
+            id: 6,
+            clienteId: 21,
+            barbeiroId: 10,
+            servicoId: 20,
+            dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+            dataEntrada: new Date('2099-01-04T00:00:00.000Z'),
+            status: StatusListaEspera.ATIVA,
+            horaInicio: '09:00',
+            horaFim: '18:00',
+          },
+          {
+            id: 5,
+            clienteId: 20,
+            barbeiroId: 10,
+            servicoId: 20,
+            dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+            dataEntrada: new Date('2099-01-01T00:00:00.000Z'),
+            status: StatusListaEspera.ATIVA,
+            horaInicio: '09:00',
+            horaFim: '18:00',
+          },
+        ].sort(
+          (a, b) =>
+            new Date(a.dataEntrada).getTime() -
+            new Date(b.dataEntrada).getTime(),
+        ),
+      );
       prisma.agendamento.findMany.mockResolvedValue([]);
 
       const result = await service.findEligibleEntriesForSlot(

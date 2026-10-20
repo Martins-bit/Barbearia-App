@@ -64,7 +64,9 @@ describe('RolesGuard', () => {
       }),
     );
 
-    await expect(guard.canActivate(context)).rejects.toThrow(ForbiddenException);
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('rejeita BARBEIRO com registro inativo', async () => {
@@ -73,7 +75,9 @@ describe('RolesGuard', () => {
       createAuthorizationState({ barbeiro: { ativo: false } }),
     );
 
-    await expect(guard.canActivate(context)).rejects.toThrow(ForbiddenException);
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('rejeita BARBEIRO sem registro relacionado', async () => {
@@ -82,7 +86,9 @@ describe('RolesGuard', () => {
       createAuthorizationState({ barbeiro: null }),
     );
 
-    await expect(guard.canActivate(context)).rejects.toThrow(ForbiddenException);
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('rejeita usuário inativo com 401', async () => {
@@ -91,14 +97,18 @@ describe('RolesGuard', () => {
       createAuthorizationState({ ativo: false }),
     );
 
-    await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      UnauthorizedException,
+    );
   });
 
   it('rejeita usuário inexistente com 401', async () => {
     reflector.getAllAndOverride.mockReturnValue([TipoUsuario.BARBEIRO]);
     usersService.findAuthorizationStateById.mockResolvedValue(null);
 
-    await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      UnauthorizedException,
+    );
   });
 
   it('usa o banco, ignorando tipoUsuario falso no JWT', async () => {
@@ -136,7 +146,9 @@ describe('RolesGuard', () => {
       }),
     );
 
-    await expect(guard.canActivate(context)).rejects.toThrow(ForbiddenException);
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      ForbiddenException,
+    );
   });
 
   it('invalida token antigo quando o usuário é desativado', async () => {
@@ -146,7 +158,9 @@ describe('RolesGuard', () => {
       createAuthorizationState({ ativo: false }),
     );
 
-    await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      UnauthorizedException,
+    );
   });
 
   it('permite usuário ativo sem roles, sem conceder privilégio administrativo', async () => {
@@ -165,7 +179,9 @@ describe('RolesGuard', () => {
   it('rejeita requisição sem sub com 401', async () => {
     request = { user: { tipoUsuario: TipoUsuario.BARBEIRO } };
 
-    await expect(guard.canActivate(context)).rejects.toThrow(UnauthorizedException);
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      UnauthorizedException,
+    );
     expect(usersService.findAuthorizationStateById).not.toHaveBeenCalled();
   });
 });

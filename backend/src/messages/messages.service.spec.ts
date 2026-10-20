@@ -7,7 +7,6 @@ import { TipoUsuario } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import { MessagesService } from './messages.service';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 function buildPrismaMock(): any {
   return {
     usuario: { findUnique: jest.fn(), findMany: jest.fn() },
@@ -74,7 +73,7 @@ describe('MessagesService', () => {
 
   beforeEach(() => {
     prisma = buildPrismaMock();
-    service = new MessagesService(prisma as unknown as PrismaService);
+    service = new MessagesService(prisma);
     prisma.mensagem.create.mockResolvedValue(messageRow);
   });
 
@@ -151,7 +150,10 @@ describe('MessagesService', () => {
       arrangeUsers();
 
       await expect(
-        service.sendMessage(clientUser.id, { destinatarioId: 11, conteudo: 'Oi' }),
+        service.sendMessage(clientUser.id, {
+          destinatarioId: 11,
+          conteudo: 'Oi',
+        }),
       ).rejects.toThrow(
         new BadRequestException(
           'Mensagens são permitidas somente entre cliente e barbeiro.',
@@ -164,7 +166,10 @@ describe('MessagesService', () => {
       arrangeBarberActive(true);
 
       await expect(
-        service.sendMessage(barberUser.id, { destinatarioId: 21, conteudo: 'Oi' }),
+        service.sendMessage(barberUser.id, {
+          destinatarioId: 21,
+          conteudo: 'Oi',
+        }),
       ).rejects.toThrow(
         new BadRequestException(
           'Mensagens são permitidas somente entre cliente e barbeiro.',
@@ -177,9 +182,14 @@ describe('MessagesService', () => {
       arrangeBarberActive(true);
 
       await expect(
-        service.sendMessage(clientUser.id, { destinatarioId: 10, conteudo: 'Oi' }),
+        service.sendMessage(clientUser.id, {
+          destinatarioId: 10,
+          conteudo: 'Oi',
+        }),
       ).rejects.toThrow(
-        new BadRequestException('Não é possível enviar mensagem para si mesmo.'),
+        new BadRequestException(
+          'Não é possível enviar mensagem para si mesmo.',
+        ),
       );
     });
 
@@ -188,7 +198,10 @@ describe('MessagesService', () => {
       arrangeBarberActive(true);
 
       await expect(
-        service.sendMessage(clientUser.id, { destinatarioId: 999, conteudo: 'Oi' }),
+        service.sendMessage(clientUser.id, {
+          destinatarioId: 999,
+          conteudo: 'Oi',
+        }),
       ).rejects.toThrow(new NotFoundException('Destinatário não encontrado.'));
     });
 
@@ -202,7 +215,10 @@ describe('MessagesService', () => {
       );
 
       await expect(
-        service.sendMessage(clientUser.id, { destinatarioId: 20, conteudo: 'Oi' }),
+        service.sendMessage(clientUser.id, {
+          destinatarioId: 20,
+          conteudo: 'Oi',
+        }),
       ).rejects.toThrow(new NotFoundException('Destinatário não encontrado.'));
     });
 
@@ -211,11 +227,17 @@ describe('MessagesService', () => {
       arrangeBarberActive(false);
 
       await expect(
-        service.sendMessage(clientUser.id, { destinatarioId: 20, conteudo: 'Oi' }),
+        service.sendMessage(clientUser.id, {
+          destinatarioId: 20,
+          conteudo: 'Oi',
+        }),
       ).rejects.toThrow(new NotFoundException('Destinatário não encontrado.'));
 
       await expect(
-        service.sendMessage(barberUser.id, { destinatarioId: 10, conteudo: 'Oi' }),
+        service.sendMessage(barberUser.id, {
+          destinatarioId: 10,
+          conteudo: 'Oi',
+        }),
       ).rejects.toThrow(new ForbiddenException('Remetente não autorizado.'));
     });
 
@@ -224,7 +246,10 @@ describe('MessagesService', () => {
       arrangeBarberActive(true);
 
       await expect(
-        service.sendMessage(clientUser.id, { destinatarioId: 20, conteudo: '   ' }),
+        service.sendMessage(clientUser.id, {
+          destinatarioId: 20,
+          conteudo: '   ',
+        }),
       ).rejects.toThrow(
         new BadRequestException('Conteúdo da mensagem é obrigatório.'),
       );
@@ -239,7 +264,9 @@ describe('MessagesService', () => {
           destinatarioId: 20,
           conteudo: 'a'.repeat(501),
         }),
-      ).rejects.toThrow(new BadRequestException('Conteúdo excede 500 caracteres.'));
+      ).rejects.toThrow(
+        new BadRequestException('Conteúdo excede 500 caracteres.'),
+      );
     });
 
     it('remetente inativo rejeitado', async () => {
@@ -248,7 +275,10 @@ describe('MessagesService', () => {
       );
 
       await expect(
-        service.sendMessage(clientUser.id, { destinatarioId: 20, conteudo: 'Oi' }),
+        service.sendMessage(clientUser.id, {
+          destinatarioId: 20,
+          conteudo: 'Oi',
+        }),
       ).rejects.toThrow(new ForbiddenException('Remetente não autorizado.'));
     });
   });
@@ -261,7 +291,10 @@ describe('MessagesService', () => {
         { ...messageRow, id: 101, remetenteId: 20, destinatarioId: 10 },
       ]);
 
-      const result = await service.findConversation(clientUser.id, barberUser.id);
+      const result = await service.findConversation(
+        clientUser.id,
+        barberUser.id,
+      );
 
       expect(prisma.mensagem.findMany).toHaveBeenCalledWith({
         where: {
@@ -574,7 +607,11 @@ describe('MessagesService', () => {
       const firstReadAt = new Date('2099-01-01T11:00:00.000Z');
       prisma.mensagem.findUnique
         .mockResolvedValueOnce(messageRow)
-        .mockResolvedValueOnce({ ...messageRow, lida: true, dataLeitura: firstReadAt });
+        .mockResolvedValueOnce({
+          ...messageRow,
+          lida: true,
+          dataLeitura: firstReadAt,
+        });
 
       const result = await service.markAsRead(20, 100);
 
@@ -588,7 +625,11 @@ describe('MessagesService', () => {
 
     it('segunda leitura não altera dataLeitura (update condicional)', async () => {
       const firstReadAt = new Date('2099-01-01T11:00:00.000Z');
-      const alreadyRead = { ...messageRow, lida: true, dataLeitura: firstReadAt };
+      const alreadyRead = {
+        ...messageRow,
+        lida: true,
+        dataLeitura: firstReadAt,
+      };
       prisma.mensagem.findUnique.mockResolvedValue(alreadyRead);
 
       const result = await service.markAsRead(20, 100);

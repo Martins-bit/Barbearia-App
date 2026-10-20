@@ -7,35 +7,42 @@ import { buildCorsOptions, resolveAllowedOrigins } from './cors.config';
 describe('resolveAllowedOrigins', () => {
   it('em desenvolvimento, sem configuração, usa as origens locais padrão', () => {
     const origins = resolveAllowedOrigins({ NODE_ENV: 'development' });
-    expect(origins).toEqual([
-      'http://localhost:5173',
-      'http://localhost:5174',
-    ]);
+    expect(origins).toEqual(['http://localhost:5173', 'http://localhost:5174']);
   });
 
   it('lê e normaliza CORS_ALLOWED_ORIGINS (vírgulas, espaços, vazios)', () => {
     const origins = resolveAllowedOrigins({
       NODE_ENV: 'development',
-      CORS_ALLOWED_ORIGINS: ' https://app.exemplo.com , http://localhost:5173 ,',
+      CORS_ALLOWED_ORIGINS:
+        ' https://app.exemplo.com , http://localhost:5173 ,',
     });
-    expect(origins).toEqual(['https://app.exemplo.com', 'http://localhost:5173']);
+    expect(origins).toEqual([
+      'https://app.exemplo.com',
+      'http://localhost:5173',
+    ]);
   });
 
   it('em produção, exige CORS_ALLOWED_ORIGINS explícito (ausente → erro)', () => {
-    expect(() =>
-      resolveAllowedOrigins({ NODE_ENV: 'production' }),
-    ).toThrow('CORS_ALLOWED_ORIGINS');
+    expect(() => resolveAllowedOrigins({ NODE_ENV: 'production' })).toThrow(
+      'CORS_ALLOWED_ORIGINS',
+    );
   });
 
   it('em produção, valor vazio/espaços → erro', () => {
     expect(() =>
-      resolveAllowedOrigins({ NODE_ENV: 'production', CORS_ALLOWED_ORIGINS: '  ' }),
+      resolveAllowedOrigins({
+        NODE_ENV: 'production',
+        CORS_ALLOWED_ORIGINS: '  ',
+      }),
     ).toThrow('CORS_ALLOWED_ORIGINS');
   });
 
   it('nunca aceita "*" quando há credenciais', () => {
     expect(() =>
-      resolveAllowedOrigins({ NODE_ENV: 'development', CORS_ALLOWED_ORIGINS: '*' }),
+      resolveAllowedOrigins({
+        NODE_ENV: 'development',
+        CORS_ALLOWED_ORIGINS: '*',
+      }),
     ).toThrow(/"\*"/);
   });
 

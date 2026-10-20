@@ -141,7 +141,9 @@ describe('Waitlist (e2e)', () => {
       await prisma.notificacao.deleteMany({
         where: { usuarioId: { in: userIds } },
       });
-      await prisma.waitlistClaim.deleteMany({ where: { id: { in: claimIds } } });
+      await prisma.waitlistClaim.deleteMany({
+        where: { id: { in: claimIds } },
+      });
       await prisma.listaEspera.deleteMany({
         where: {
           OR: [
@@ -153,12 +155,21 @@ describe('Waitlist (e2e)', () => {
         },
       });
       await prisma.agendamento.deleteMany({
-        where: { OR: [{ barbeiroId: { in: barberIds } }, { clienteId: { in: clientIds } }] },
+        where: {
+          OR: [
+            { barbeiroId: { in: barberIds } },
+            { clienteId: { in: clientIds } },
+          ],
+        },
       });
       await prisma.servico.deleteMany({ where: { id: { in: serviceIds } } });
-      await prisma.horarioFuncionamento.deleteMany({ where: { barbeiroId: { in: barberIds } } });
+      await prisma.horarioFuncionamento.deleteMany({
+        where: { barbeiroId: { in: barberIds } },
+      });
       await prisma.barbeiro.deleteMany({ where: { id: { in: barberIds } } });
-      await prisma.cliente.deleteMany({ where: { usuarioId: { in: userIds } } });
+      await prisma.cliente.deleteMany({
+        where: { usuarioId: { in: userIds } },
+      });
       await prisma.usuario.deleteMany({ where: { id: { in: userIds } } });
     }
 
@@ -289,10 +300,18 @@ describe('Waitlist (e2e)', () => {
     expect(response.body.claim.status).toBe(StatusWaitlistClaim.ACEITO);
     expect(response.body.appointment.clienteId).toBeUndefined();
 
-    const storedClaim = await prisma.waitlistClaim.findUnique({ where: { id: claim.id } });
-    const storedEntry = await prisma.listaEspera.findUnique({ where: { id: entry.id } });
+    const storedClaim = await prisma.waitlistClaim.findUnique({
+      where: { id: claim.id },
+    });
+    const storedEntry = await prisma.listaEspera.findUnique({
+      where: { id: entry.id },
+    });
     const appointment = await prisma.agendamento.findFirst({
-      where: { clienteId: clientAId, barbeiroId: barberAId, data: new Date('2099-04-01T00:00:00.000Z') },
+      where: {
+        clienteId: clientAId,
+        barbeiroId: barberAId,
+        data: new Date('2099-04-01T00:00:00.000Z'),
+      },
     });
     expect(storedClaim?.status).toBe(StatusWaitlistClaim.ACEITO);
     expect(storedEntry?.status).toBe(StatusListaEspera.ATENDIDA);
@@ -307,10 +326,18 @@ describe('Waitlist (e2e)', () => {
       .set('Authorization', `Bearer ${clientAToken}`)
       .expect(201);
 
-    const storedClaim = await prisma.waitlistClaim.findUnique({ where: { id: claim.id } });
-    const storedEntry = await prisma.listaEspera.findUnique({ where: { id: entry.id } });
+    const storedClaim = await prisma.waitlistClaim.findUnique({
+      where: { id: claim.id },
+    });
+    const storedEntry = await prisma.listaEspera.findUnique({
+      where: { id: entry.id },
+    });
     const appointments = await prisma.agendamento.count({
-      where: { clienteId: clientAId, barbeiroId: barberAId, data: new Date('2099-04-02T00:00:00.000Z') },
+      where: {
+        clienteId: clientAId,
+        barbeiroId: barberAId,
+        data: new Date('2099-04-02T00:00:00.000Z'),
+      },
     });
     expect(storedClaim?.status).toBe(StatusWaitlistClaim.RECUSADO);
     expect(storedEntry?.status).toBe(StatusListaEspera.ATIVA);
@@ -329,8 +356,12 @@ describe('Waitlist (e2e)', () => {
       .set('Authorization', `Bearer ${clientAToken}`)
       .expect(409);
 
-    const storedClaim = await prisma.waitlistClaim.findUnique({ where: { id: claim.id } });
-    const storedEntry = await prisma.listaEspera.findUnique({ where: { id: entry.id } });
+    const storedClaim = await prisma.waitlistClaim.findUnique({
+      where: { id: claim.id },
+    });
+    const storedEntry = await prisma.listaEspera.findUnique({
+      where: { id: entry.id },
+    });
     expect(storedClaim?.status).toBe(StatusWaitlistClaim.ATIVO);
     expect(storedEntry?.status).toBe(StatusListaEspera.ATIVA);
   });
@@ -366,7 +397,11 @@ describe('Waitlist (e2e)', () => {
     expect(statusCodes.filter((status) => status === 409)).toHaveLength(1);
     expect(
       await prisma.agendamento.count({
-        where: { clienteId: clientAId, barbeiroId: barberAId, data: new Date('2099-04-05T00:00:00.000Z') },
+        where: {
+          clienteId: clientAId,
+          barbeiroId: barberAId,
+          data: new Date('2099-04-05T00:00:00.000Z'),
+        },
       }),
     ).toBe(1);
   });
@@ -382,19 +417,34 @@ describe('Waitlist (e2e)', () => {
         .set('Authorization', `Bearer ${clientAToken}`),
     ]);
 
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(2);
     const statuses = results.map((result) =>
-      result.status === 'fulfilled' ? result.value.status : result.reason?.status,
+      result.status === 'fulfilled'
+        ? result.value.status
+        : result.reason?.status,
     );
     expect(statuses.filter((status) => status === 201)).toHaveLength(1);
     expect(statuses.filter((status) => status === 409)).toHaveLength(1);
 
-    const storedClaim = await prisma.waitlistClaim.findUnique({ where: { id: claim.id } });
-    const storedEntry = await prisma.listaEspera.findUnique({ where: { id: entry.id } });
-    const appointmentCount = await prisma.agendamento.count({
-      where: { clienteId: clientAId, barbeiroId: barberAId, data: new Date('2099-04-06T00:00:00.000Z') },
+    const storedClaim = await prisma.waitlistClaim.findUnique({
+      where: { id: claim.id },
     });
-    expect([StatusWaitlistClaim.ACEITO, StatusWaitlistClaim.RECUSADO]).toContain(storedClaim?.status);
+    const storedEntry = await prisma.listaEspera.findUnique({
+      where: { id: entry.id },
+    });
+    const appointmentCount = await prisma.agendamento.count({
+      where: {
+        clienteId: clientAId,
+        barbeiroId: barberAId,
+        data: new Date('2099-04-06T00:00:00.000Z'),
+      },
+    });
+    expect([
+      StatusWaitlistClaim.ACEITO,
+      StatusWaitlistClaim.RECUSADO,
+    ]).toContain(storedClaim?.status);
     if (storedClaim?.status === StatusWaitlistClaim.ACEITO) {
       expect(storedEntry?.status).toBe(StatusListaEspera.ATENDIDA);
       expect(appointmentCount).toBe(1);
@@ -421,12 +471,18 @@ describe('Waitlist (e2e)', () => {
         }),
     ]);
 
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(2);
     const statuses = results.map((result) =>
-      result.status === 'fulfilled' ? result.value.status : result.reason?.status,
+      result.status === 'fulfilled'
+        ? result.value.status
+        : result.reason?.status,
     );
     expect(statuses.filter((status) => status === 201)).toHaveLength(1);
-    expect(statuses.filter((status) => [400, 409].includes(status))).toHaveLength(1);
+    expect(
+      statuses.filter((status) => [400, 409].includes(status)),
+    ).toHaveLength(1);
     expect(
       await prisma.agendamento.count({
         where: {
@@ -660,19 +716,37 @@ describe('Waitlist (e2e)', () => {
     waitlistIds.push(older.id, newer.id);
 
     const results = await Promise.allSettled([
-      waitlistService.claimNextEligibleEntryForSlot(barberAId, serviceAId, dateKey, '10:00', '10:30'),
-      waitlistService.claimNextEligibleEntryForSlot(barberAId, serviceAId, dateKey, '10:00', '10:30'),
+      waitlistService.claimNextEligibleEntryForSlot(
+        barberAId,
+        serviceAId,
+        dateKey,
+        '10:00',
+        '10:30',
+      ),
+      waitlistService.claimNextEligibleEntryForSlot(
+        barberAId,
+        serviceAId,
+        dateKey,
+        '10:00',
+        '10:30',
+      ),
     ]);
 
     if (results.every((result) => result.status === 'rejected')) {
       throw new Error(
         results
-          .map((result) => (result.status === 'rejected' ? result.reason?.message : 'ok'))
+          .map((result) =>
+            result.status === 'rejected' ? result.reason?.message : 'ok',
+          )
           .join(' | '),
       );
     }
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      results.filter((result) => result.status === 'rejected'),
+    ).toHaveLength(1);
 
     const claims = await prisma.waitlistClaim.findMany({
       where: {
@@ -757,7 +831,7 @@ describe('Waitlist (e2e)', () => {
     const statusCodes = results.map((result) =>
       result.status === 'fulfilled'
         ? result.value.status
-        : result.reason?.response?.status ?? 0,
+        : (result.reason?.response?.status ?? 0),
     );
 
     expect(statusCodes.filter((code) => code === 201)).toHaveLength(1);
@@ -881,8 +955,13 @@ describe('Waitlist (e2e)', () => {
       '10:30',
     );
 
-    expect(eligible.map((entry) => entry.id)).toEqual([olderEntry.id, newerEntry.id]);
-    expect(eligible.some(({ id }) => id === conflictingClientEntry.id)).toBe(false);
+    expect(eligible.map((entry) => entry.id)).toEqual([
+      olderEntry.id,
+      newerEntry.id,
+    ]);
+    expect(eligible.some(({ id }) => id === conflictingClientEntry.id)).toBe(
+      false,
+    );
     expect(eligible.some(({ id }) => id === olderEntry.id)).toBe(true);
     expect(eligible.some(({ id }) => id === newerEntry.id)).toBe(true);
 
@@ -892,15 +971,37 @@ describe('Waitlist (e2e)', () => {
     await prisma.listaEspera.deleteMany({
       where: {
         OR: [
-          { id: { in: [olderEntry.id, newerEntry.id, conflictingClientEntry.id] } },
-          { clienteId: { in: [clientAId, clientBId, clientC.cliente!.id, clientD.cliente!.id] } },
+          {
+            id: {
+              in: [olderEntry.id, newerEntry.id, conflictingClientEntry.id],
+            },
+          },
+          {
+            clienteId: {
+              in: [
+                clientAId,
+                clientBId,
+                clientC.cliente!.id,
+                clientD.cliente!.id,
+              ],
+            },
+          },
         ],
       },
     });
     await prisma.agendamento.deleteMany({
       where: {
         OR: [
-          { clienteId: { in: [clientAId, clientBId, clientC.cliente!.id, clientD.cliente!.id] } },
+          {
+            clienteId: {
+              in: [
+                clientAId,
+                clientBId,
+                clientC.cliente!.id,
+                clientD.cliente!.id,
+              ],
+            },
+          },
           { barbeiroId: barberAId },
         ],
       },

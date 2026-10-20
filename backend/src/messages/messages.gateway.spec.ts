@@ -5,7 +5,6 @@ import { MessagesGateway } from './messages.gateway';
 import { MessagesService } from './messages.service';
 import { MessagesSocketRegistry } from './messages.socket-registry';
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 function buildHandshake(token?: string): any {
   return {
     auth: token === undefined ? {} : { token },
@@ -407,14 +406,20 @@ describe('MessagesGateway', () => {
         gateway.handleMessageSend(client, { conteudo: 'Olá' }),
       ).rejects.toThrow(WsException);
       await expect(
-        gateway.handleMessageSend(client, { destinatarioId: 0, conteudo: 'Olá' }),
+        gateway.handleMessageSend(client, {
+          destinatarioId: 0,
+          conteudo: 'Olá',
+        }),
       ).rejects.toThrow(WsException);
       await expect(
-        gateway.handleMessageSend(client, { destinatarioId: -1, conteudo: 'Olá' }),
+        gateway.handleMessageSend(client, {
+          destinatarioId: -1,
+          conteudo: 'Olá',
+        }),
       ).rejects.toThrow(WsException);
-      await expect(gateway.handleMessageSend(client, 'não-objeto')).rejects.toThrow(
-        WsException,
-      );
+      await expect(
+        gateway.handleMessageSend(client, 'não-objeto'),
+      ).rejects.toThrow(WsException);
 
       expect(messagesService.sendMessage).not.toHaveBeenCalled();
     });
@@ -447,8 +452,13 @@ describe('MessagesGateway', () => {
       );
 
       await expect(
-        gateway.handleMessageSend(client, { destinatarioId: 11, conteudo: 'Oi' }),
-      ).rejects.toThrow('Mensagens são permitidas somente entre cliente e barbeiro.');
+        gateway.handleMessageSend(client, {
+          destinatarioId: 11,
+          conteudo: 'Oi',
+        }),
+      ).rejects.toThrow(
+        'Mensagens são permitidas somente entre cliente e barbeiro.',
+      );
 
       expect(client.emit).not.toHaveBeenCalled();
       expect(gateway.server!.to).not.toHaveBeenCalled();
@@ -463,7 +473,10 @@ describe('MessagesGateway', () => {
       );
 
       await expect(
-        gateway.handleMessageSend(client, { destinatarioId: 20, conteudo: 'Oi' }),
+        gateway.handleMessageSend(client, {
+          destinatarioId: 20,
+          conteudo: 'Oi',
+        }),
       ).rejects.toThrow('Não foi possível enviar a mensagem.');
 
       expect(client.emit).not.toHaveBeenCalled();
@@ -628,7 +641,10 @@ describe('MessagesGateway', () => {
       // A recusa é comunicada ao cliente e o socket é encerrado — não lança,
       // para que o motivo chegue antes da desconexão.
       await expect(
-        gateway.handleMessageSend(socket, { destinatarioId: 20, conteudo: 'Oi' }),
+        gateway.handleMessageSend(socket, {
+          destinatarioId: 20,
+          conteudo: 'Oi',
+        }),
       ).resolves.toBeUndefined();
 
       expect(erroEmitido(socket)).toBe('Não autorizado.');

@@ -118,9 +118,12 @@ export class ScheduleService {
       return;
     }
 
-    const opportunityService = this.moduleRef.get('WAITLIST_OPPORTUNITY_SERVICE', {
-      strict: false,
-    });
+    const opportunityService = this.moduleRef.get(
+      'WAITLIST_OPPORTUNITY_SERVICE',
+      {
+        strict: false,
+      },
+    );
     await opportunityService.tryCreateForReleasedWindow({
       barbeiroId: block.barbeiroId,
       dateKey: dateKeyFromUtcMidnight(block.data),
@@ -341,7 +344,9 @@ export class ScheduleService {
         const busyIni = localMinuteOfDay(block.horaInicio);
         const busyFim = localMinuteOfDay(block.horaFim);
         if (startMinutes < busyFim && busyIni < endMinutes) {
-          throw new ConflictException('Já existe um bloqueio para esse período.');
+          throw new ConflictException(
+            'Já existe um bloqueio para esse período.',
+          );
         }
       }
 
@@ -590,7 +595,8 @@ export class ScheduleService {
             slotStart < interval.fim && interval.ini < slotStart + duration,
         );
         if (!conflicts) {
-          const pad2 = (value: number): string => String(value).padStart(2, '0');
+          const pad2 = (value: number): string =>
+            String(value).padStart(2, '0');
           const slotHHmm = `${pad2(Math.floor(slotStart / 60))}:${pad2(slotStart % 60)}`;
           // Só hoje precisa da checagem de passado; em datas futuras o slot é
           // sempre futuro por construção.
@@ -609,8 +615,7 @@ export class ScheduleService {
     const horariosLivres = [...freeSlots]
       .sort((a, b) => a - b)
       .map(
-        (minutes) =>
-          `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`,
+        (minutes) => `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`,
       );
 
     return {
@@ -621,4 +626,3 @@ export class ScheduleService {
     };
   }
 }
-
