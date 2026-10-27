@@ -59,3 +59,6 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
 # Prisma Client gerado automaticamente
 /src/generated/
+
+# Artefato obsoleto de saída do compilador (redirecionamento manual de tsc)
+/tsc-out.txt

@@ -143,6 +143,67 @@ export class NotificationsService {
   }
 
   /**
+   * usuarioId é SEMPRE derivado no backend a partir do Barbeiro — nunca aceito
+   * do frontend.
+   */
+  private async resolveBarbeiroUsuarioId(
+    client: NotificationsDbClient,
+    barbeiroId: number,
+  ): Promise<number> {
+    const barbeiro = await client.barbeiro.findUnique({
+      where: { id: barbeiroId },
+      select: { usuarioId: true },
+    });
+    if (!barbeiro) {
+      throw new NotFoundException('Barbeiro não encontrado.');
+    }
+
+    return barbeiro.usuarioId;
+  }
+
+  async createAppointmentConfirmedForBarber(
+    client: NotificationsDbClient,
+    barbeiroId: number,
+    agendamentoId: number,
+  ): Promise<NotificationResponse> {
+    const usuarioId = await this.resolveBarbeiroUsuarioId(client, barbeiroId);
+
+    const notification = await client.notificacao.create({
+      data: {
+        usuarioId,
+        agendamentoId,
+        tipo: TipoNotificacao.AGENDAMENTO,
+        titulo: 'Novo agendamento',
+        mensagem: 'Você tem um novo agendamento.',
+        lida: false,
+      },
+    });
+
+    return this.toResponse(notification);
+  }
+
+  async createAppointmentCancelledForBarber(
+    client: NotificationsDbClient,
+    barbeiroId: number,
+    agendamentoId: number,
+  ): Promise<NotificationResponse> {
+    const usuarioId = await this.resolveBarbeiroUsuarioId(client, barbeiroId);
+
+    const notification = await client.notificacao.create({
+      data: {
+        usuarioId,
+        agendamentoId,
+        tipo: TipoNotificacao.CANCELAMENTO,
+        titulo: 'Agendamento cancelado',
+        mensagem: 'Um agendamento foi cancelado.',
+        lida: false,
+      },
+    });
+
+    return this.toResponse(notification);
+  }
+
+  /**
    * Motor de lembretes (ETAPA 6H). Seleciona agendamentos CONFIRMADO cujo
    * horaInicio está na janela (now, now + 1h] e cria UMA notificação
    * LEMBRETE por agendamento. Sem endpoint público e, nesta etapa, ainda SEM

@@ -14,6 +14,7 @@ export interface BarbeiroResumoDto {
 
 export interface ClienteResumoDto {
   id: number;
+  usuarioId?: number;
   nome: string;
 }
 

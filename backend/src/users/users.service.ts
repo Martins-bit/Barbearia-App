@@ -1,5 +1,11 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '../generated/prisma/client';
 import { TipoUsuario } from '../generated/prisma/enums';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
@@ -118,6 +124,96 @@ export class UsersService {
     }));
   }
 
+  /**
+   * Extrai, de forma segura, o nome do campo em conflito a partir de um erro
+   * P2002 do Prisma.
+   *
+   * O Prisma 7 (com @prisma/adapter-pg) NÃO popula `meta.target`: os dados
+   * reais da violação ficam em `meta.driverAdapterError.cause`, com
+   * `kind: "UniqueConstraintViolation"` e o índice em `originalMessage`
+   * (ex.: `... "Usuario_email_key"`). O campo `constraint` existe no objeto,
+   * mas pode vir `undefined` (o Postgres nem sempre expõe `detail`).
+   *
+   * Formatos legados (`meta.target` como array de strings) continuam
+   * suportados, mas nunca são assumidos: qualquer valor que não seja um array
+   * de strings é ignorado. Retorna `null` quando o campo não pode ser
+   * determinado com segurança.
+   */
+  private extractUniqueConflictField(error: unknown): string | null {
+    const meta = (error as { meta?: Record<string, unknown> })?.meta;
+    if (!meta || typeof meta !== 'object') {
+      return null;
+    }
+
+    // Formato legado: meta.target = ['email', 'telefone']
+    const target = meta.target;
+    if (Array.isArray(target)) {
+      const names = target.filter(
+        (item): item is string => typeof item === 'string',
+      );
+      if (names.includes('email')) return 'email';
+      if (names.includes('telefone')) return 'telefone';
+    }
+
+    // Formato Prisma 7 + driver adapter: meta.driverAdapterError.cause
+    const cause = (
+      meta.driverAdapterError as { cause?: Record<string, unknown> } | undefined
+    )?.cause;
+    if (!cause || typeof cause !== 'object') {
+      return null;
+    }
+
+    const constraint =
+      typeof cause.constraint === 'string' ? cause.constraint : undefined;
+    const originalMessage =
+      typeof cause.originalMessage === 'string'
+        ? cause.originalMessage
+        : undefined;
+
+    const evidence = `${constraint ?? ''} ${originalMessage ?? ''}`;
+    if (evidence.includes('Usuario_email_key')) return 'email';
+    if (evidence.includes('Usuario_telefone_key')) return 'telefone';
+
+    // Fallback: nomes de coluna/índice genéricos (sem assumirem tabela).
+    if (/\bemail\b/i.test(evidence)) return 'email';
+    if (/\btelefone\b/i.test(evidence)) return 'telefone';
+
+    return null;
+  }
+
+  /**
+   * Converte um P2002 em 409 com mensagem acessível.
+   * O campo só é nomeado quando comprovado; caso contrário usa-se uma
+   * mensagem genérica (nunca assumir telefone).
+   */
+  private buildUniqueConflictException(error: unknown): ConflictException {
+    const field = this.extractUniqueConflictField(error);
+    if (field === 'email') {
+      return new ConflictException(
+        'Este e-mail já está em uso por outra conta.',
+      );
+    }
+    if (field === 'telefone') {
+      return new ConflictException(
+        'Este telefone já está em uso por outra conta.',
+      );
+    }
+    return new ConflictException(
+      'Os dados informados já estão em uso por outra conta.',
+    );
+  }
+
+  /**
+   * Atualiza o próprio usuário autenticado.
+   *
+   * - Campos escritos são EXCLUSIVAMENTE os do UpdateUserDto (nome, telefone,
+   *   e-mail). Qualquer outra chave (id, tipoUsuario, ativo, senhaHash...)
+   *   é descartada na camada de serviço, como backup do
+   *   forbidNonWhitelisted do ValidationPipe global.
+   * - Atualização vazia (sem campos definidos) é rejeitada com 400.
+   * - Telefone/email duplicados dos outros usuários são tratados como 409
+   *   (P2002 do Prisma tratado de forma centralizada).
+   */
   async updateUser(id: number, data: UpdateUserDto): Promise<UserResponseDto> {
     const existingUser = await this.prisma.usuario.findUnique({
       where: { id },
@@ -127,13 +223,74 @@ export class UsersService {
       throw new NotFoundException(`Usuário com ID ${id} não encontrado.`);
     }
 
-    const usuarioAtualizado = await this.prisma.usuario.update({
-      where: { id },
-      data,
-      select: this.publicUserSelect,
-    });
+    // 1) Mapa explícito dos campos permitidos e definidos — nada além de
+    //    nome/telefone/email chega à consulta do Prisma.
+    const updates: { nome?: string; telefone?: string; email?: string | null } =
+      {};
+    if (data.nome !== undefined) updates.nome = data.nome;
+    if (data.telefone !== undefined) updates.telefone = data.telefone;
+    if (data.email !== undefined) updates.email = data.email; // null limpa o e-mail
 
-    return this.sanitizeUser(usuarioAtualizado) as UserResponseDto;
+    if (Object.keys(updates).length === 0) {
+      throw new BadRequestException(
+        'Nenhum campo válido informado para atualização.',
+      );
+    }
+
+    // 2) Conflito de unicidade: verifica-se antes a escrita, mantendo a
+    //    consistência same-pattern do cadastro (register).
+    const telefoneAlvo =
+      updates.telefone !== undefined ? updates.telefone : existingUser.telefone;
+    if (telefoneAlvo !== existingUser.telefone) {
+      const pegouTelefone = await this.prisma.usuario.findUnique({
+        where: { telefone: telefoneAlvo },
+      });
+      if (pegouTelefone && pegouTelefone.id !== id) {
+        throw new ConflictException('Telefone já cadastrado.');
+      }
+    }
+
+    const emailAlvo =
+      updates.email !== undefined ? updates.email : existingUser.email;
+    // O pre-check de e-mail só faz sentido para e-mail NÃO nulo:
+    // `email` é anulável e vários usuários podem tê-lo `null`.
+    // Buscar `null` com findFirst({ email: null }) encontraria QUALQUER
+    // usuário sem e-mail e geraria falso 409 (DEF-1).
+    if (emailAlvo !== null && emailAlvo !== existingUser.email) {
+      // `email` é único: findUnique exige string não nula, então a busca
+      // usa findFirst com filtro compatível.
+      const pegouEmail = await this.prisma.usuario.findFirst({
+        where: { email: emailAlvo },
+      });
+      if (pegouEmail && pegouEmail.id !== id) {
+        // `emailAlvo !== null` garante que `updates.email` não é null aqui.
+        throw new ConflictException('E-mail já cadastrado em outra conta.');
+      }
+    }
+
+    // 3) Leitura por observador de escrita: caso concorrência gere
+    //    PrismaClientKnownRequestError P2002 (email/telefone único), converte
+    //    em 409 com mensagem acessível.
+    try {
+      const usuarioAtualizado = await this.prisma.usuario.update({
+        where: { id },
+        data: updates,
+        select: this.publicUserSelect,
+      });
+
+      return this.sanitizeUser(usuarioAtualizado) as UserResponseDto;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        // DEF-2: `meta.target` não é populado no Prisma 7; o campo em
+        // conflito é extraído de forma segura e a mensagem só nomeia o
+        // campo quando comprovado (fallback genérico caso contrário).
+        throw this.buildUniqueConflictException(error);
+      }
+      throw error;
+    }
   }
 
   /**

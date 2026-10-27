@@ -1,5 +1,5 @@
 import { http, authTokenStorage } from './http'
-import type { LoginResponse, Usuario } from '../../types/domain'
+import type { LoginResponse, Usuario, UpdateUserInput } from '../../types/domain'
 
 export interface LoginInput {
   telefone: string
@@ -31,6 +31,11 @@ export const authService = {
 
   me(signal?: AbortSignal): Promise<Usuario> {
     return http.get<Usuario>('/auth/me', { signal })
+  },
+
+  /** PATCH /users/me — atualiza nome, telefone e/ou e-mail da própria conta. */
+  updateProfile(input: UpdateUserInput): Promise<Usuario> {
+    return http.patch<Usuario>('/users/me', input)
   },
 
   logout(): void {

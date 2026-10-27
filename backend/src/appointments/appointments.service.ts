@@ -61,7 +61,7 @@ interface AppointmentRow {
   observacoes: string | null;
   servico: { id: number; nome: string; preco: Prisma.Decimal };
   barbeiro: { id: number; usuario: { nome: string } };
-  cliente: { id: number; usuario: { nome: string } };
+  cliente: { id: number; usuarioId?: number; usuario: { nome: string } };
 }
 
 export async function acquireClienteLock(
@@ -267,10 +267,17 @@ export class AppointmentsService {
     // Notificação interna de confirmação na MESMA transação do agendamento
     // (appointment + notificação OU nenhum dos dois). Como este é o núcleo
     // compartilhado pela criação normal e pelo aceite de claim, exatamente
-    // UMA notificação é gerada por appointment CONFIRMADO criado.
+    // UMA notificação é gerada para o cliente e UMA para o barbeiro por
+    // appointment CONFIRMADO criado.
     await this.notificationsService.createAppointmentConfirmed(
       tx,
       input.clienteId,
+      created.id,
+    );
+
+    await this.notificationsService.createAppointmentConfirmedForBarber(
+      tx,
+      input.barbeiroId,
       created.id,
     );
 
@@ -279,7 +286,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
     if (!row) {
@@ -344,7 +351,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
 
@@ -360,7 +367,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
 
@@ -398,7 +405,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
 
@@ -478,6 +485,12 @@ export class AppointmentsService {
           cliente.id,
           appointmentId,
         );
+
+        await this.notificationsService.createAppointmentCancelledForBarber(
+          tx,
+          row.barbeiroId,
+          appointmentId,
+        );
       });
 
       const refreshed = await this.prisma.agendamento.findUnique({
@@ -516,7 +529,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
 
@@ -556,7 +569,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
 
@@ -587,7 +600,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
 
@@ -625,7 +638,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
 
@@ -654,7 +667,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
 
@@ -692,7 +705,7 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuario: { select: { nome: true } } } },
+        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
       },
     });
 
@@ -728,7 +741,13 @@ export class AppointmentsService {
         precoInformativo: new Prisma.Decimal(row.servico.preco).toFixed(2),
       },
       barbeiro: { id: row.barbeiroId, nome: row.barbeiro.usuario.nome },
-      cliente: { id: row.clienteId, nome: row.cliente.usuario.nome },
+      cliente: {
+        id: row.clienteId,
+        ...(row.cliente.usuarioId !== undefined
+          ? { usuarioId: row.cliente.usuarioId }
+          : {}),
+        nome: row.cliente.usuario.nome,
+      },
     };
   }
 }

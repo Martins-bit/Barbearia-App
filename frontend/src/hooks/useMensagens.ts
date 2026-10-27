@@ -16,6 +16,11 @@ export type NovaMensagemHandler = (
   naConversaAberta: boolean,
 ) => void
 
+export interface ContatoInicialMensagens {
+  usuarioId: number
+  nome: string
+}
+
 /**
  * Lógica compartilhada da tela de mensagens (CLIENTE e BARBEIRO — mesma
  * infraestrutura REST + WebSocket; `messagesSocket` é um singleton por aba).
@@ -25,14 +30,21 @@ export type NovaMensagemHandler = (
  * - envio via `message:send` aguardando `message:sent`; o rascunho só é
  *   limpo APÓS a confirmação (falha preserva o texto);
  * - badge global sincronizado via `messagesBadge` (layout + páginas);
- * - novas mensagens reportadas por `onNovaMensagem` (toast/feedback).
+ * - novas mensagens reportadas por `onNovaMensagem` (toast/feedback);
+ * - suporte a contato inicial para início de conversa a partir da Agenda.
  */
 export function useMensagens(
   usuarioId: number | null,
   onNovaMensagem?: NovaMensagemHandler,
+  contatoInicial?: ContatoInicialMensagens | null,
 ) {
   const [conversas, setConversas] = useState<Conversa[]>([])
-  const [selecionadaId, setSelecionadaId] = useState<number | null>(null)
+  const [selecionadaId, setSelecionadaId] = useState<number | null>(
+    contatoInicial?.usuarioId ?? null,
+  )
+  const [contatoAtivo, setContatoAtivo] = useState<ContatoInicialMensagens | null>(
+    contatoInicial ?? null,
+  )
   const [mensagens, setMensagens] = useState<Mensagem[]>([])
   const [carregandoConversas, setCarregandoConversas] = useState(true)
   const [carregandoHistorico, setCarregandoHistorico] = useState(false)
@@ -52,10 +64,39 @@ export function useMensagens(
   const notificacaoRef = useRef<NovaMensagemHandler | undefined>(onNovaMensagem)
   notificacaoRef.current = onNovaMensagem
 
-  const selecionada = useMemo(
-    () => conversas.find((c) => c.usuarioId === selecionadaId) ?? null,
-    [conversas, selecionadaId],
-  )
+  const selecionada = useMemo(() => {
+    const encontrada = conversas.find((c) => c.usuarioId === selecionadaId)
+    if (encontrada) return encontrada
+    if (contatoAtivo && contatoAtivo.usuarioId === selecionadaId) {
+      return {
+        usuarioId: contatoAtivo.usuarioId,
+        nome: contatoAtivo.nome,
+        tipoUsuario: 'CLIENTE' as const,
+        ultimaMensagem: '',
+        ultimaMensagemDataCriacao: '',
+        naoLidas: 0,
+      }
+    }
+    return null
+  }, [conversas, selecionadaId, contatoAtivo])
+
+  const conversasExibicao = useMemo(() => {
+    if (
+      !contatoAtivo ||
+      conversas.some((c) => c.usuarioId === contatoAtivo.usuarioId)
+    ) {
+      return conversas
+    }
+    const temporaria: Conversa = {
+      usuarioId: contatoAtivo.usuarioId,
+      nome: contatoAtivo.nome,
+      tipoUsuario: 'CLIENTE',
+      ultimaMensagem: 'Nova conversa',
+      ultimaMensagemDataCriacao: new Date().toISOString(),
+      naoLidas: 0,
+    }
+    return [temporaria, ...conversas]
+  }, [conversas, contatoAtivo])
 
   /** Marca uma mensagem como lida uma única vez (dedupe entre caminhos). */
   const marcarComoLida = useCallback((id: number) => {
@@ -127,14 +168,26 @@ export function useMensagens(
     [carregarHistorico],
   )
 
-  // Carrega conversas na montagem e abre a primeira automaticamente.
+  useEffect(() => {
+    if (contatoInicial) {
+      setContatoAtivo(contatoInicial)
+      setSelecionadaId(contatoInicial.usuarioId)
+      const controller = new AbortController()
+      void carregarHistorico(contatoInicial.usuarioId, controller.signal)
+    }
+  }, [contatoInicial, carregarHistorico])
+
+  // Carrega conversas na montagem e abre a primeira automaticamente (se não houver contato inicial).
   useEffect(() => {
     const controller = new AbortController()
     let cancelado = false
     void (async () => {
       const lista = await carregarConversas(controller.signal)
       if (cancelado || controller.signal.aborted) return
-      if (lista.length > 0) {
+      if (contatoInicial) {
+        setSelecionadaId(contatoInicial.usuarioId)
+        await carregarHistorico(contatoInicial.usuarioId, controller.signal)
+      } else if (lista.length > 0) {
         setSelecionadaId(lista[0].usuarioId)
         await carregarHistorico(lista[0].usuarioId, controller.signal)
       }
@@ -143,7 +196,7 @@ export function useMensagens(
       cancelado = true
       controller.abort()
     }
-  }, [carregarConversas, carregarHistorico])
+  }, [carregarConversas, carregarHistorico, contatoInicial])
 
   // WebSocket: conexão única (singleton) e recebimento em tempo real.
   useEffect(() => {
@@ -237,17 +290,31 @@ export function useMensagens(
         setMensagens((atual) =>
           atual.some((m) => m.id === mensagem.id) ? atual : [...atual, mensagem],
         )
-        setConversas((atual) =>
-          atual.map((c) =>
-            c.usuarioId === selecionada.usuarioId
-              ? {
-                  ...c,
-                  ultimaMensagem: mensagem.conteudo,
-                  ultimaMensagemDataCriacao: mensagem.dataCriacao,
-                }
-              : c,
-          ),
-        )
+        setConversas((atual) => {
+          const existe = atual.some((c) => c.usuarioId === selecionada.usuarioId)
+          if (existe) {
+            return atual.map((c) =>
+              c.usuarioId === selecionada.usuarioId
+                ? {
+                    ...c,
+                    ultimaMensagem: mensagem.conteudo,
+                    ultimaMensagemDataCriacao: mensagem.dataCriacao,
+                  }
+                : c,
+            )
+          }
+          return [
+            {
+              usuarioId: selecionada.usuarioId,
+              nome: selecionada.nome,
+              tipoUsuario: selecionada.tipoUsuario,
+              ultimaMensagem: mensagem.conteudo,
+              ultimaMensagemDataCriacao: mensagem.dataCriacao,
+              naoLidas: 0,
+            },
+            ...atual,
+          ]
+        })
         return true
       } catch (error) {
         setErroHistorico(
@@ -270,7 +337,7 @@ export function useMensagens(
   }, [carregarConversas])
 
   return {
-    conversas,
+    conversas: conversasExibicao,
     selecionada,
     selecionadaId,
     historico,

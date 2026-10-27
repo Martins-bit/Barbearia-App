@@ -953,3 +953,92 @@
   }
 }
 
+
+/* ---- Perfil ---- */
+.profileIdentity {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.profileIdentityInfo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.profileName {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  line-height: var(--leading-tight);
+  overflow-wrap: anywhere;
+}
+
+.profileRole {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.summaryRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.summaryRow:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.summaryLabel {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+}
+
+.summaryValue {
+  font-size: var(--text-base);
+  text-align: right;
+  color: var(--color-text);
+}
+
+/* E-mails e valores longos não podem estourar a linha do par rótulo/valor. */
+.profileDetails .summaryValue {
+  overflow-wrap: anywhere;
+}
+
+.profileActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.sectionHint {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  margin: 0;
+}
+
+.editForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .summaryRow {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
+  }
+
+  .summaryValue {
+    text-align: left;
+  }
+}

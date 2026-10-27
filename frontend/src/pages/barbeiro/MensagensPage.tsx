@@ -1,3 +1,4 @@
+import { useLocation } from 'react-router-dom'
 import { PageHeader } from '../../components/layout/PagePlaceholder'
 import { Button } from '../../components/ui/Button'
 import { EmptyState, ErrorState } from '../../components/ui/States'
@@ -32,17 +33,23 @@ export function BarbeiroMensagensPage() {
   const { user } = useAuth()
   const usuarioId = user?.id ?? null
   const toast = useToast()
+  const location = useLocation()
+  const contatoNavegacao = location.state as { usuarioId: number; nome: string } | null
 
   // Toast somente para conversas NÃO abertas; na conversa aberta a mensagem
   // já aparece no histórico (toast seria redundante).
-  const msg = useMensagens(usuarioId, (_mensagem, naConversaAberta) => {
-    if (!naConversaAberta) {
-      toast.notify('Nova mensagem recebida.', {
-        tone: 'info',
-        title: 'Mensagens',
-      })
-    }
-  })
+  const msg = useMensagens(
+    usuarioId,
+    (_mensagem, naConversaAberta) => {
+      if (!naConversaAberta) {
+        toast.notify('Nova mensagem recebida.', {
+          tone: 'info',
+          title: 'Mensagens',
+        })
+      }
+    },
+    contatoNavegacao,
+  )
 
   const semConversas =
     !msg.carregandoConversas && !msg.erroConversas && msg.conversas.length === 0

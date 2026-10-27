@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
-import { PageHeader, PagePlaceholder } from '../../components/layout/PagePlaceholder'
+import { useNavigate } from 'react-router-dom'
+import { PageHeader } from '../../components/layout/PagePlaceholder'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { EmptyState, ErrorState } from '../../components/ui/States'
@@ -11,6 +12,7 @@ import {
   CalendarIcon,
   CheckIcon,
   ClockIcon,
+  MessageIcon,
   PlusIcon,
   UserIcon,
 } from '../../components/ui/icons/Icon'
@@ -29,6 +31,8 @@ import type { Agendamento, BloqueioAgenda, EntradaListaEspera, Notificacao, Serv
 import type { HorarioFuncionamento, TipoNotificacao } from '../../types/domain'
 import { todayDateKey } from '../../utils/date'
 import { formatDateFull, formatTime } from '../../utils/format'
+import { canComplete, canNoShow, formatDateLabel } from './appointmentActions'
+import { ROUTES } from '../../routes/routes'
 import styles from './barbeiro.module.css'
 
 function sortAppointments(a: Agendamento, b: Agendamento): number {
@@ -54,27 +58,6 @@ function formatStatus(status: Agendamento['status']): string {
 
 function formatTimeRange(agendamento: Pick<Agendamento, 'horaInicio' | 'horaFim'>): string {
   return `${agendamento.horaInicio.slice(0, 5)} - ${agendamento.horaFim.slice(0, 5)}`
-}
-
-function formatDateLabel(dateKey: string): string {
-  const [year, month, day] = dateKey.split('-').map(Number)
-  const date = new Date(Date.UTC(year, month - 1, day))
-  return new Intl.DateTimeFormat('pt-BR', {
-    day: '2-digit',
-    month: 'short',
-  }).format(date)
-}
-
-function canComplete(agendamento: Agendamento): boolean {
-  if (agendamento.status !== 'CONFIRMADO') return false
-  const horarioFim = new Date(`${agendamento.data}T${agendamento.horaFim}:00`)
-  return new Date() >= horarioFim
-}
-
-function canNoShow(agendamento: Agendamento): boolean {
-  if (agendamento.status !== 'CONFIRMADO') return false
-  const horarioInicio = new Date(`${agendamento.data}T${agendamento.horaInicio}:00`)
-  return new Date() >= horarioInicio
 }
 
 function formatWaitlistStatus(status: EntradaListaEspera['status']): string {
@@ -362,6 +345,7 @@ export function BarbeiroHomePage() {
 }
 
 export function AgendaPage() {
+  const navigate = useNavigate()
   const agenda = useApiResource('barbeiro:appointments', (signal) =>
     appointmentsService.listForBarber(signal),
   )
@@ -513,45 +497,66 @@ export function AgendaPage() {
                     </div>
                   </div>
 
-                  {agendamento.status === 'CONFIRMADO' && (
-                    <div className={styles.actions}>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => openAction(agendamento, 'complete')}
-                        disabled={!canComplete(agendamento)}
-                        title={
-                          canComplete(agendamento)
-                            ? 'Concluir atendimento'
-                            : 'Disponível somente após o término do agendamento'
-                        }
-                      >
-                        Concluir
-                      </Button>
+                  <div className={styles.actions}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      leftIcon={<MessageIcon size={15} />}
+                      onClick={() => {
+                        const clienteUsuarioId =
+                          agendamento.cliente.usuarioId ?? agendamento.cliente.id
+                        navigate(ROUTES.barbeiro.mensagens, {
+                          state: {
+                            usuarioId: clienteUsuarioId,
+                            nome: agendamento.cliente.nome,
+                          },
+                        })
+                      }}
+                      title={`Conversar com ${agendamento.cliente.nome}`}
+                    >
+                      Mensagem
+                    </Button>
 
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => openAction(agendamento, 'no-show')}
-                        disabled={!canNoShow(agendamento)}
-                        title={
-                          canNoShow(agendamento)
-                            ? 'Marcar como não compareceu'
-                            : 'Disponível somente após o início do agendamento'
-                        }
-                      >
-                        Não compareceu
-                      </Button>
+                    {agendamento.status === 'CONFIRMADO' && (
+                      <>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => openAction(agendamento, 'complete')}
+                          disabled={!canComplete(agendamento)}
+                          title={
+                            canComplete(agendamento)
+                              ? 'Concluir atendimento'
+                              : 'Disponível somente após o término do agendamento'
+                          }
+                        >
+                          Concluir
+                        </Button>
 
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        onClick={() => openAction(agendamento, 'cancel')}
-                      >
-                        Cancelar
-                      </Button>
-                    </div>
-                  )}
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => openAction(agendamento, 'no-show')}
+                          disabled={!canNoShow(agendamento)}
+                          title={
+                            canNoShow(agendamento)
+                              ? 'Marcar como não compareceu'
+                              : 'Disponível somente após o início do agendamento'
+                          }
+                        >
+                          Não compareceu
+                        </Button>
+
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          onClick={() => openAction(agendamento, 'cancel')}
+                        >
+                          Cancelar
+                        </Button>
+                      </>
+                    )}
+                  </div>
                 </article>
               ))}
             </div>
@@ -1996,15 +2001,6 @@ export function BarbeiroNotificacoesPage() {
   )
 }
 
-// A implementação da página de mensagens vive no arquivo dedicado.
+// A implementação das páginas de mensagens e de perfil vivem em arquivos dedicados.
 export { BarbeiroMensagensPage } from './MensagensPage'
-
-export function BarbeiroPerfilPage() {
-  return (
-    <PagePlaceholder
-      title="Perfil"
-      description="Seus dados."
-      note="Dados do usuário (GET /auth/me) e ajustes permitidos."
-    />
-  )
-}
+export { BarbeiroPerfilPage } from './BarbeiroPerfilPage'

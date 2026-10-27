@@ -115,6 +115,12 @@ describe('AppointmentsService', () => {
     notifications = {
       createAppointmentConfirmed: jest.fn().mockResolvedValue({ id: 1 }),
       createAppointmentCancelled: jest.fn().mockResolvedValue({ id: 2 }),
+      createAppointmentConfirmedForBarber: jest
+        .fn()
+        .mockResolvedValue({ id: 3 }),
+      createAppointmentCancelledForBarber: jest
+        .fn()
+        .mockResolvedValue({ id: 4 }),
     };
     service = new AppointmentsService(prisma, schedule, notifications);
   });
@@ -513,6 +519,23 @@ describe('AppointmentsService', () => {
       );
       expect(result.map((appointment) => appointment.id)).toEqual([1, 2]);
     });
+
+    it('expõe usuarioId do cliente na agenda do barbeiro quando disponível', async () => {
+      prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
+      prisma.agendamento.findMany.mockResolvedValue([
+        buildFullRow(1, {
+          cliente: { id: CLIENT_ID, usuarioId: 777, usuario: { nome: 'Cliente Especial' } },
+        }),
+      ]);
+
+      const result = await service.findByBarberUserId(1);
+
+      expect(result[0].cliente).toEqual({
+        id: CLIENT_ID,
+        usuarioId: 777,
+        nome: 'Cliente Especial',
+      });
+    });
   });
 
   describe('transições de status (ETAPA 4B)', () => {
@@ -803,7 +826,7 @@ describe('AppointmentsService', () => {
   });
 
   describe('notificações internas de agendamento (ETAPA 6G)', () => {
-    it('criação normal gera exatamente 1 notificação de AGENDAMENTO na transação', async () => {
+    it('criação normal gera notificações de AGENDAMENTO na transação para o cliente e para o barbeiro', async () => {
       arrangeSuccess();
 
       await service.create(1, validDto);
@@ -814,9 +837,15 @@ describe('AppointmentsService', () => {
         CLIENT_ID,
         77,
       );
+      expect(
+        notifications.createAppointmentConfirmedForBarber,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        notifications.createAppointmentConfirmedForBarber,
+      ).toHaveBeenCalledWith(prisma, BARBER_ID, 77);
     });
 
-    it('criação via claim (createConfirmedForClient) também gera exatamente 1 notificação', async () => {
+    it('criação via claim (createConfirmedForClient) também gera notificações para cliente e barbeiro', async () => {
       arrangeSuccess();
 
       await service.createConfirmedForClient(prisma, {
@@ -834,6 +863,12 @@ describe('AppointmentsService', () => {
         CLIENT_ID,
         77,
       );
+      expect(
+        notifications.createAppointmentConfirmedForBarber,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        notifications.createAppointmentConfirmedForBarber,
+      ).toHaveBeenCalledWith(prisma, BARBER_ID, 77);
     });
 
     it('falha na notificação propaga erro -> transação é revertida (sem órfãs)', async () => {
@@ -850,7 +885,7 @@ describe('AppointmentsService', () => {
       expect(prisma.agendamento.create).toHaveBeenCalledTimes(1);
     });
 
-    it('cancelamento pelo cliente gera exatamente 1 notificação de CANCELAMENTO', async () => {
+    it('cancelamento pelo cliente gera notificação de CANCELAMENTO para o cliente e para o barbeiro', async () => {
       const laterDate = '2099-01-16';
       const row = buildFullRow(58, {
         data: prismaDateFilter(laterDate),
@@ -872,9 +907,15 @@ describe('AppointmentsService', () => {
         CLIENT_ID,
         58,
       );
+      expect(
+        notifications.createAppointmentCancelledForBarber,
+      ).toHaveBeenCalledTimes(1);
+      expect(
+        notifications.createAppointmentCancelledForBarber,
+      ).toHaveBeenCalledWith(prisma, BARBER_ID, 58);
     });
 
-    it('cancelamento pelo barbeiro notifica o cliente dono do agendamento', async () => {
+    it('cancelamento pelo barbeiro notifica o cliente dono do agendamento e não gera notificação para si mesmo', async () => {
       const laterDate = '2099-01-17';
       const row = buildFullRow(59, {
         data: prismaDateFilter(laterDate),
@@ -896,9 +937,38 @@ describe('AppointmentsService', () => {
         row.clienteId,
         59,
       );
+      expect(
+        notifications.createAppointmentCancelledForBarber,
+      ).not.toHaveBeenCalled();
     });
 
-    it('corrida de cancelamento (count=0) não gera notificação', async () => {
+    it('garante que a notificação de cancelamento é enviada estritamente para o barbeiro daquele agendamento', async () => {
+      const laterDate = '2099-01-19';
+      const OUTRO_BARBEIRO_ID = 99;
+      const row = buildFullRow(61, {
+        barbeiroId: OUTRO_BARBEIRO_ID,
+        data: prismaDateFilter(laterDate),
+        horaInicio: zonedWallTimeToUtc(laterDate, '14:00'),
+        horaFim: zonedWallTimeToUtc(laterDate, '14:30'),
+        status: StatusAgendamento.CONFIRMADO,
+      });
+      prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
+      prisma.agendamento.findUnique
+        .mockResolvedValueOnce(row)
+        .mockResolvedValueOnce({ ...row, status: StatusAgendamento.CANCELADO });
+      prisma.agendamento.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.cancelAppointment(1, 61);
+
+      expect(
+        notifications.createAppointmentCancelledForBarber,
+      ).toHaveBeenCalledWith(prisma, OUTRO_BARBEIRO_ID, 61);
+      expect(
+        notifications.createAppointmentCancelledForBarber,
+      ).not.toHaveBeenCalledWith(prisma, BARBER_ID, 61);
+    });
+
+    it('corrida de cancelamento (count=0) não gera notificação para cliente nem para barbeiro', async () => {
       const laterDate = '2099-01-18';
       const row = buildFullRow(60, {
         data: prismaDateFilter(laterDate),
@@ -914,6 +984,9 @@ describe('AppointmentsService', () => {
         new ConflictException('Agendamento não pode mais ser cancelado.'),
       );
       expect(notifications.createAppointmentCancelled).not.toHaveBeenCalled();
+      expect(
+        notifications.createAppointmentCancelledForBarber,
+      ).not.toHaveBeenCalled();
     });
   });
 });

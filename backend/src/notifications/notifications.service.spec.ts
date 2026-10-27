@@ -13,6 +13,7 @@ function buildPrismaMock() {
       create: jest.fn(),
     },
     cliente: { findUnique: jest.fn() },
+    barbeiro: { findUnique: jest.fn() },
     agendamento: { findMany: jest.fn() },
     $executeRaw: jest.fn().mockResolvedValue(0),
   };
@@ -201,6 +202,83 @@ describe('NotificationsService', () => {
     });
     expect(result.agendamentoId).toBe(77);
     expect(result).not.toHaveProperty('usuarioId');
+  });
+
+  it('cria confirmação para o barbeiro correto e referencia o agendamento', async () => {
+    const tx = buildPrismaMock();
+    tx.barbeiro.findUnique.mockResolvedValue({ usuarioId: 25 });
+    tx.notificacao.create.mockResolvedValue({
+      ...notification,
+      id: 4,
+      usuarioId: 25,
+      claimId: null,
+      agendamentoId: 88,
+      tipo: TipoNotificacao.AGENDAMENTO,
+      titulo: 'Novo agendamento',
+      mensagem: 'Você tem um novo agendamento.',
+    });
+
+    const result = await service.createAppointmentConfirmedForBarber(tx, 5, 88);
+
+    expect(tx.barbeiro.findUnique).toHaveBeenCalledWith({
+      where: { id: 5 },
+      select: { usuarioId: true },
+    });
+    expect(tx.notificacao.create).toHaveBeenCalledWith({
+      data: {
+        usuarioId: 25,
+        agendamentoId: 88,
+        tipo: TipoNotificacao.AGENDAMENTO,
+        titulo: 'Novo agendamento',
+        mensagem: 'Você tem um novo agendamento.',
+        lida: false,
+      },
+    });
+    expect(result.agendamentoId).toBe(88);
+    expect(result).not.toHaveProperty('usuarioId');
+  });
+
+  it('cria cancelamento para o barbeiro correto e referencia o agendamento', async () => {
+    const tx = buildPrismaMock();
+    tx.barbeiro.findUnique.mockResolvedValue({ usuarioId: 25 });
+    tx.notificacao.create.mockResolvedValue({
+      ...notification,
+      id: 5,
+      usuarioId: 25,
+      claimId: null,
+      agendamentoId: 88,
+      tipo: TipoNotificacao.CANCELAMENTO,
+      titulo: 'Agendamento cancelado',
+      mensagem: 'Um agendamento foi cancelado.',
+    });
+
+    const result = await service.createAppointmentCancelledForBarber(tx, 5, 88);
+
+    expect(tx.barbeiro.findUnique).toHaveBeenCalledWith({
+      where: { id: 5 },
+      select: { usuarioId: true },
+    });
+    expect(tx.notificacao.create).toHaveBeenCalledWith({
+      data: {
+        usuarioId: 25,
+        agendamentoId: 88,
+        tipo: TipoNotificacao.CANCELAMENTO,
+        titulo: 'Agendamento cancelado',
+        mensagem: 'Um agendamento foi cancelado.',
+        lida: false,
+      },
+    });
+    expect(result.agendamentoId).toBe(88);
+    expect(result).not.toHaveProperty('usuarioId');
+  });
+
+  it('lança 404 se o barbeiro não existir ao criar notificação para o barbeiro', async () => {
+    const tx = buildPrismaMock();
+    tx.barbeiro.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.createAppointmentConfirmedForBarber(tx, 999, 88),
+    ).rejects.toThrow(new NotFoundException('Barbeiro não encontrado.'));
   });
 
   it('lista não expõe usuarioId nem agendamentoId quando não há vínculo', async () => {

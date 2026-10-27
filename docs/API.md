@@ -165,9 +165,9 @@ Encerrar a sessão atual do usuário.
 
 ## 6.4. Usuário atual
 
-Endpoint conceitual:
+Endpoint:
 
-`GET /api/auth/me`
+`GET /auth/me`
 
 ### Objetivo
 
@@ -178,6 +178,9 @@ A resposta não deverá conter:
 - Senha;
 - Hash da senha;
 - Dados sensíveis desnecessários.
+
+Observação: o mesmo dado também é exposto em `GET /users/me` (ver seção 13).
+`GET /auth/me` é mantido como endpoint canônico de sessão.
 
 ---
 
@@ -870,29 +873,91 @@ na integração do frontend.
 
 ## 13.1. Visualizar perfil
 
-Endpoint conceitual:
+Endpoint:
 
-`GET /api/profile`
+`GET /users/me`
 
 ### Permissão
 
-Usuário autenticado.
+Usuário autenticado (`CLIENTE` ou `BARBEIRO`).
+
+### Resultado
+
+Retorna o perfil do próprio usuário autenticado:
+
+```json
+{
+  "id": 1,
+  "nome": "João da Silva",
+  "telefone": "11999999999",
+  "email": "joao@email.com",
+  "tipoUsuario": "CLIENTE",
+  "ativo": true,
+  "dataCriacao": "2026-01-01T12:00:00.000Z",
+  "dataAtualizacao": "2026-01-01T12:00:00.000Z"
+}
+```
+
+Regras:
+
+- A identidade vem sempre do JWT. Não existe rota por id (`GET /users/:id`),
+  portanto IDOR por parâmetro é impossível por construção.
+- A resposta **nunca** contém `senhaHash` nem qualquer campo administrativo
+  interno.
+- `email` pode ser `null`: o e-mail é anulável e único quando presente.
 
 ---
 
 ## 13.2. Atualizar perfil
 
-Endpoint conceitual:
+Endpoint:
 
-`PUT /api/profile`
+`PATCH /users/me`
 
 ### Permissão
 
-Usuário autenticado.
+Usuário autenticado (`CLIENTE` ou `BARBEIRO`).
 
-### Regra
+### Dados esperados
 
-O usuário somente poderá alterar informações permitidas da própria conta.
+Todos os campos são opcionais; ao menos um deve ser enviado.
+
+| Campo      | Tipo             | Regras                                          |
+| ---------- | ---------------- | ----------------------------------------------- |
+| `nome`     | `string`         | 2 a 120 caracteres                              |
+| `telefone` | `string`         | Apenas dígitos, 10 ou 11 caracteres             |
+| `email`    | `string \| null` | E-mail válido; `null` remove o e-mail da conta  |
+
+### Resultado
+
+Retorna o perfil já atualizado, no mesmo formato de `GET /users/me`.
+
+### Regras
+
+- O usuário somente pode alterar informações permitidas da **própria** conta.
+- Campos fora da lista acima (`id`, `tipoUsuario`, `ativo`, `senhaHash`...)
+  são rejeitados com `400` pelo `ValidationPipe` global
+  (`forbidNonWhitelisted`) e, em defense in depth, ignorados em camada de
+  serviço.
+- Um corpo sem nenhum campo válido é rejeitado com `400`.
+- `telefone` e `email` são únicos. O e-mail, quando presente, não pode
+  pertencer a outra conta.
+- Limpar o e-mail (`"email": null`) é permitido: o e-mail é anulável e
+  múltiplas contas podem tê-lo ausente.
+
+### Erros
+
+| Situação                                              | Status | Observação                              |
+| ----------------------------------------------------- | ------ | --------------------------------------- |
+| Autenticação ausente ou inválida                       | `401`  | Token ausente, expirado ou malformado  |
+| Conta ou perfil inativo                               | `403`  | Revalidação a cada requisição           |
+| Corpo sem campos válidos ou campo não permitido        | `400`  | Validação do DTO                        |
+| Telefone ou e-mail já usado por outra conta           | `409`  | Conflito de unicidade                   |
+
+Observação sobre o `409`: a mensagem nomeia o campo em conflito apenas quando
+ele pode ser determinado com segurança a partir do erro de unicidade do
+banco. Caso contrário, é devolvida uma mensagem genérica
+(`"Os dados informados já estão em uso por outra conta."`).
 
 ---
 

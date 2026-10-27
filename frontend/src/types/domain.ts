@@ -44,6 +44,13 @@ export interface Usuario {
   dataAtualizacao: string
 }
 
+/** Dados editáveis de perfil (PATCH /users/me — espelha UpdateUserDto do backend). */
+export interface UpdateUserInput {
+  nome?: string
+  telefone?: string
+  email?: string | null
+}
+
 export interface LoginResponse {
   user: Usuario
   token: string
@@ -151,6 +158,7 @@ export interface BarbeiroResumo {
 
 export interface ClienteResumo {
   id: number
+  usuarioId?: number
   nome: string
 }
 
