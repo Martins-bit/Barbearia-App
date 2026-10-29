@@ -1,8 +1,11 @@
-/* Telas do cliente ainda não implementadas (escopo das próximas etapas).
-   O Perfil vive em ClientePerfilPage.tsx e as Notificações em
-   ClienteNotificacoesPage.tsx. O fluxo principal — Início, Barbeiros,
-   Agendamento e Meus agendamentos — também tem arquivos próprios:
-   ClienteHomePage, BarbeirosPage, AgendamentoPage e MeusAgendamentosPage. */
+/* Telas do cliente: arquivos dedicados para cada fluxo. */
+export { ClienteHomePage } from './ClienteHomePage'
+export { BarbeirosPage } from './BarbeirosPage'
+export { AgendamentoPage } from './AgendamentoPage'
+export { MeusAgendamentosPage } from './MeusAgendamentosPage'
+export { ClienteListaEsperaPage } from './ClienteListaEsperaPage'
+export { ClienteNotificacoesPage } from './ClienteNotificacoesPage'
+export { ClientePerfilPage } from './ClientePerfilPage'
 
 // A implementação da página de mensagens vive no arquivo dedicado.
 export { ClienteMensagensPage } from './MensagensPage'

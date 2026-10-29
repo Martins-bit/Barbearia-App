@@ -26,6 +26,7 @@ const clientNav: NavItem[] = [
   { label: 'Barbeiros', to: ROUTES.cliente.barbeiros, icon: <UsersIcon /> },
   { label: 'Agendar horário', to: ROUTES.cliente.agendamento, icon: <CalendarIcon /> },
   { label: 'Meus agendamentos', to: ROUTES.cliente.agendamentos, icon: <ListIcon /> },
+  { label: 'Minha lista de espera', to: ROUTES.cliente.listaEspera, icon: <ClockIcon /> },
   { label: 'Notificações', to: ROUTES.cliente.notificacoes, icon: <BellIcon /> },
   { label: 'Mensagens', to: ROUTES.cliente.mensagens, icon: <MessageIcon />, badge: -1 },
   { label: 'Perfil', to: ROUTES.cliente.perfil, icon: <UserIcon /> },

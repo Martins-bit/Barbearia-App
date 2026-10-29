@@ -597,3 +597,145 @@
     align-self: flex-start;
   }
 }
+.notificationActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.notificationBadge {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-gold);
+  border: 1px solid var(--color-gold-line);
+  background-color: var(--color-surface-elevated);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  margin-left: var(--space-2);
+}
+
+.notificationOutcome {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.notificationOutcomeSuccess {
+  color: var(--color-success);
+  background-color: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+}
+
+.notificationOutcomeNeutral {
+  color: var(--color-text-muted);
+  background-color: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+}
+
+/* ---- Card e ações de Lista de Espera ---- */
+.waitlistCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-gold-line);
+  border-radius: var(--radius-lg);
+  padding: var(--space-5);
+  margin-top: var(--space-3);
+}
+
+.waitlistHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.waitlistIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-pill);
+  background-color: var(--color-gold-soft);
+  color: var(--color-gold);
+  border: 1px solid var(--color-gold-line);
+  flex-shrink: 0;
+}
+
+.waitlistInfo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+}
+
+.waitlistTitle {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.waitlistExplanation {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: var(--leading-normal);
+}
+
+.waitlistSuccessBox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background-color: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-success);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.waitlistActiveBox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background-color: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  color: var(--color-gold);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+/* ---- Status de Lista de Espera ---- */
+.statusActive {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--color-gold);
+  background-color: var(--color-gold-soft);
+  border: 1px solid var(--color-gold-line);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.statusMuted {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background-color: var(--color-surface-elevated);
+  border: 1px solid var(--color-border-subtle);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+}

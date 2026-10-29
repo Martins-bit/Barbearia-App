@@ -130,7 +130,36 @@ export interface BloqueioAgenda {
   ativo: boolean
 }
 
-/** GET /waitlist — lista de espera do BARBEIRO autenticado (ordem de prioridade). */
+/** GET /waitlist/claims/:id/accept | POST /waitlist/claims/:id/reject */
+export interface WaitlistClaim {
+  id: number
+  listaEsperaId: number
+  barbeiroId: number
+  servicoId: number
+  data: string
+  horaInicio: string
+  horaFim: string
+  status: StatusWaitlistClaim
+  expiraEm: string
+  dataCriacao: string
+}
+
+/** Resposta do aceite de claim: POST /waitlist/claims/:id/accept */
+export interface AceitarClaimResponse {
+  appointment: Agendamento
+  claim: WaitlistClaim
+}
+
+/** Dados para solicitar entrada na lista de espera: POST /waitlist */
+export interface CreateWaitlistInput {
+  barbeiroId: number
+  servicoId: number
+  data: string
+  horaInicio?: string
+  horaFim?: string
+}
+
+/** GET /waitlist | GET /waitlist/my — entrada na lista de espera (ordem de prioridade). */
 export interface EntradaListaEspera {
   id: number
   barbeiroId: number
@@ -142,6 +171,7 @@ export interface EntradaListaEspera {
   dataEntrada: string
   dataAtualizacao: string
   servico?: { id: number; nome: string }
+  barbeiro?: { id: number; nome: string } | null
   cliente?: { id: number; nome: string } | null
 }
 

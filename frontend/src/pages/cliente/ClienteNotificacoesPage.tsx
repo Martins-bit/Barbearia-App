@@ -4,9 +4,10 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { EmptyState, ErrorState } from '../../components/ui/States'
 import { Loading } from '../../components/ui/Loading'
-import { AlertIcon, BellIcon } from '../../components/ui/icons/Icon'
+import { AlertIcon, BellIcon, CheckIcon } from '../../components/ui/icons/Icon'
 import { useApiResource } from '../../hooks/useApiResource'
 import { notificationsService } from '../../services/api/notificationsService'
+import { waitlistService } from '../../services/api/waitlistService'
 import { useToast } from '../../contexts/useToast'
 import type { Notificacao } from '../../types/domain'
 import { formatDateFull, formatTime } from '../../utils/format'
@@ -16,8 +17,11 @@ import styles from './cliente.module.css'
 /**
  * Notificações do cliente — dados reais de GET /notifications. A marcação de
  * leitura usa os retornos do próprio backend (PATCH /notifications/:id/read e
- * PATCH /notifications/read-all): a lista local é atualizada com a resposta do
- * servidor, sem refetch que recarregue toda a tela. Nenhum dado é inventado.
+ * PATCH /notifications/read-all).
+ *
+ * Para notificações do tipo WAITLIST_OPPORTUNITY que possuem um claimId válido,
+ * apresenta ações para aceitar (POST /waitlist/claims/:id/accept) ou recusar
+ * (POST /waitlist/claims/:id/reject) a oportunidade.
  */
 export function ClienteNotificacoesPage() {
   const toast = useToast()
@@ -31,11 +35,75 @@ export function ClienteNotificacoesPage() {
   const [lendoId, setLendoId] = useState<number | null>(null)
   const [marcandoTodas, setMarcandoTodas] = useState(false)
 
+  // Rastreamento de ações em andamento nos claims para prevenir cliques concorrentes
+  const [processandoClaimId, setProcessandoClaimId] = useState<number | null>(null)
+  const [claimAcao, setClaimAcao] = useState<'aceitar' | 'recusar' | null>(null)
+  // Desfecho de claims nesta sessão (claimId -> 'aceito' | 'recusado')
+  const [desfechosClaim, setDesfechosClaim] = useState<Record<number, 'aceito' | 'recusado'>>({})
+
   useEffect(() => {
     if (carregamento.data) setItens(carregamento.data)
   }, [carregamento.data])
 
   const naoLidas = itens.filter((item) => !item.lida)
+
+  async function aceitarOportunidade(notificacao: Notificacao) {
+    if (!notificacao.claimId || processandoClaimId !== null) return
+    const claimId = notificacao.claimId
+    setProcessandoClaimId(claimId)
+    setClaimAcao('aceitar')
+    try {
+      const resposta = await waitlistService.acceptClaim(claimId)
+      setDesfechosClaim((prev) => ({ ...prev, [claimId]: 'aceito' }))
+      toast.success(
+        `Agendamento confirmado para ${resposta.appointment.data} às ${resposta.appointment.horaInicio}.`,
+        'Vaga aceita com sucesso',
+      )
+
+      // Se a notificação não estava lida, marca como lida no backend também
+      if (!notificacao.lida) {
+        notificationsService.markAsRead(notificacao.id).then((atualizada) => {
+          setItens((atual) =>
+            atual.map((item) => (item.id === atualizada.id ? atualizada : item)),
+          )
+        }).catch(() => undefined)
+      }
+    } catch (error) {
+      toast.error(mensagemDoErro(error), 'Não foi possível aceitar a vaga')
+    } finally {
+      setProcessandoClaimId(null)
+      setClaimAcao(null)
+    }
+  }
+
+  async function recusarOportunidade(notificacao: Notificacao) {
+    if (!notificacao.claimId || processandoClaimId !== null) return
+    const claimId = notificacao.claimId
+    setProcessandoClaimId(claimId)
+    setClaimAcao('recusar')
+    try {
+      await waitlistService.rejectClaim(claimId)
+      setDesfechosClaim((prev) => ({ ...prev, [claimId]: 'recusado' }))
+      toast.notify('A oportunidade foi recusada. Você continua na lista de espera.', {
+        tone: 'info',
+        title: 'Vaga recusada',
+      })
+
+      // Se a notificação não estava lida, marca como lida no backend também
+      if (!notificacao.lida) {
+        notificationsService.markAsRead(notificacao.id).then((atualizada) => {
+          setItens((atual) =>
+            atual.map((item) => (item.id === atualizada.id ? atualizada : item)),
+          )
+        }).catch(() => undefined)
+      }
+    } catch (error) {
+      toast.error(mensagemDoErro(error), 'Não foi possível recusar a vaga')
+    } finally {
+      setProcessandoClaimId(null)
+      setClaimAcao(null)
+    }
+  }
 
   async function marcarComoLida(notificacao: Notificacao) {
     if (lendoId !== null) return
@@ -145,6 +213,9 @@ export function ClienteNotificacoesPage() {
                   >
                     {notificacao.titulo}
                   </span>
+                  {notificacao.tipo === 'WAITLIST_OPPORTUNITY' && notificacao.claimId && (
+                    <span className={styles.notificationBadge}>Vaga disponível</span>
+                  )}
                 </div>
                 <p className={styles.notificationMessage}>
                   {notificacao.mensagem}
@@ -158,19 +229,80 @@ export function ClienteNotificacoesPage() {
                 </time>
               </div>
 
-              {!notificacao.lida && (
-                <div className={styles.notificationSide}>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    loading={lendoId === notificacao.id}
-                    disabled={lendoId !== null}
-                    onClick={() => marcarComoLida(notificacao)}
-                  >
-                    Marcar como lida
-                  </Button>
-                </div>
-              )}
+              <div className={styles.notificationSide}>
+                {notificacao.tipo === 'WAITLIST_OPPORTUNITY' && notificacao.claimId ? (
+                  <div className={styles.notificationActions}>
+                    {desfechosClaim[notificacao.claimId] === 'aceito' && (
+                      <span
+                        className={`${styles.notificationOutcome} ${styles.notificationOutcomeSuccess}`}
+                      >
+                        <CheckIcon size={14} /> Vaga aceita
+                      </span>
+                    )}
+
+                    {desfechosClaim[notificacao.claimId] === 'recusado' && (
+                      <span
+                        className={`${styles.notificationOutcome} ${styles.notificationOutcomeNeutral}`}
+                      >
+                        Vaga recusada
+                      </span>
+                    )}
+
+                    {!desfechosClaim[notificacao.claimId] && (
+                      <>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          loading={
+                            processandoClaimId === notificacao.claimId &&
+                            claimAcao === 'aceitar'
+                          }
+                          disabled={processandoClaimId !== null}
+                          onClick={() => aceitarOportunidade(notificacao)}
+                        >
+                          Aceitar vaga
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          loading={
+                            processandoClaimId === notificacao.claimId &&
+                            claimAcao === 'recusar'
+                          }
+                          disabled={processandoClaimId !== null}
+                          onClick={() => recusarOportunidade(notificacao)}
+                        >
+                          Recusar
+                        </Button>
+                      </>
+                    )}
+
+                    {!notificacao.lida && !desfechosClaim[notificacao.claimId] && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        loading={lendoId === notificacao.id}
+                        disabled={lendoId !== null || processandoClaimId !== null}
+                        onClick={() => marcarComoLida(notificacao)}
+                      >
+                        Marcar como lida
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  !notificacao.lida && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      loading={lendoId === notificacao.id}
+                      disabled={lendoId !== null || processandoClaimId !== null}
+                      onClick={() => marcarComoLida(notificacao)}
+                    >
+                      Marcar como lida
+                    </Button>
+                  )
+                )}
+              </div>
             </article>
           ))}
         </Card>

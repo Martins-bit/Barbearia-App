@@ -22,6 +22,7 @@ function buildPrismaMock() {
   };
   const waitlistClaim = {
     findFirst: jest.fn(),
+    findMany: jest.fn(),
     create: jest.fn(),
     findUnique: jest.fn(),
     updateMany: jest.fn(),
@@ -56,6 +57,8 @@ describe('WaitlistService', () => {
   let scheduleService: any;
   let appointmentsService: any;
   let notificationsService: any;
+  let opportunityService: any;
+  let moduleRef: any;
   let service: WaitlistService;
 
   const validDto = {
@@ -81,11 +84,23 @@ describe('WaitlistService', () => {
     notificationsService = {
       createWaitlistOpportunity: jest.fn().mockResolvedValue({ id: 900 }),
     };
+    opportunityService = {
+      tryCreateForReleasedWindow: jest.fn().mockResolvedValue(null),
+    };
+    moduleRef = {
+      get: jest.fn((token: string) => {
+        if (token === 'WAITLIST_OPPORTUNITY_SERVICE') {
+          return opportunityService;
+        }
+        return null;
+      }),
+    };
     service = new WaitlistService(
       prisma,
       scheduleService,
       appointmentsService,
       notificationsService,
+      moduleRef,
     );
   });
 
@@ -253,12 +268,13 @@ describe('WaitlistService', () => {
     expect(result.status).toBe(StatusListaEspera.ATIVA);
   });
 
-  it('lista somente as entradas do cliente autenticado', async () => {
+  it('lista somente as entradas do cliente autenticado incluindo dados de barbeiro e serviço', async () => {
     prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
     prisma.listaEspera.findMany.mockResolvedValue([
       {
         id: 1,
         clienteId: 99,
+        barbeiroId: 10,
         servicoId: 20,
         dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
         status: StatusListaEspera.ATIVA,
@@ -267,7 +283,10 @@ describe('WaitlistService', () => {
         servico: {
           id: 20,
           nome: 'Corte',
-          barbeiro: { id: 10, usuario: { nome: 'Barbeiro A' } },
+        },
+        barbeiro: {
+          id: 10,
+          usuario: { nome: 'Bruno Barbeiro' },
         },
       },
     ]);
@@ -275,6 +294,39 @@ describe('WaitlistService', () => {
     const result = await service.findMyWaitlist(1);
     expect(result).toHaveLength(1);
     expect(result[0].clienteId).toBeUndefined();
+    expect(result[0].barbeiro).toEqual({
+      id: 10,
+      nome: 'Bruno Barbeiro',
+    });
+    expect(result[0].servico).toEqual({
+      id: 20,
+      nome: 'Corte',
+    });
+  });
+
+  it('lida com segurança quando o barbeiro não possui relação carregada', async () => {
+    prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
+    prisma.listaEspera.findMany.mockResolvedValue([
+      {
+        id: 2,
+        clienteId: 99,
+        barbeiroId: 10,
+        servicoId: 20,
+        dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+        status: StatusListaEspera.ATIVA,
+        dataEntrada: new Date('2099-01-01T00:00:00.000Z'),
+        dataAtualizacao: new Date('2099-01-02T00:00:00.000Z'),
+        servico: {
+          id: 20,
+          nome: 'Barba',
+        },
+        barbeiro: null,
+      },
+    ]);
+
+    const result = await service.findMyWaitlist(1);
+    expect(result).toHaveLength(1);
+    expect(result[0].barbeiro).toBeUndefined();
   });
 
   describe('claimNextEligibleEntryForSlot', () => {
@@ -506,7 +558,12 @@ describe('WaitlistService', () => {
       expect(result.appointment.id).toBe(700);
     });
 
-    it('recusa claim sem criar appointment e mantém a lista ativa', async () => {
+    it('recusa claim sem criar appointment, mantém a lista ativa e reoferta a vaga', async () => {
+      opportunityService.tryCreateForReleasedWindow.mockResolvedValue({
+        id: 51,
+        listaEsperaId: 12,
+      });
+
       const result = await service.rejectClaim(1, claim.id);
 
       expect(result.status).toBe(StatusWaitlistClaim.RECUSADO);
@@ -518,22 +575,74 @@ describe('WaitlistService', () => {
         where: { id: claim.id, status: StatusWaitlistClaim.ATIVO },
         data: { status: StatusWaitlistClaim.RECUSADO },
       });
+      expect(
+        opportunityService.tryCreateForReleasedWindow,
+      ).toHaveBeenCalledWith({
+        barbeiroId: claim.barbeiroId,
+        dateKey: '2099-01-12',
+        horaInicio: '10:00',
+        horaFim: '10:30',
+      });
     });
 
-    it('rejeita claim expirado sem criar appointment', async () => {
+    it('recusa claim mesmo quando não há outro cliente elegível para reoferta', async () => {
+      opportunityService.tryCreateForReleasedWindow.mockResolvedValue(null);
+
+      const result = await service.rejectClaim(1, claim.id);
+
+      expect(result.status).toBe(StatusWaitlistClaim.RECUSADO);
+      expect(
+        opportunityService.tryCreateForReleasedWindow,
+      ).toHaveBeenCalledWith({
+        barbeiroId: claim.barbeiroId,
+        dateKey: '2099-01-12',
+        horaInicio: '10:00',
+        horaFim: '10:30',
+      });
+    });
+
+    it('falha na reoferta não reverte nem impede a recusa confirmada', async () => {
+      opportunityService.tryCreateForReleasedWindow.mockRejectedValue(
+        new Error('Falha transitória na reoferta'),
+      );
+
+      const result = await service.rejectClaim(1, claim.id);
+
+      expect(result.status).toBe(StatusWaitlistClaim.RECUSADO);
+      expect(prisma.waitlistClaim.updateMany).toHaveBeenCalledWith({
+        where: { id: claim.id, status: StatusWaitlistClaim.ATIVO },
+        data: { status: StatusWaitlistClaim.RECUSADO },
+      });
+    });
+
+    it('rejeita claim expirado sem criar appointment nem reofertar', async () => {
       prisma.waitlistClaim.findUnique.mockResolvedValue({
         ...claim,
         expiraEm: new Date(Date.now() - 1000),
         listaEspera: { clienteId: 99, status: StatusListaEspera.ATIVA },
       });
 
-      await expect(service.acceptClaim(1, claim.id)).rejects.toThrow(
+      await expect(service.rejectClaim(1, claim.id)).rejects.toThrow(
         new ConflictException('Claim expirado.'),
       );
       expect(
-        appointmentsService.createConfirmedForClient,
+        opportunityService.tryCreateForReleasedWindow,
       ).not.toHaveBeenCalled();
-      expect(prisma.waitlistClaim.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('rejeita claim já recusado sem disparar reoferta', async () => {
+      prisma.waitlistClaim.findUnique.mockResolvedValue({
+        ...claim,
+        status: StatusWaitlistClaim.RECUSADO,
+        listaEspera: { clienteId: 99, status: StatusListaEspera.ATIVA },
+      });
+
+      await expect(service.rejectClaim(1, claim.id)).rejects.toThrow(
+        new ConflictException('Claim não está ativo.'),
+      );
+      expect(
+        opportunityService.tryCreateForReleasedWindow,
+      ).not.toHaveBeenCalled();
     });
 
     it.each([StatusWaitlistClaim.ACEITO, StatusWaitlistClaim.RECUSADO])(
@@ -1015,6 +1124,168 @@ describe('WaitlistService', () => {
       );
 
       expect(result.map((entry) => entry.id)).toEqual([5, 6]);
+    });
+  });
+
+  describe('processExpiredClaims', () => {
+    it('detecta claim expirado, atualiza status para EXPIRADO e reoferta para a janela', async () => {
+      const now = new Date('2099-01-12T10:05:01.000Z');
+      const expiredClaim = {
+        id: 88,
+        barbeiroId: 10,
+        servicoId: 20,
+        data: new Date('2099-01-12T00:00:00.000Z'),
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date('2099-01-12T10:05:00.000Z'),
+      };
+
+      prisma.waitlistClaim.findMany.mockResolvedValue([expiredClaim]);
+      prisma.waitlistClaim.updateMany.mockResolvedValue({ count: 1 });
+      opportunityService.tryCreateForReleasedWindow.mockResolvedValue({
+        id: 89,
+        listaEsperaId: 15,
+      });
+
+      const result = await service.processExpiredClaims(now);
+
+      expect(result.expiredCount).toBe(1);
+      expect(result.reofferedWindows).toBe(1);
+      expect(prisma.waitlistClaim.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: { in: [88] },
+          status: StatusWaitlistClaim.ATIVO,
+        },
+        data: {
+          status: StatusWaitlistClaim.EXPIRADO,
+          dataAtualizacao: expect.any(Date),
+        },
+      });
+      expect(
+        opportunityService.tryCreateForReleasedWindow,
+      ).toHaveBeenCalledWith({
+        barbeiroId: 10,
+        dateKey: '2099-01-12',
+        horaInicio: '10:00',
+        horaFim: '10:30',
+      });
+    });
+
+    it('quando não há claims expirados, retorna contadores zerados sem chamar reoferta', async () => {
+      prisma.waitlistClaim.findMany.mockResolvedValue([]);
+
+      const result = await service.processExpiredClaims();
+
+      expect(result.expiredCount).toBe(0);
+      expect(result.reofferedWindows).toBe(0);
+      expect(prisma.waitlistClaim.updateMany).not.toHaveBeenCalled();
+      expect(
+        opportunityService.tryCreateForReleasedWindow,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('quando não há outro cliente elegível para a janela expirada, reoferta conclui sem erro', async () => {
+      const now = new Date('2099-01-12T10:05:01.000Z');
+      const expiredClaim = {
+        id: 91,
+        barbeiroId: 10,
+        servicoId: 20,
+        data: new Date('2099-01-12T00:00:00.000Z'),
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date('2099-01-12T10:05:00.000Z'),
+      };
+
+      prisma.waitlistClaim.findMany.mockResolvedValue([expiredClaim]);
+      prisma.waitlistClaim.updateMany.mockResolvedValue({ count: 1 });
+      opportunityService.tryCreateForReleasedWindow.mockResolvedValue(null);
+
+      const result = await service.processExpiredClaims(now);
+
+      expect(result.expiredCount).toBe(1);
+      expect(result.reofferedWindows).toBe(1);
+      expect(
+        opportunityService.tryCreateForReleasedWindow,
+      ).toHaveBeenCalledTimes(1);
+    });
+
+    it('falha na reoferta de uma janela não impede o processamento das demais', async () => {
+      const now = new Date('2099-01-12T10:05:01.000Z');
+      const claim1 = {
+        id: 101,
+        barbeiroId: 10,
+        servicoId: 20,
+        data: new Date('2099-01-12T00:00:00.000Z'),
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date('2099-01-12T10:05:00.000Z'),
+      };
+      const claim2 = {
+        id: 102,
+        barbeiroId: 10,
+        servicoId: 20,
+        data: new Date('2099-01-12T00:00:00.000Z'),
+        horaInicio: '14:00',
+        horaFim: '14:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date('2099-01-12T10:05:00.000Z'),
+      };
+
+      prisma.waitlistClaim.findMany.mockResolvedValue([claim1, claim2]);
+      prisma.waitlistClaim.updateMany.mockResolvedValue({ count: 2 });
+      opportunityService.tryCreateForReleasedWindow
+        .mockRejectedValueOnce(
+          new Error('Erro de conexão transitório na janela 1'),
+        )
+        .mockResolvedValueOnce({ id: 200, listaEsperaId: 30 });
+
+      const result = await service.processExpiredClaims(now);
+
+      expect(result.expiredCount).toBe(2);
+      expect(result.reofferedWindows).toBe(1); // 1 sucedeu, 1 falhou sem quebrar a execução
+      expect(
+        opportunityService.tryCreateForReleasedWindow,
+      ).toHaveBeenCalledTimes(2);
+    });
+
+    it('consolida múltiplas ocorrências da mesma janela para uma única tentativa de reoferta', async () => {
+      const now = new Date('2099-01-12T10:05:01.000Z');
+      const claim1 = {
+        id: 111,
+        barbeiroId: 10,
+        servicoId: 20,
+        data: new Date('2099-01-12T00:00:00.000Z'),
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date('2099-01-12T10:05:00.000Z'),
+      };
+      const claim2 = {
+        id: 112,
+        barbeiroId: 10,
+        servicoId: 20,
+        data: new Date('2099-01-12T00:00:00.000Z'),
+        horaInicio: '10:00',
+        horaFim: '10:30',
+        status: StatusWaitlistClaim.ATIVO,
+        expiraEm: new Date('2099-01-12T10:05:00.000Z'),
+      };
+
+      prisma.waitlistClaim.findMany.mockResolvedValue([claim1, claim2]);
+      prisma.waitlistClaim.updateMany.mockResolvedValue({ count: 2 });
+      opportunityService.tryCreateForReleasedWindow.mockResolvedValue({
+        id: 300,
+      });
+
+      const result = await service.processExpiredClaims(now);
+
+      expect(result.expiredCount).toBe(1); // 1 janela única consolidada
+      expect(
+        opportunityService.tryCreateForReleasedWindow,
+      ).toHaveBeenCalledTimes(1);
     });
   });
 });

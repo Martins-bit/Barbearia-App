@@ -7,6 +7,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { WaitlistController } from './waitlist.controller';
 import { WaitlistService } from './waitlist.service';
 import { WaitlistOpportunityService } from './waitlist-opportunity.service';
+import { WaitlistSchedulerService } from './waitlist-scheduler.service';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { WaitlistOpportunityService } from './waitlist-opportunity.service';
   providers: [
     WaitlistService,
     WaitlistOpportunityService,
+    WaitlistSchedulerService,
     {
       provide: 'WAITLIST_OPPORTUNITY_SERVICE',
       useExisting: WaitlistOpportunityService,

@@ -7,6 +7,7 @@ import { Loading } from '../../components/ui/Loading'
 import {
   AlertIcon,
   CalendarIcon,
+  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ClockIcon,
@@ -18,6 +19,7 @@ import {
   servicesService,
 } from '../../services/api/catalogService'
 import { appointmentsService } from '../../services/api/appointmentsService'
+import { waitlistService } from '../../services/api/waitlistService'
 import { ApiError } from '../../services/api/ApiError'
 import { useApiResource } from '../../hooks/useApiResource'
 import { useToast } from '../../contexts/useToast'
@@ -73,6 +75,11 @@ export function AgendamentoPage() {
   const [criando, setCriando] = useState(false)
   const [erroCriacao, setErroCriacao] = useState<string | null>(null)
   const [confirmado, setConfirmado] = useState<Agendamento | null>(null)
+
+  // Entrada na lista de espera (quando não há horários disponíveis)
+  const [entrandoEspera, setEntrandoEspera] = useState(false)
+  const [esperaRegistrada, setEsperaRegistrada] = useState<Record<string, boolean>>({})
+  const [esperaJaExiste, setEsperaJaExiste] = useState<Record<string, boolean>>({})
 
   // Serviços do barbeiro escolhido.
   const servicos = useApiResource(
@@ -171,6 +178,52 @@ export function AgendamentoPage() {
       }
     } finally {
       setCriando(false)
+    }
+  }
+
+  async function entrarNaListaEspera() {
+    if (entrandoEspera) return
+
+    if (!barbeiro) {
+      toast.error('Escolha um barbeiro antes de entrar na lista de espera.', 'Atenção')
+      return
+    }
+    if (!servico) {
+      toast.error('Escolha um serviço antes de entrar na lista de espera.', 'Atenção')
+      return
+    }
+    if (!data) {
+      toast.error('Escolha uma data antes de entrar na lista de espera.', 'Atenção')
+      return
+    }
+
+    const chaveEspera = `${barbeiro.id}:${servico.id}:${data}`
+    setEntrandoEspera(true)
+
+    try {
+      await waitlistService.create({
+        barbeiroId: barbeiro.id,
+        servicoId: servico.id,
+        data,
+      })
+
+      setEsperaRegistrada((prev) => ({ ...prev, [chaveEspera]: true }))
+      toast.success(
+        'Você entrou na lista de espera. Avisaremos caso surja um horário compatível.',
+        'Solicitação registrada',
+      )
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        setEsperaJaExiste((prev) => ({ ...prev, [chaveEspera]: true }))
+        toast.notify('Você já possui uma solicitação ativa na lista para este dia e serviço.', {
+          tone: 'info',
+          title: 'Já cadastrado',
+        })
+      } else {
+        toast.error(mensagemDoErro(error), 'Não foi possível entrar na lista de espera')
+      }
+    } finally {
+      setEntrandoEspera(false)
     }
   }
 
@@ -361,11 +414,54 @@ export function AgendamentoPage() {
           {!disponibilidade.loading &&
             !disponibilidade.error &&
             horarios.length === 0 && (
-              <EmptyState
-                title="Nenhum horário disponível"
-                description="Não há horários livres nesta data para o serviço escolhido. Tente outro dia."
-                icon={<ClockIcon size={22} />}
-              />
+              <>
+                <EmptyState
+                  title="Nenhum horário disponível"
+                  description="Não há horários livres nesta data para o serviço escolhido. Tente outro dia ou solicite vaga na lista de espera."
+                  icon={<ClockIcon size={22} />}
+                />
+
+                <div className={styles.waitlistCard}>
+                  <div className={styles.waitlistHeader}>
+                    <span className={styles.waitlistIcon} aria-hidden="true">
+                      <ClockIcon size={20} />
+                    </span>
+                    <div className={styles.waitlistInfo}>
+                      <h3 className={styles.waitlistTitle}>Lista de espera para este dia</h3>
+                      <p className={styles.waitlistExplanation}>
+                        Caso ocorra um cancelamento ou liberação de horário para {barbeiro?.nome} em {formatDateKeyLong(data)}, o sistema identificará clientes na ordem da fila e enviará uma notificação com a oportunidade.
+                      </p>
+                    </div>
+                  </div>
+
+                  {barbeiro && servico && data && esperaRegistrada[`${barbeiro.id}:${servico.id}:${data}`] && (
+                    <div className={styles.waitlistSuccessBox}>
+                      <CheckIcon size={16} />
+                      <span>Você está na lista de espera para esta data. Avisaremos quando houver vaga.</span>
+                    </div>
+                  )}
+
+                  {barbeiro && servico && data && !esperaRegistrada[`${barbeiro.id}:${servico.id}:${data}`] && esperaJaExiste[`${barbeiro.id}:${servico.id}:${data}`] && (
+                    <div className={styles.waitlistActiveBox}>
+                      <CheckIcon size={16} />
+                      <span>Você já possui uma solicitação ativa na lista para esta data.</span>
+                    </div>
+                  )}
+
+                  {barbeiro && servico && data && !esperaRegistrada[`${barbeiro.id}:${servico.id}:${data}`] && !esperaJaExiste[`${barbeiro.id}:${servico.id}:${data}`] && (
+                    <div className={styles.actions}>
+                      <Button
+                        variant="secondary"
+                        loading={entrandoEspera}
+                        disabled={entrandoEspera}
+                        onClick={entrarNaListaEspera}
+                      >
+                        Entrar na lista de espera
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
 
           {!disponibilidade.loading &&

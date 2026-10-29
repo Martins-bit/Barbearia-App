@@ -13,6 +13,7 @@ import { ClienteNotificacoesPage } from '../pages/cliente/ClienteNotificacoesPag
 import { BarbeirosPage } from '../pages/cliente/BarbeirosPage'
 import { AgendamentoPage } from '../pages/cliente/AgendamentoPage'
 import { MeusAgendamentosPage } from '../pages/cliente/MeusAgendamentosPage'
+import { ClienteListaEsperaPage } from '../pages/cliente/ClienteListaEsperaPage'
 import {
   AgendaPage,
   BarbeiroHomePage,
@@ -91,6 +92,16 @@ export function AppRouter() {
           <RequireAuth role="CLIENTE">
             <ClientLayout>
               <MeusAgendamentosPage />
+            </ClientLayout>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path={ROUTES.cliente.listaEspera}
+        element={
+          <RequireAuth role="CLIENTE">
+            <ClientLayout>
+              <ClienteListaEsperaPage />
             </ClientLayout>
           </RequireAuth>
         }

@@ -14,6 +14,7 @@ export const ROUTES = {
     barbeiros: '/cliente/barbeiros',
     agendamento: '/cliente/agendamento',
     agendamentos: '/cliente/agendamentos',
+    listaEspera: '/cliente/lista-espera',
     notificacoes: '/cliente/notificacoes',
     mensagens: '/cliente/mensagens',
     perfil: '/cliente/perfil',

@@ -2,8 +2,11 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Prisma, PrismaClient } from '../generated/prisma/client';
 import {
   StatusAgendamento,
@@ -34,6 +37,7 @@ export type WaitlistDbClient = PrismaClient | Prisma.TransactionClient;
 export const WAITLIST_LOCK_NS = 3;
 export const WAITLIST_CLAIM_LOCK_NS = 4;
 export const WAITLIST_CLAIM_TTL_MINUTES = 5;
+export const WAITLIST_EXPIRATION_LOCK_NS = 6;
 
 export async function acquireWaitlistLock(
   client: WaitlistDbClient,
@@ -59,6 +63,15 @@ export async function acquireWaitlistClaimLock(
   )`;
 }
 
+export async function acquireWaitlistExpirationLock(
+  client: WaitlistDbClient,
+): Promise<void> {
+  await client.$executeRaw`SELECT pg_advisory_xact_lock(
+    ${WAITLIST_EXPIRATION_LOCK_NS}::int,
+    0::int
+  )`;
+}
+
 export interface WaitlistCreateDto {
   barbeiroId: number;
   servicoId: number;
@@ -69,11 +82,14 @@ export interface WaitlistCreateDto {
 
 @Injectable()
 export class WaitlistService {
+  private readonly logger = new Logger(WaitlistService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly scheduleService: ScheduleService,
     private readonly appointmentsService: AppointmentsService,
     private readonly notificationsService: NotificationsService,
+    @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
   private parseHHmm(hhmm: string): number {
@@ -156,6 +172,12 @@ export class WaitlistService {
         ? {
             id: entry.servico.id,
             nome: entry.servico.nome,
+          }
+        : undefined,
+      barbeiro: entry.barbeiro
+        ? {
+            id: entry.barbeiro.id,
+            nome: entry.barbeiro.usuario?.nome ?? '',
           }
         : undefined,
     };
@@ -243,6 +265,9 @@ export class WaitlistService {
       orderBy: [{ dataDesejada: 'asc' }, { dataEntrada: 'asc' }],
       include: {
         servico: { select: { id: true, nome: true } },
+        barbeiro: {
+          select: { id: true, usuario: { select: { nome: true } } },
+        },
       },
     });
 
@@ -666,48 +691,90 @@ export class WaitlistService {
     const { clienteId, claim } = await this.findOwnedClaim(userId, claimId);
     const dateKey = claim.data.toISOString().slice(0, 10);
 
-    return this.prisma.$transaction(async (tx: WaitlistDbClient) => {
-      await acquireClienteLock(tx, clienteId);
-      await acquireCalendarLock(tx, claim.barbeiroId);
-      await acquireWaitlistClaimLock(
-        tx,
-        claim.barbeiroId,
-        claim.servicoId,
+    const result = await this.prisma.$transaction(
+      async (tx: WaitlistDbClient) => {
+        await acquireClienteLock(tx, clienteId);
+        await acquireCalendarLock(tx, claim.barbeiroId);
+        await acquireWaitlistClaimLock(
+          tx,
+          claim.barbeiroId,
+          claim.servicoId,
+          dateKey,
+          claim.horaInicio,
+          claim.horaFim,
+        );
+
+        const current = await tx.waitlistClaim.findUnique({
+          where: { id: claimId },
+          include: {
+            listaEspera: { select: { clienteId: true, status: true } },
+          },
+        });
+        if (!current || current.listaEspera.clienteId !== clienteId) {
+          throw new NotFoundException('Claim não encontrado.');
+        }
+        if (current.status !== StatusWaitlistClaim.ATIVO) {
+          throw new ConflictException('Claim não está ativo.');
+        }
+
+        if (current.expiraEm <= new Date()) {
+          throw new ConflictException('Claim expirado.');
+        }
+
+        const rejected = await tx.waitlistClaim.updateMany({
+          where: { id: claimId, status: StatusWaitlistClaim.ATIVO },
+          data: { status: StatusWaitlistClaim.RECUSADO },
+        });
+        if (rejected.count !== 1) {
+          throw new ConflictException(
+            'Claim foi atualizado por outra operação.',
+          );
+        }
+
+        return this.claimResponse({
+          ...current,
+          status: StatusWaitlistClaim.RECUSADO,
+        });
+      },
+    );
+
+    // Reoferta da vaga após a confirmação da recusa no banco de dados.
+    // Executada fora da transação de recusa para não reter locks desnecessários
+    // e com tratamento de erro resiliente: uma falha na reoferta não reverte a recusa.
+    try {
+      await this.triggerOpportunityForRejectedClaim({
+        barbeiroId: claim.barbeiroId,
         dateKey,
-        claim.horaInicio,
-        claim.horaFim,
+        horaInicio: claim.horaInicio,
+        horaFim: claim.horaFim,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Falha ao reofertar janela liberada por recusa de claim: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
       );
+    }
 
-      const current = await tx.waitlistClaim.findUnique({
-        where: { id: claimId },
-        include: {
-          listaEspera: { select: { clienteId: true, status: true } },
-        },
-      });
-      if (!current || current.listaEspera.clienteId !== clienteId) {
-        throw new NotFoundException('Claim não encontrado.');
-      }
-      if (current.status !== StatusWaitlistClaim.ATIVO) {
-        throw new ConflictException('Claim não está ativo.');
-      }
+    return result;
+  }
 
-      if (current.expiraEm <= new Date()) {
-        throw new ConflictException('Claim expirado.');
-      }
+  private async triggerOpportunityForRejectedClaim(window: {
+    barbeiroId: number;
+    dateKey: string;
+    horaInicio: string;
+    horaFim: string;
+  }): Promise<void> {
+    if (!this.moduleRef) {
+      return;
+    }
 
-      const rejected = await tx.waitlistClaim.updateMany({
-        where: { id: claimId, status: StatusWaitlistClaim.ATIVO },
-        data: { status: StatusWaitlistClaim.RECUSADO },
-      });
-      if (rejected.count !== 1) {
-        throw new ConflictException('Claim foi atualizado por outra operação.');
-      }
-
-      return this.claimResponse({
-        ...current,
-        status: StatusWaitlistClaim.RECUSADO,
-      });
-    });
+    const opportunityService = this.moduleRef.get<any>(
+      'WAITLIST_OPPORTUNITY_SERVICE',
+      { strict: false },
+    );
+    if (opportunityService) {
+      await opportunityService.tryCreateForReleasedWindow(window);
+    }
   }
 
   /**
@@ -753,5 +820,109 @@ export class WaitlistService {
     }
 
     return this.toResponse(updatedEntry);
+  }
+
+  /**
+   * Processamento periódico de claims expirados (ETAPA 5B).
+   *
+   * 1. Serializa instâncias concorrentes com WAITLIST_EXPIRATION_LOCK_NS (namespace 6).
+   * 2. Localiza claims com status ATIVO e expiraEm <= agora.
+   * 3. Atualiza os claims para status EXPIRADO de forma atômica no banco de dados.
+   * 4. Para cada janela única afetada, aciona a reoferta via tryCreateForReleasedWindow.
+   *    Cada janela é processada individualmente com try/catch: falha em uma janela
+   *    não interrompe o processamento das demais.
+   */
+  async processExpiredClaims(
+    now: Date = new Date(),
+  ): Promise<{ expiredCount: number; reofferedWindows: number }> {
+    const expiredWindows = await this.prisma.$transaction(async (tx) => {
+      await acquireWaitlistExpirationLock(tx);
+
+      // Busca claims com status ATIVO cujo horário limite já passou
+      const expiredClaims = await tx.waitlistClaim.findMany({
+        where: {
+          status: StatusWaitlistClaim.ATIVO,
+          expiraEm: { lte: now },
+        },
+        select: {
+          id: true,
+          barbeiroId: true,
+          data: true,
+          horaInicio: true,
+          horaFim: true,
+        },
+        orderBy: { expiraEm: 'asc' },
+      });
+
+      if (expiredClaims.length === 0) {
+        return [];
+      }
+
+      const claimIds = expiredClaims.map((c) => c.id);
+
+      // Atualiza atomicamente os claims para o status EXPIRADO
+      await tx.waitlistClaim.updateMany({
+        where: {
+          id: { in: claimIds },
+          status: StatusWaitlistClaim.ATIVO,
+        },
+        data: {
+          status: StatusWaitlistClaim.EXPIRADO,
+          dataAtualizacao: new Date(),
+        },
+      });
+
+      // Consolida janelas únicas para reoferta (evita reofertar a mesma janela múltiplas vezes no mesmo ciclo)
+      const windowMap = new Map<
+        string,
+        {
+          barbeiroId: number;
+          dateKey: string;
+          horaInicio: string;
+          horaFim: string;
+        }
+      >();
+
+      for (const claim of expiredClaims) {
+        const dateKey = claim.data.toISOString().slice(0, 10);
+        const windowKey = `${claim.barbeiroId}:${dateKey}:${claim.horaInicio}:${claim.horaFim}`;
+        if (!windowMap.has(windowKey)) {
+          windowMap.set(windowKey, {
+            barbeiroId: claim.barbeiroId,
+            dateKey,
+            horaInicio: claim.horaInicio,
+            horaFim: claim.horaFim,
+          });
+        }
+      }
+
+      return Array.from(windowMap.values());
+    });
+
+    if (expiredWindows.length === 0) {
+      return { expiredCount: 0, reofferedWindows: 0 };
+    }
+
+    let reofferedWindows = 0;
+
+    // A reoferta é executada fora da transação de marcação de expirados
+    // para liberar os locks de banco e permitir que cada janela adquira
+    // seus próprios locks determinísticos de calendário e claim sem risco de deadlock.
+    for (const window of expiredWindows) {
+      try {
+        await this.triggerOpportunityForRejectedClaim(window);
+        reofferedWindows++;
+      } catch (error) {
+        this.logger.error(
+          `Falha ao reofertar janela expirada [Barbeiro ${window.barbeiroId}, ${window.dateKey} ${window.horaInicio}-${window.horaFim}]: ${error instanceof Error ? error.message : String(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
+    return {
+      expiredCount: expiredWindows.length,
+      reofferedWindows,
+    };
   }
 }
