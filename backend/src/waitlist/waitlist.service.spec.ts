@@ -1288,4 +1288,357 @@ describe('WaitlistService', () => {
       ).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('Etapa 11 — Correções cirúrgicas da Lista de Espera', () => {
+    describe('Problema 1 — Exclusão de ofertas repetidas para mesma janela e entrada', () => {
+      beforeEach(() => {
+        prisma.barbeiro.findUnique.mockResolvedValue({ id: 10, ativo: true });
+        prisma.servico.findFirst.mockResolvedValue({
+          id: 20,
+          barbeiroId: 10,
+          ativo: true,
+          duracaoMinutos: 30,
+        });
+        prisma.agendamento.findMany.mockResolvedValue([]);
+      });
+
+      it('cliente A recusa a janela X e não é retornado como elegível para a mesma janela X', async () => {
+        const entradaA = {
+          id: 1,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T10:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+          horaInicio: '09:00',
+          horaFim: '18:00',
+        };
+
+        prisma.listaEspera.findMany.mockResolvedValue([entradaA]);
+
+        // Simula que para a janela X (10:00-10:30), o cliente A já possui um claim RECUSADO
+        prisma.waitlistClaim.findFirst.mockImplementation(async (args: any) => {
+          if (
+            args?.where?.listaEsperaId === 1 &&
+            args?.where?.horaInicio === '10:00' &&
+            args?.where?.horaFim === '10:30'
+          ) {
+            return { id: 501, status: StatusWaitlistClaim.RECUSADO };
+          }
+          return null;
+        });
+
+        const elegiveis = await service.findEligibleEntriesForSlot(
+          10,
+          20,
+          '2099-01-12',
+          '10:00',
+          '10:30',
+        );
+
+        expect(elegiveis).toHaveLength(0);
+      });
+
+      it('cliente B pode receber a janela X após recusa de cliente A (preservando ordem FIFO)', async () => {
+        const entradaA = {
+          id: 1,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T10:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+        };
+        const entradaB = {
+          id: 2,
+          clienteId: 88,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T10:05:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+        };
+
+        prisma.listaEspera.findMany.mockResolvedValue([entradaA, entradaB]);
+
+        // Entrada A já possui claim RECUSADO para a janela X; Entrada B não possui claim
+        prisma.waitlistClaim.findFirst.mockImplementation(async (args: any) => {
+          if (args?.where?.listaEsperaId === 1) {
+            return { id: 501, status: StatusWaitlistClaim.RECUSADO };
+          }
+          return null;
+        });
+
+        const elegiveis = await service.findEligibleEntriesForSlot(
+          10,
+          20,
+          '2099-01-12',
+          '10:00',
+          '10:30',
+        );
+
+        expect(elegiveis).toHaveLength(1);
+        expect(elegiveis[0].id).toBe(2);
+        expect(elegiveis[0].clienteId).toBe(88);
+      });
+
+      it('cliente A continua elegível para uma janela Y diferente', async () => {
+        const entradaA = {
+          id: 1,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T10:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+        };
+
+        prisma.listaEspera.findMany.mockResolvedValue([entradaA]);
+
+        // Claim RECUSADO existe apenas para janela X (10:00-10:30)
+        prisma.waitlistClaim.findFirst.mockImplementation(async (args: any) => {
+          if (
+            args?.where?.horaInicio === '10:00' &&
+            args?.where?.horaFim === '10:30'
+          ) {
+            return { id: 501, status: StatusWaitlistClaim.RECUSADO };
+          }
+          return null;
+        });
+
+        // Consulta para janela Y (14:00-14:30)
+        const elegiveis = await service.findEligibleEntriesForSlot(
+          10,
+          20,
+          '2099-01-12',
+          '14:00',
+          '14:30',
+        );
+
+        expect(elegiveis).toHaveLength(1);
+        expect(elegiveis[0].id).toBe(1);
+      });
+
+      it('claim expirado também impede a repetição da mesma janela para a mesma entrada', async () => {
+        const entradaA = {
+          id: 1,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T10:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+        };
+
+        prisma.listaEspera.findMany.mockResolvedValue([entradaA]);
+
+        // Simula claim EXPIRADO para janela X
+        prisma.waitlistClaim.findFirst.mockResolvedValue({
+          id: 601,
+          status: StatusWaitlistClaim.EXPIRADO,
+        });
+
+        const elegiveis = await service.findEligibleEntriesForSlot(
+          10,
+          20,
+          '2099-01-12',
+          '10:00',
+          '10:30',
+        );
+
+        expect(elegiveis).toHaveLength(0);
+      });
+
+      it('claims de datas diferentes não bloqueiam oportunidades legítimas', async () => {
+        const entradaA = {
+          id: 1,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-13T00:00:00.000Z'),
+          dataEntrada: new Date('2099-01-01T10:00:00.000Z'),
+          status: StatusListaEspera.ATIVA,
+        };
+
+        prisma.listaEspera.findMany.mockResolvedValue([entradaA]);
+
+        // Simula que para 2099-01-12 houve claim, mas para 2099-01-13 não há
+        prisma.waitlistClaim.findFirst.mockImplementation(async (args: any) => {
+          const date = args?.where?.data;
+          const isJan12 = date && new Date(date).getUTCDate() === 12;
+          if (isJan12) {
+            return { id: 701, status: StatusWaitlistClaim.RECUSADO };
+          }
+          return null;
+        });
+
+        const elegiveis = await service.findEligibleEntriesForSlot(
+          10,
+          20,
+          '2099-01-13',
+          '10:00',
+          '10:30',
+        );
+
+        expect(elegiveis).toHaveLength(1);
+        expect(elegiveis[0].id).toBe(1);
+      });
+    });
+
+    describe('Problema 2 — Cancelamento de entrada e invalidação imediata de claim ativo', () => {
+      it('cancelar entrada com claim ativo invalida o claim e reoferta a janela para o próximo elegível', async () => {
+        prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
+        prisma.listaEspera.updateMany.mockResolvedValue({ count: 1 });
+        prisma.listaEspera.findUnique.mockResolvedValue({
+          id: 5,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          status: StatusListaEspera.CANCELADA,
+          dataEntrada: new Date(),
+        });
+
+        const claimAtivo = {
+          id: 801,
+          listaEsperaId: 5,
+          barbeiroId: 10,
+          servicoId: 20,
+          data: new Date('2099-01-12T00:00:00.000Z'),
+          horaInicio: '10:00',
+          horaFim: '10:30',
+          status: StatusWaitlistClaim.ATIVO,
+        };
+
+        prisma.waitlistClaim.findMany.mockResolvedValue([claimAtivo]);
+        prisma.waitlistClaim.updateMany.mockResolvedValue({ count: 1 });
+        opportunityService.tryCreateForReleasedWindow.mockResolvedValue({
+          id: 999,
+          listaEsperaId: 6,
+        });
+
+        const result = await service.cancel(1, 5);
+
+        expect(result.status).toBe(StatusListaEspera.CANCELADA);
+        expect(prisma.waitlistClaim.updateMany).toHaveBeenCalledWith({
+          where: {
+            listaEsperaId: 5,
+            status: StatusWaitlistClaim.ATIVO,
+          },
+          data: {
+            status: StatusWaitlistClaim.RECUSADO,
+            dataAtualizacao: expect.any(Date),
+          },
+        });
+        expect(
+          opportunityService.tryCreateForReleasedWindow,
+        ).toHaveBeenCalledWith({
+          barbeiroId: 10,
+          dateKey: '2099-01-12',
+          horaInicio: '10:00',
+          horaFim: '10:30',
+        });
+      });
+
+      it('claim invalidado não pode ser aceito posteriormente', async () => {
+        // Tentar aceitar claim que agora está com status RECUSADO
+        prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
+        prisma.waitlistClaim.findFirst.mockResolvedValue({
+          id: 801,
+          listaEsperaId: 5,
+          barbeiroId: 10,
+          servicoId: 20,
+          data: new Date('2099-01-12T00:00:00.000Z'),
+          horaInicio: '10:00',
+          horaFim: '10:30',
+          status: StatusWaitlistClaim.RECUSADO,
+          expiraEm: new Date('2099-01-12T10:05:00.000Z'),
+        });
+        prisma.waitlistClaim.findUnique.mockResolvedValue({
+          id: 801,
+          status: StatusWaitlistClaim.RECUSADO,
+          expiraEm: new Date('2099-01-12T10:05:00.000Z'),
+          listaEspera: { clienteId: 99, status: StatusListaEspera.CANCELADA },
+        });
+
+        await expect(service.acceptClaim(1, 801)).rejects.toThrow(
+          new ConflictException('Claim não está ativo.'),
+        );
+      });
+
+      it('cancelar entrada sem claim ativo não dispara reoferta', async () => {
+        prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
+        prisma.listaEspera.updateMany.mockResolvedValue({ count: 1 });
+        prisma.listaEspera.findUnique.mockResolvedValue({
+          id: 7,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          status: StatusListaEspera.CANCELADA,
+          dataEntrada: new Date(),
+        });
+
+        // Não há claims ativos para esta entrada
+        prisma.waitlistClaim.findMany.mockResolvedValue([]);
+
+        const result = await service.cancel(1, 7);
+
+        expect(result.status).toBe(StatusListaEspera.CANCELADA);
+        expect(prisma.waitlistClaim.updateMany).not.toHaveBeenCalled();
+        expect(
+          opportunityService.tryCreateForReleasedWindow,
+        ).not.toHaveBeenCalled();
+      });
+
+      it('não é possível cancelar entrada de outro cliente', async () => {
+        prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
+        prisma.listaEspera.updateMany.mockResolvedValue({ count: 0 });
+
+        await expect(service.cancel(1, 999)).rejects.toThrow(
+          new NotFoundException('Entrada de lista de espera não encontrada.'),
+        );
+        expect(
+          opportunityService.tryCreateForReleasedWindow,
+        ).not.toHaveBeenCalled();
+      });
+
+      it('falha na reoferta não desfaz o cancelamento já confirmado', async () => {
+        prisma.cliente.findUnique.mockResolvedValue({ id: 99 });
+        prisma.listaEspera.updateMany.mockResolvedValue({ count: 1 });
+        prisma.listaEspera.findUnique.mockResolvedValue({
+          id: 8,
+          clienteId: 99,
+          barbeiroId: 10,
+          servicoId: 20,
+          dataDesejada: new Date('2099-01-12T00:00:00.000Z'),
+          status: StatusListaEspera.CANCELADA,
+          dataEntrada: new Date(),
+        });
+
+        prisma.waitlistClaim.findMany.mockResolvedValue([
+          {
+            id: 802,
+            listaEsperaId: 8,
+            barbeiroId: 10,
+            servicoId: 20,
+            data: new Date('2099-01-12T00:00:00.000Z'),
+            horaInicio: '10:00',
+            horaFim: '10:30',
+            status: StatusWaitlistClaim.ATIVO,
+          },
+        ]);
+        prisma.waitlistClaim.updateMany.mockResolvedValue({ count: 1 });
+        opportunityService.tryCreateForReleasedWindow.mockRejectedValue(
+          new Error('Falha temporária de rede ao reofertar'),
+        );
+
+        // Cancelamento deve concluir com sucesso apesar do erro na reoferta
+        const result = await service.cancel(1, 8);
+
+        expect(result.status).toBe(StatusListaEspera.CANCELADA);
+      });
+    });
+  });
 });

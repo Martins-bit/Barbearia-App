@@ -429,6 +429,30 @@ export class WaitlistService {
         continue;
       }
 
+      // Exclui a entrada se ela já possui claim registrado para este slot exato
+      // com status RECUSADO, EXPIRADO ou ATIVO (evita loop de reoferta da mesma vaga para o mesmo cliente).
+      const pastClaimForSlot = await client.waitlistClaim.findFirst({
+        where: {
+          listaEsperaId: entry.id,
+          barbeiroId,
+          servicoId,
+          data: prismaDateFilter(dateKey),
+          horaInicio,
+          horaFim,
+          status: {
+            in: [
+              StatusWaitlistClaim.RECUSADO,
+              StatusWaitlistClaim.EXPIRADO,
+              StatusWaitlistClaim.ATIVO,
+            ],
+          },
+        },
+        select: { id: true },
+      });
+      if (pastClaimForSlot) {
+        continue;
+      }
+
       eligible.push(entry);
     }
 
@@ -780,43 +804,108 @@ export class WaitlistService {
   /**
    * Cancela uma entrada da lista de espera (dono: o próprio cliente).
    *
-   * Concorrência: a transição é feita por `updateMany` CONDICIONAL
-   * (id + clienteId + status ATIVA). Apenas `count === 1` é sucesso — duas
-   * requisições concorrentes não podem cancelar a mesma entrada duas vezes, e
-   * um estado terminal (ex.: ATENDIDA) NUNCA é sobrescrito para CANCELADA.
-   *
-   * Não usa advisory lock: a condição no próprio UPDATE é a atomicidade
-   * necessária aqui (não há decisão de agenda envolvida).
+   * 1. Valida atomicamente em transação a propriedade e o status ATIVA da entrada.
+   * 2. Invalida imediatamente qualquer claim ATIVO vinculado a essa entrada (mudando para RECUSADO).
+   * 3. Se um claim ATIVO foi invalidado, reoferta a janela liberada para o próximo candidato
+   *    fora da transação, com tratamento resiliente de erros.
    */
   async cancel(userId: number, waitlistId: number): Promise<any> {
     const clienteId = await this.resolveClienteId(userId);
 
-    const updated = await this.prisma.listaEspera.updateMany({
-      where: {
-        id: waitlistId,
-        clienteId,
-        status: StatusListaEspera.ATIVA,
-      },
-      data: {
-        status: StatusListaEspera.CANCELADA,
-        dataAtualizacao: new Date(),
-      },
-    });
+    const { updatedEntry, invalidatedClaims } =
+      await this.prisma.$transaction(async (tx: WaitlistDbClient) => {
+        await acquireClienteLock(tx, clienteId);
 
-    if (updated.count !== 1) {
-      // Não distingue "não existe", "de outro cliente" ou "já não está ATIVA"
-      // (ex.: NOTIFICADA/ATENDIDA/CANCELADA/EXPIRADA) para não revelar
-      // existência nem permitir sobrescrever um estado válido. Mesmo padrão de
-      // 404 genérico usado no restante do projeto para recurso não acessível.
-      throw new NotFoundException('Entrada de lista de espera não encontrada.');
-    }
+        const updated = await tx.listaEspera.updateMany({
+          where: {
+            id: waitlistId,
+            clienteId,
+            status: StatusListaEspera.ATIVA,
+          },
+          data: {
+            status: StatusListaEspera.CANCELADA,
+            dataAtualizacao: new Date(),
+          },
+        });
 
-    const updatedEntry = await this.prisma.listaEspera.findUnique({
-      where: { id: waitlistId },
-    });
+        if (updated.count !== 1) {
+          // Não distingue "não existe", "de outro cliente" ou "já não está ATIVA"
+          // (ex.: NOTIFICADA/ATENDIDA/CANCELADA/EXPIRADA) para não revelar
+          // existência nem permitir sobrescrever um estado válido. Mesmo padrão de
+          // 404 genérico usado no restante do projeto para recurso não acessível.
+          throw new NotFoundException(
+            'Entrada de lista de espera não encontrada.',
+          );
+        }
 
-    if (!updatedEntry) {
-      throw new NotFoundException('Entrada de lista de espera não encontrada.');
+        const freshEntry = await tx.listaEspera.findUnique({
+          where: { id: waitlistId },
+          include: {
+            servico: { select: { id: true, nome: true } },
+            barbeiro: {
+              select: { id: true, usuario: { select: { nome: true } } },
+            },
+          },
+        });
+
+        if (!freshEntry) {
+          throw new NotFoundException(
+            'Entrada de lista de espera não encontrada.',
+          );
+        }
+
+        if (freshEntry.barbeiroId) {
+          await acquireCalendarLock(tx, freshEntry.barbeiroId);
+        }
+
+        // Localiza claims ATIVO vinculados a esta entrada para invalidá-los
+        const activeClaims =
+          (await tx.waitlistClaim.findMany({
+            where: {
+              listaEsperaId: waitlistId,
+              status: StatusWaitlistClaim.ATIVO,
+            },
+          })) ?? [];
+
+        if (activeClaims.length > 0) {
+          await tx.waitlistClaim.updateMany({
+            where: {
+              listaEsperaId: waitlistId,
+              status: StatusWaitlistClaim.ATIVO,
+            },
+            data: {
+              status: StatusWaitlistClaim.RECUSADO,
+              dataAtualizacao: new Date(),
+            },
+          });
+        }
+
+        return {
+          updatedEntry: freshEntry,
+          invalidatedClaims: activeClaims,
+        };
+      });
+
+    // Reoferta da vaga somente se algum claim ATIVO foi invalidado pelo cancelamento.
+    // Executada fora da transação para não reter locks e com erro resiliente:
+    // uma falha na reoferta não desfaz o cancelamento já confirmado no banco.
+    if (invalidatedClaims && invalidatedClaims.length > 0) {
+      for (const claim of invalidatedClaims) {
+        const dateKey = claim.data.toISOString().slice(0, 10);
+        try {
+          await this.triggerOpportunityForRejectedClaim({
+            barbeiroId: claim.barbeiroId,
+            dateKey,
+            horaInicio: claim.horaInicio,
+            horaFim: claim.horaFim,
+          });
+        } catch (error) {
+          this.logger.error(
+            `Falha ao reofertar janela liberada por cancelamento de entrada: ${error instanceof Error ? error.message : String(error)}`,
+            error instanceof Error ? error.stack : undefined,
+          );
+        }
+      }
     }
 
     return this.toResponse(updatedEntry);
