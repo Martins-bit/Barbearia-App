@@ -3,7 +3,7 @@
  * produzido pelo Prisma 7 + @prisma/adapter-pg.
  * NÃO faz parte da aplicação; será removido ao final do diagnóstico.
  */
-import 'dotenv/config';
+import './e2e-safety.setup.cjs';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient, Prisma } from '../src/generated/prisma/client';
 

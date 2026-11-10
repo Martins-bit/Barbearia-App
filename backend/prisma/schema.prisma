@@ -35,6 +35,27 @@ enum StatusWaitlistClaim {
   RECUSADO
 }
 
+enum StatusWaitlistReoffer {
+  PENDENTE
+  PROCESSANDO
+  CONCLUIDA
+  FALHA_FINAL
+}
+
+enum OrigemWaitlistReoffer {
+  CLAIM_RECUSADO
+  ENTRADA_CANCELADA
+  CLAIM_EXPIRADO
+  AGENDAMENTO_CANCELADO
+  BLOQUEIO_REMOVIDO
+}
+
+enum ResultadoWaitlistReoffer {
+  CLAIM_CRIADO
+  SEM_CANDIDATO
+  FALHA_PERMANENTE
+}
+
 enum TipoNotificacao {
   WAITLIST_OPPORTUNITY
   AGENDAMENTO
@@ -57,7 +78,9 @@ model Usuario {
   nome            String
   telefone        String      @unique
   email           String?     @unique
+  emailVerificadoEm DateTime?
   senhaHash       String
+  authVersion     Int         @default(0)
   tipoUsuario     TipoUsuario
   ativo           Boolean     @default(true)
   dataCriacao     DateTime    @default(now())
@@ -65,9 +88,50 @@ model Usuario {
 
   cliente            Cliente?
   barbeiro           Barbeiro?
+  tokensConfirmacaoEmail EmailVerificationToken[]
+  tokensRedefinicaoSenha PasswordResetToken[]
   notificacoes       Notificacao[]
   mensagensEnviadas  Mensagem[]    @relation("MensagensEnviadas")
   mensagensRecebidas Mensagem[]    @relation("MensagensRecebidas")
+}
+
+model EmailVerificationToken {
+  id         Int       @id @default(autoincrement())
+  usuarioId  Int
+  email      String
+  tokenHash  String    @unique @db.Char(64)
+  criadoEm   DateTime  @default(now())
+  expiraEm   DateTime
+  usadoEm    DateTime?
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([usuarioId, criadoEm])
+  @@index([expiraEm])
+}
+
+model PasswordResetToken {
+  id         Int       @id @default(autoincrement())
+  usuarioId  Int
+  email      String
+  tokenHash  String    @unique @db.Char(64)
+  criadoEm   DateTime  @default(now())
+  expiraEm   DateTime
+  usadoEm    DateTime?
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([usuarioId, criadoEm])
+  @@index([expiraEm])
+}
+
+model PasswordResetRateLimit {
+  identifierHash  String   @id @db.Char(64)
+  windowStartedAt DateTime
+  attemptCount    Int
+  updatedAt       DateTime @updatedAt
+
+  @@index([windowStartedAt])
 }
 
 model Cliente {
@@ -149,7 +213,7 @@ model ListaEspera {
   horaInicio      String?
   horaFim         String?
   status          StatusListaEspera @default(ATIVA)
-  dataEntrada     DateTime          @default(now())
+  dataEntrada     DateTime          @default(dbgenerated("(clock_timestamp() AT TIME ZONE 'UTC')"))
   dataAtualizacao DateTime          @updatedAt
 
   cliente  Cliente         @relation(fields: [clienteId], references: [id])
@@ -173,15 +237,43 @@ model WaitlistClaim {
   horaFim         String
   status          StatusWaitlistClaim @default(ATIVO)
   expiraEm        DateTime
+  reofertaOutboxId Int?                @unique
   dataCriacao     DateTime            @default(now())
   dataAtualizacao DateTime            @updatedAt
 
-  listaEspera ListaEspera @relation(fields: [listaEsperaId], references: [id])
+  listaEspera    ListaEspera             @relation(fields: [listaEsperaId], references: [id])
+  reofertaOutbox WaitlistReofferOutbox? @relation(fields: [reofertaOutboxId], references: [id], onDelete: Restrict)
   notificacoes Notificacao[]
 
   @@index([barbeiroId, servicoId, data, horaInicio, horaFim, status])
   @@index([listaEsperaId, status])
   @@index([expiraEm])
+}
+
+model WaitlistReofferOutbox {
+  id                 Int                      @id @default(autoincrement())
+  chaveIdempotencia  String                   @unique
+  origem             OrigemWaitlistReoffer
+  origemId           Int?
+  barbeiroId         Int
+  data               DateTime                 @db.Date
+  horaInicio         String
+  horaFim            String
+  status             StatusWaitlistReoffer    @default(PENDENTE)
+  tentativas         Int                      @default(0)
+  proximaTentativaEm DateTime                 @default(now())
+  leaseAte           DateTime?
+  ultimoErro         String?                  @db.Text
+  resultado          ResultadoWaitlistReoffer?
+  concluidoEm        DateTime?
+  dataCriacao        DateTime                 @default(now())
+  dataAtualizacao    DateTime                 @updatedAt
+
+  claim WaitlistClaim?
+
+  @@index([status, proximaTentativaEm, id])
+  @@index([status, leaseAte])
+  @@index([origem, origemId])
 }
 
 model Notificacao {
@@ -193,6 +285,7 @@ model Notificacao {
   titulo        String
   mensagem      String
   lida          Boolean         @default(false)
+  limpa         Boolean         @default(false)
   dataCriacao   DateTime        @default(now())
   dataLeitura   DateTime?
 
@@ -202,18 +295,23 @@ model Notificacao {
 
   @@index([usuarioId, lida])
   @@index([usuarioId, dataCriacao])
+  @@index([usuarioId, limpa])
   @@index([claimId])
   @@index([agendamentoId])
 }
 
 model Mensagem {
-  id             Int       @id @default(autoincrement())
-  remetenteId    Int
-  destinatarioId Int
-  conteudo       String
-  lida           Boolean   @default(false)
-  dataCriacao    DateTime  @default(now())
-  dataLeitura    DateTime?
+  id                       Int       @id @default(autoincrement())
+  remetenteId              Int
+  destinatarioId           Int
+  conteudo                 String
+  lida                     Boolean   @default(false)
+  dataCriacao              DateTime  @default(now())
+  dataLeitura              DateTime?
+  apagadaParaTodos         Boolean   @default(false)
+  excluidaPeloRemetente    Boolean   @default(false)
+  excluidaPeloDestinatario Boolean   @default(false)
+  dataExclusao             DateTime?
 
   remetente    Usuario @relation("MensagensEnviadas", fields: [remetenteId], references: [id])
   destinatario Usuario @relation("MensagensRecebidas", fields: [destinatarioId], references: [id])

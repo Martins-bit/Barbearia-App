@@ -5,20 +5,26 @@ import {
 } from '@nestjs/common';
 import { TipoUsuario } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
-import { MessagesService } from './messages.service';
+import { MessagesService, DELETED_MESSAGE_TEXT } from './messages.service';
+import { ModoExclusaoMensagem } from './dto/delete-message.dto';
 
 function buildPrismaMock(): any {
-  return {
+  const prismaMock: any = {
     usuario: { findUnique: jest.fn(), findMany: jest.fn() },
     barbeiro: { findUnique: jest.fn() },
     mensagem: {
       findUnique: jest.fn(),
       findMany: jest.fn(),
       create: jest.fn(),
+      update: jest.fn(),
       updateMany: jest.fn(),
       count: jest.fn(),
     },
   };
+  prismaMock.$transaction = jest.fn(async (callback: any) =>
+    callback(prismaMock),
+  );
+  return prismaMock;
 }
 
 const clientUser = {
@@ -286,6 +292,7 @@ describe('MessagesService', () => {
   describe('conversa', () => {
     it('retorna somente mensagens entre os dois participantes em ordem crescente', async () => {
       arrangeUsers();
+      arrangeBarberActive(true);
       prisma.mensagem.findMany.mockResolvedValue([
         { ...messageRow, id: 100 },
         { ...messageRow, id: 101, remetenteId: 20, destinatarioId: 10 },
@@ -299,8 +306,8 @@ describe('MessagesService', () => {
       expect(prisma.mensagem.findMany).toHaveBeenCalledWith({
         where: {
           OR: [
-            { remetenteId: 10, destinatarioId: 20 },
-            { remetenteId: 20, destinatarioId: 10 },
+            { remetenteId: 10, destinatarioId: 20, excluidaPeloRemetente: false },
+            { remetenteId: 20, destinatarioId: 10, excluidaPeloDestinatario: false },
           ],
         },
         orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
@@ -318,8 +325,72 @@ describe('MessagesService', () => {
       ).toBe(true);
     });
 
+    it('cliente não acessa conversa com perfil de barbeiro desativado', async () => {
+      arrangeUsers();
+      arrangeBarberActive(false);
+
+      await expect(
+        service.findConversation(clientUser.id, barberUser.id),
+      ).rejects.toThrow(new NotFoundException('Conversa não encontrada.'));
+      expect(prisma.mensagem.findMany).not.toHaveBeenCalled();
+    });
+
+    it('barbeiro ativo acessa conversa autorizada com cliente', async () => {
+      arrangeUsers();
+      arrangeBarberActive(true);
+      prisma.mensagem.findMany.mockResolvedValue([barberToClientMessageRow]);
+
+      await expect(
+        service.findConversation(barberUser.id, clientUser.id),
+      ).resolves.toHaveLength(1);
+      expect(prisma.barbeiro.findUnique).toHaveBeenCalledWith({
+        where: { usuarioId: barberUser.id },
+        select: { ativo: true },
+      });
+    });
+
+    it('conta inativa não acessa conversa', async () => {
+      prisma.usuario.findUnique.mockResolvedValue({
+        ...clientUser,
+        ativo: false,
+      });
+
+      await expect(
+        service.findConversation(clientUser.id, barberUser.id),
+      ).rejects.toThrow(new ForbiddenException('Usuário não autorizado.'));
+      expect(prisma.mensagem.findMany).not.toHaveBeenCalled();
+    });
+
+    it('terceiro usuário consulta somente seu próprio par de participantes', async () => {
+      arrangeUsers();
+      arrangeBarberActive(true);
+      prisma.mensagem.findMany.mockResolvedValue([]);
+
+      await expect(
+        service.findConversation(otherClientUser.id, barberUser.id),
+      ).resolves.toEqual([]);
+      expect(prisma.mensagem.findMany).toHaveBeenCalledWith({
+        where: {
+          OR: [
+            {
+              remetenteId: otherClientUser.id,
+              destinatarioId: barberUser.id,
+              excluidaPeloRemetente: false,
+            },
+            {
+              remetenteId: barberUser.id,
+              destinatarioId: otherClientUser.id,
+              excluidaPeloDestinatario: false,
+            },
+          ],
+        },
+        orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
+      });
+    });
+
     it('conversa consigo mesmo e conversa com perfil igual rejeitadas', async () => {
       arrangeUsers();
+      arrangeBarberActive(true);
 
       await expect(
         service.findConversation(clientUser.id, clientUser.id),
@@ -336,11 +407,13 @@ describe('MessagesService', () => {
       id: 20,
       nome: 'Barbeiro A',
       tipoUsuario: TipoUsuario.BARBEIRO,
+      barbeiro: { ativo: true },
     };
     const barberPartnerB = {
       id: 21,
       nome: 'Barbeiro B',
       tipoUsuario: TipoUsuario.BARBEIRO,
+      barbeiro: { ativo: true },
     };
     const clientPartner = {
       id: 10,
@@ -356,6 +429,7 @@ describe('MessagesService', () => {
       partners: any[];
     }) => {
       arrangeUsers();
+      arrangeBarberActive(true);
       prisma.mensagem.findMany.mockResolvedValue(messages);
       prisma.usuario.findMany.mockResolvedValue(partners);
     };
@@ -370,7 +444,10 @@ describe('MessagesService', () => {
 
       expect(prisma.mensagem.findMany).toHaveBeenCalledWith({
         where: {
-          OR: [{ remetenteId: 10 }, { destinatarioId: 10 }],
+          OR: [
+            { remetenteId: 10, excluidaPeloRemetente: false },
+            { destinatarioId: 10, excluidaPeloDestinatario: false },
+          ],
         },
         select: {
           id: true,
@@ -379,6 +456,9 @@ describe('MessagesService', () => {
           conteudo: true,
           lida: true,
           dataCriacao: true,
+          apagadaParaTodos: true,
+          excluidaPeloRemetente: true,
+          excluidaPeloDestinatario: true,
         },
       });
       expect(prisma.usuario.findMany).toHaveBeenCalledWith({
@@ -387,7 +467,12 @@ describe('MessagesService', () => {
           tipoUsuario: TipoUsuario.BARBEIRO,
           ativo: true,
         },
-        select: { id: true, nome: true, tipoUsuario: true },
+        select: {
+          id: true,
+          nome: true,
+          tipoUsuario: true,
+          barbeiro: { select: { ativo: true } },
+        },
       });
       expect(result).toEqual([
         {
@@ -538,6 +623,27 @@ describe('MessagesService', () => {
       expect(result).toEqual([]);
     });
 
+    it('barbeiro com perfil desativado não aparece na lista', async () => {
+      arrangeConversations({
+        messages: [messageRow],
+        partners: [{ ...barberPartner, barbeiro: { ativo: false } }],
+      });
+
+      const result = await service.findConversations(clientUser.id);
+
+      expect(result).toEqual([]);
+    });
+
+    it('barbeiro com perfil desativado não pode listar conversas', async () => {
+      arrangeUsers();
+      arrangeBarberActive(false);
+
+      await expect(service.findConversations(barberUser.id)).rejects.toThrow(
+        new ForbiddenException('Usuário não autorizado.'),
+      );
+      expect(prisma.mensagem.findMany).not.toHaveBeenCalled();
+    });
+
     it('usuário inativo é rejeitado', async () => {
       prisma.usuario.findUnique.mockResolvedValue({
         ...clientUser,
@@ -560,7 +666,7 @@ describe('MessagesService', () => {
   });
 
   describe('contador global de não lidas (7B)', () => {
-    it('conta somente destinatarioId do usuário autenticado e lida = false', async () => {
+    it('conta somente destinatarioId do usuário autenticado, lida = false e não excluída pelo destinatário', async () => {
       prisma.usuario.findUnique.mockResolvedValue(clientUser);
       prisma.mensagem.count.mockResolvedValue(3);
 
@@ -568,7 +674,11 @@ describe('MessagesService', () => {
         count: 3,
       });
       expect(prisma.mensagem.count).toHaveBeenCalledWith({
-        where: { destinatarioId: 10, lida: false },
+        where: {
+          destinatarioId: 10,
+          lida: false,
+          excluidaPeloDestinatario: false,
+        },
       });
     });
 
@@ -658,6 +768,530 @@ describe('MessagesService', () => {
       await expect(service.markAsRead(20, 999)).rejects.toThrow(
         new NotFoundException('Mensagem não encontrada.'),
       );
+    });
+  });
+
+  describe('exclusão de mensagens', () => {
+    const agora = Date.now();
+    const mensagemRecente = {
+      ...messageRow,
+      id: 500,
+      remetenteId: 10,
+      destinatarioId: 20,
+      dataCriacao: new Date(agora - 10 * 60 * 1000), // 10 minutos atrás
+      apagadaParaTodos: false,
+      excluidaPeloRemetente: false,
+      excluidaPeloDestinatario: false,
+    };
+
+    it('1. Remetente apagando para si: atualiza somente excluidaPeloRemetente e NÃO preenche dataExclusao', async () => {
+      arrangeUsers();
+      prisma.mensagem.findUnique
+        .mockResolvedValueOnce(mensagemRecente)
+        .mockResolvedValueOnce({
+          ...mensagemRecente,
+          excluidaPeloRemetente: true,
+          dataExclusao: null,
+        });
+      prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.deleteMessage(10, 500, {
+        modo: ModoExclusaoMensagem.PARA_MIM,
+      });
+
+      expect(prisma.mensagem.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 500,
+          remetenteId: 10,
+          excluidaPeloRemetente: false,
+        },
+        data: {
+          excluidaPeloRemetente: true,
+        },
+      });
+      expect(result.id).toBe(500);
+      expect(result.dataLeitura).toBeNull();
+    });
+
+    it('2. Destinatário apagando para si: atualiza somente excluidaPeloDestinatario e NÃO preenche dataExclusao', async () => {
+      arrangeUsers();
+      prisma.mensagem.findUnique
+        .mockResolvedValueOnce(mensagemRecente)
+        .mockResolvedValueOnce({
+          ...mensagemRecente,
+          excluidaPeloDestinatario: true,
+          dataExclusao: null,
+        });
+      prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.deleteMessage(20, 500, {
+        modo: ModoExclusaoMensagem.PARA_MIM,
+      });
+
+      expect(prisma.mensagem.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 500,
+          destinatarioId: 20,
+          excluidaPeloDestinatario: false,
+        },
+        data: {
+          excluidaPeloDestinatario: true,
+        },
+      });
+      expect(result.id).toBe(500);
+    });
+
+    it('3. Remetente apagando para todos: preenche apagadaParaTodos e dataExclusao', async () => {
+      arrangeUsers();
+      prisma.mensagem.findUnique
+        .mockResolvedValueOnce(mensagemRecente)
+        .mockResolvedValueOnce({
+          ...mensagemRecente,
+          apagadaParaTodos: true,
+          dataExclusao: new Date(),
+        });
+      prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.deleteMessage(10, 500, {
+        modo: ModoExclusaoMensagem.PARA_TODOS,
+      });
+
+      expect(prisma.mensagem.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 500,
+          remetenteId: 10,
+          apagadaParaTodos: false,
+        },
+        data: {
+          apagadaParaTodos: true,
+          dataExclusao: expect.any(Date),
+        },
+      });
+      expect(result.conteudo).toBe(DELETED_MESSAGE_TEXT);
+      expect(result.apagadaParaTodos).toBe(true);
+    });
+
+    it('4. Destinatário tentando apagar para todos -> 403 Forbidden', async () => {
+      arrangeUsers();
+      prisma.mensagem.findUnique.mockResolvedValue(mensagemRecente);
+
+      await expect(
+        service.deleteMessage(20, 500, {
+          modo: ModoExclusaoMensagem.PARA_TODOS,
+        }),
+      ).rejects.toThrow(
+        new ForbiddenException(
+          'Somente o autor da mensagem pode apagá-la para todos.',
+        ),
+      );
+      expect(prisma.mensagem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('5. Mensagem com mais de 60 minutos -> 400 BadRequest', async () => {
+      arrangeUsers();
+      const mensagemAntiga = {
+        ...mensagemRecente,
+        dataCriacao: new Date(Date.now() - 61 * 60 * 1000), // 61 minutos atrás
+      };
+      prisma.mensagem.findUnique.mockResolvedValue(mensagemAntiga);
+
+      await expect(
+        service.deleteMessage(10, 500, {
+          modo: ModoExclusaoMensagem.PARA_TODOS,
+        }),
+      ).rejects.toThrow(
+        new BadRequestException(
+          'Mensagens só podem ser apagadas até 60 minutos após o envio.',
+        ),
+      );
+      expect(prisma.mensagem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('6. Mensagem exatamente no limite de 60 minutos é permitida (inclusivo)', async () => {
+      arrangeUsers();
+      const agoraExato = Date.now();
+      const mensagemLimite = {
+        ...mensagemRecente,
+        dataCriacao: new Date(agoraExato - 60 * 60 * 1000), // exatamente 60 min
+      };
+      prisma.mensagem.findUnique
+        .mockResolvedValueOnce(mensagemLimite)
+        .mockResolvedValueOnce({
+          ...mensagemLimite,
+          apagadaParaTodos: true,
+          dataExclusao: new Date(),
+        });
+      prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.deleteMessage(10, 500, {
+        modo: ModoExclusaoMensagem.PARA_TODOS,
+      });
+
+      expect(prisma.mensagem.updateMany).toHaveBeenCalled();
+      expect(result.apagadaParaTodos).toBe(true);
+    });
+
+    it('7. Usuário que não participa tentando apagar -> 404 NotFound', async () => {
+      arrangeUsers();
+      // Usuário 11 é ativo (Cliente B), mas a mensagem foi entre 10 e 20
+      prisma.mensagem.findUnique.mockResolvedValue(mensagemRecente);
+
+      await expect(
+        service.deleteMessage(11, 500, {
+          modo: ModoExclusaoMensagem.PARA_MIM,
+        }),
+      ).rejects.toThrow(new NotFoundException('Mensagem não encontrada.'));
+      expect(prisma.mensagem.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('8. Mensagem já apagada para todos: chamada repetida preserva dataExclusao e retorna sucesso idempotente', async () => {
+      arrangeUsers();
+      const dataOriginalExclusao = new Date(Date.now() - 5 * 60 * 1000);
+      const mensagemJaApagada = {
+        ...mensagemRecente,
+        apagadaParaTodos: true,
+        dataExclusao: dataOriginalExclusao,
+      };
+      prisma.mensagem.findUnique.mockResolvedValue(mensagemJaApagada);
+
+      const result = await service.deleteMessage(10, 500, {
+        modo: ModoExclusaoMensagem.PARA_TODOS,
+      });
+
+      // Como já estava apagada, o retorno é imediato e idempotente (sem update no banco)
+      expect(prisma.mensagem.updateMany).not.toHaveBeenCalled();
+      expect(result.conteudo).toBe(DELETED_MESSAGE_TEXT);
+      expect(result.apagadaParaTodos).toBe(true);
+    });
+
+    it('8b. Retry após 60 minutos quando a operação já foi concluída retorna sucesso idempotente', async () => {
+      arrangeUsers();
+      const dataAntigaCriacao = new Date(Date.now() - 75 * 60 * 1000); // enviada há 75 min
+      const mensagemJaExcluidaRemetente = {
+        ...mensagemRecente,
+        dataCriacao: dataAntigaCriacao,
+        excluidaPeloRemetente: true,
+      };
+      prisma.mensagem.findUnique.mockResolvedValue(mensagemJaExcluidaRemetente);
+
+      const result = await service.deleteMessage(10, 500, {
+        modo: ModoExclusaoMensagem.PARA_MIM,
+      });
+
+      expect(prisma.mensagem.updateMany).not.toHaveBeenCalled();
+      expect(result.id).toBe(500);
+    });
+
+    it('8c. PARA_MIM seguido de PARA_TODOS: remetente apaga para si e depois apaga para todos com sucesso', async () => {
+      arrangeUsers();
+      const mensagemExcluidaParaMim = {
+        ...mensagemRecente,
+        excluidaPeloRemetente: true,
+        apagadaParaTodos: false,
+        dataExclusao: null,
+      };
+      prisma.mensagem.findUnique
+        .mockResolvedValueOnce(mensagemExcluidaParaMim)
+        .mockResolvedValueOnce({
+          ...mensagemExcluidaParaMim,
+          apagadaParaTodos: true,
+          dataExclusao: new Date(),
+        });
+      prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.deleteMessage(10, 500, {
+        modo: ModoExclusaoMensagem.PARA_TODOS,
+      });
+
+      expect(prisma.mensagem.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 500,
+          remetenteId: 10,
+          apagadaParaTodos: false,
+        },
+        data: {
+          apagadaParaTodos: true,
+          dataExclusao: expect.any(Date),
+        },
+      });
+      expect(result.apagadaParaTodos).toBe(true);
+    });
+
+    it('8d. PARA_TODOS seguido de PARA_MIM: participante oculta de sua visão mensagem já apagada globalmente sem alterar dataExclusao', async () => {
+      arrangeUsers();
+      const dataOriginalExclusao = new Date(Date.now() - 10 * 60 * 1000);
+      const mensagemApagadaGlobalmente = {
+        ...mensagemRecente,
+        apagadaParaTodos: true,
+        dataExclusao: dataOriginalExclusao,
+        excluidaPeloDestinatario: false,
+      };
+      prisma.mensagem.findUnique
+        .mockResolvedValueOnce(mensagemApagadaGlobalmente)
+        .mockResolvedValueOnce({
+          ...mensagemApagadaGlobalmente,
+          excluidaPeloDestinatario: true,
+        });
+      prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+      const result = await service.deleteMessage(20, 500, {
+        modo: ModoExclusaoMensagem.PARA_MIM,
+      });
+
+      // Atualiza somente excluidaPeloDestinatario; dataExclusao NÃO é alterada
+      expect(prisma.mensagem.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 500,
+          destinatarioId: 20,
+          excluidaPeloDestinatario: false,
+        },
+        data: {
+          excluidaPeloDestinatario: true,
+        },
+      });
+      expect(result.id).toBe(500);
+    });
+
+    it('9. Histórico após exclusão: mensagem apagada para mim não aparece; apagada para todos oculta conteúdo original', async () => {
+      arrangeUsers();
+      arrangeBarberActive(true);
+      // O banco filtra excluidaPeloRemetente / excluidaPeloDestinatario na query findMany
+      prisma.mensagem.findMany.mockResolvedValue([
+        {
+          ...messageRow,
+          id: 501,
+          conteudo: 'Texto original',
+          apagadaParaTodos: false,
+        },
+        {
+          ...messageRow,
+          id: 502,
+          conteudo: 'Segredo antigo',
+          apagadaParaTodos: true,
+        },
+      ]);
+
+      const result = await service.findConversation(10, 20);
+
+      expect(result).toHaveLength(2);
+      expect(result[0].conteudo).toBe('Texto original');
+      expect(result[1].conteudo).toBe(DELETED_MESSAGE_TEXT);
+      expect(result[1].apagadaParaTodos).toBe(true);
+    });
+
+    it('10. Última mensagem da conversa ignora mensagem apagada para mim e exibe texto padrão se apagada para todos', async () => {
+      arrangeUsers();
+      prisma.usuario.findMany.mockResolvedValue([
+        {
+          id: 20,
+          nome: 'Barbeiro A',
+          tipoUsuario: TipoUsuario.BARBEIRO,
+          barbeiro: { ativo: true },
+        },
+      ]);
+      prisma.mensagem.findMany.mockResolvedValue([
+        {
+          ...messageRow,
+          id: 601,
+          destinatarioId: 20,
+          remetenteId: 10,
+          conteudo: 'Oi',
+          apagadaParaTodos: true,
+          excluidaPeloRemetente: false,
+          excluidaPeloDestinatario: false,
+          dataCriacao: new Date('2099-01-01T10:00:00.000Z'),
+        },
+      ]);
+
+      const result = await service.findConversations(10);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].ultimaMensagem).toBe(DELETED_MESSAGE_TEXT);
+    });
+
+    it('11. Contador de não lidas não contabiliza mensagens excluídas pelo destinatário', async () => {
+      prisma.usuario.findUnique.mockResolvedValue(clientUser);
+      prisma.mensagem.count.mockResolvedValue(2);
+
+      const result = await service.unreadCount(10);
+
+      expect(result.count).toBe(2);
+      expect(prisma.mensagem.count).toHaveBeenCalledWith({
+        where: {
+          destinatarioId: 10,
+          lida: false,
+          excluidaPeloDestinatario: false,
+        },
+      });
+    });
+
+    it('12. Concorrência controlada: chamadas simultâneas utilizam updateMany com condição de estado', async () => {
+      arrangeUsers();
+      prisma.mensagem.findUnique.mockResolvedValue(mensagemRecente);
+      prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+      const [res1, res2] = await Promise.all([
+        service.deleteMessage(10, 500, {
+          modo: ModoExclusaoMensagem.PARA_MIM,
+        }),
+        service.deleteMessage(10, 500, {
+          modo: ModoExclusaoMensagem.PARA_MIM,
+        }),
+      ]);
+
+      expect(res1.id).toBe(500);
+      expect(res2.id).toBe(500);
+      expect(prisma.$transaction).toHaveBeenCalled();
+      expect(prisma.mensagem.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 500,
+          remetenteId: 10,
+          excluidaPeloRemetente: false,
+        },
+        data: {
+          excluidaPeloRemetente: true,
+        },
+      });
+    });
+
+    describe('notificações Socket.IO após exclusão (ETAPA 3)', () => {
+      let mockGateway: any;
+      let mockModuleRef: any;
+
+      beforeEach(() => {
+        mockGateway = {
+          notifyMessageDeleted: jest.fn(),
+        };
+        mockModuleRef = {
+          get: jest.fn((token: string) => {
+            if (token === 'MESSAGES_GATEWAY') {
+              return mockGateway;
+            }
+            return null;
+          }),
+        };
+        service = new MessagesService(prisma, mockModuleRef);
+      });
+
+      it('1. Exclusão PARA_TODOS com persistência bem-sucedida emite message:deleted para remetente e destinatário', async () => {
+        arrangeUsers();
+        const dataExclusaoEsperada = new Date();
+        prisma.mensagem.findUnique
+          .mockResolvedValueOnce(mensagemRecente)
+          .mockResolvedValueOnce({
+            ...mensagemRecente,
+            apagadaParaTodos: true,
+            dataExclusao: dataExclusaoEsperada,
+          });
+        prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+        await service.deleteMessage(10, 500, {
+          modo: ModoExclusaoMensagem.PARA_TODOS,
+        });
+
+        expect(mockGateway.notifyMessageDeleted).toHaveBeenCalledTimes(1);
+        expect(mockGateway.notifyMessageDeleted).toHaveBeenCalledWith(
+          10,
+          20,
+          expect.objectContaining({
+            messageId: 500,
+            apagadaParaTodos: true,
+            dataExclusao: dataExclusaoEsperada,
+          }),
+        );
+      });
+
+      it('2. Exclusão PARA_MIM não emite evento Socket.IO para o outro participante', async () => {
+        arrangeUsers();
+        prisma.mensagem.findUnique
+          .mockResolvedValueOnce(mensagemRecente)
+          .mockResolvedValueOnce({
+            ...mensagemRecente,
+            excluidaPeloRemetente: true,
+          });
+        prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+        await service.deleteMessage(10, 500, {
+          modo: ModoExclusaoMensagem.PARA_MIM,
+        });
+
+        expect(mockGateway.notifyMessageDeleted).not.toHaveBeenCalled();
+      });
+
+      it('3. Exclusão PARA_TODOS repetida (idempotente) não emite eventos duplicados', async () => {
+        arrangeUsers();
+        const mensagemJaApagada = {
+          ...mensagemRecente,
+          apagadaParaTodos: true,
+          dataExclusao: new Date(Date.now() - 5 * 60 * 1000),
+        };
+        prisma.mensagem.findUnique.mockResolvedValue(mensagemJaApagada);
+
+        await service.deleteMessage(10, 500, {
+          modo: ModoExclusaoMensagem.PARA_TODOS,
+        });
+
+        expect(mockGateway.notifyMessageDeleted).not.toHaveBeenCalled();
+      });
+
+      it('4. Falha na persistência (transação rejeitada) não emite evento Socket.IO', async () => {
+        arrangeUsers();
+        prisma.mensagem.findUnique.mockResolvedValue(mensagemRecente);
+        prisma.$transaction.mockRejectedValueOnce(
+          new Error('Falha de banco na transação'),
+        );
+
+        await expect(
+          service.deleteMessage(10, 500, {
+            modo: ModoExclusaoMensagem.PARA_TODOS,
+          }),
+        ).rejects.toThrow('Falha de banco na transação');
+
+        expect(mockGateway.notifyMessageDeleted).not.toHaveBeenCalled();
+      });
+
+      it('5. Usuário que não participa da conversa não consegue provocar emissão de eventos', async () => {
+        arrangeUsers();
+        prisma.mensagem.findUnique.mockResolvedValue(mensagemRecente);
+
+        // Usuário 11 não é nem remetente (10) nem destinatário (20)
+        await expect(
+          service.deleteMessage(11, 500, {
+            modo: ModoExclusaoMensagem.PARA_TODOS,
+          }),
+        ).rejects.toThrow(NotFoundException);
+
+        expect(mockGateway.notifyMessageDeleted).not.toHaveBeenCalled();
+      });
+
+      it('6. O payload do evento de exclusão não contém o conteúdo original da mensagem', async () => {
+        arrangeUsers();
+        prisma.mensagem.findUnique
+          .mockResolvedValueOnce(mensagemRecente)
+          .mockResolvedValueOnce({
+            ...mensagemRecente,
+            apagadaParaTodos: true,
+            dataExclusao: new Date(),
+          });
+        prisma.mensagem.updateMany.mockResolvedValue({ count: 1 });
+
+        await service.deleteMessage(10, 500, {
+          modo: ModoExclusaoMensagem.PARA_TODOS,
+        });
+
+        expect(mockGateway.notifyMessageDeleted).toHaveBeenCalledTimes(1);
+        const [remetenteId, destinatarioId, payload] =
+          mockGateway.notifyMessageDeleted.mock.calls[0];
+
+        expect(remetenteId).toBe(10);
+        expect(destinatarioId).toBe(20);
+        expect(payload).not.toHaveProperty('conteudo');
+        expect(payload).toEqual({
+          messageId: 500,
+          apagadaParaTodos: true,
+          dataExclusao: expect.any(Date),
+        });
+      });
     });
   });
 });

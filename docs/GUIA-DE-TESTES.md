@@ -79,6 +79,13 @@ Exemplos:
 - Autenticação + banco;
 - Agendamento + disponibilidade.
 
+Decisões temporais unitárias podem simular os resultados de consultas com
+`clock_timestamp()` e verificar os predicados SQL, inclusive com o relógio da
+aplicação adiantado ou atrasado. Isso não comprova o comportamento do PostgreSQL.
+Devem ser validados em PostgreSQL isolado a conversão de fuso e calendário,
+fronteiras de data/hora, concorrência entre transações, locks, fencing de lease
+e rollback atômico de agendamento/claim, notificação e OUTBOX.
+
 ---
 
 ## 3.3. Testes end-to-end
@@ -97,6 +104,49 @@ Exemplos:
 - Escolha de horário;
 - Agendamento;
 - Cancelamento.
+
+### Isolamento obrigatório do banco E2E
+
+No backend, configure `backend/test/.env.e2e` a partir de
+`backend/test/.env.e2e.example`, com PostgreSQL em `127.0.0.1` ou `::1`, porta
+explícita `5432`, banco `barbearia_app_e2e`, usuário `barbearia_e2e_test`,
+`schema=public`, `JWT_SECRET` exclusivo (mínimo 32 caracteres) e
+`NODE_ENV=test`. A role de testes não deve ser dona do schema nem possuir
+privilégios administrativos; precisa apenas conectar, usar o schema, manipular
+os dados de teste e usar sequences.
+
+Migrations E2E usam uma configuração separada:
+`backend/test/.env.e2e.migrate`, criada a partir de
+`backend/test/.env.e2e.migrate.example`, com a role não-superusuária
+`barbearia_e2e_migrator`. Essa role deve ter somente os privilégios de DDL
+necessários no banco isolado. Não reutilize credenciais de `backend/.env`; as
+roles precisam ser provisionadas administrativamente.
+
+Execute primeiro `npm run test:e2e:guard` dentro de `backend`; ele testa as
+proteções sem conexão. `npm run test:e2e` valida a configuração antes do Jest,
+e o setup Jest repete a checagem. A URL é validada por protocolo, host literal
+de loopback, porta, banco, role e parâmetros permitidos. Variáveis de conexão
+herdadas são removidas do ambiente dos processos filhos. O runner não cria nem
+limpa banco.
+
+Depois que um administrador confirmar a finalidade e o isolamento de
+`barbearia_app_e2e`, o caminho oficial para aplicar migrations é
+`npm run db:e2e:migrate`, que chama `prisma migrate deploy` com
+`backend/prisma.e2e.config.ts` fixa. O wrapper rejeita `--config` alternativo.
+`E2E_MIGRATION_RUNNER_AUTH=1` é uma confirmação explícita, não prova de que o
+runner foi usado; o valor pode ser definido manualmente. A URL, banco, host,
+porta e role continuam validados pelo config dedicado.
+
+Quando selecionada, a configuração Prisma padrão exige
+`PRISMA_MIGRATION_TARGET=development` e restringe operações de schema a
+`barbearia_app` local. Esse guard não se aplica a um arquivo `--config`
+arbitrário fornecido diretamente ao Prisma, que pode contornar os controles
+locais. O projeto não afirma bloquear universalmente essas configurações; o
+limite definitivo depende de roles PostgreSQL com privilégio mínimo.
+
+Os arquivos de diagnóstico `_diag-*` não fazem parte da seleção E2E normal e
+não são executados automaticamente. A execução manual também exige a
+configuração isolada.
 
 ---
 
@@ -211,6 +261,37 @@ Também testar:
 - Horário ocupado;
 - Horário bloqueado;
 - Fora do funcionamento.
+
+## 9.1. OUTBOX de reofertas da lista de espera
+
+Testes unitários devem cobrir persistência da pendência, conclusão com claim,
+conclusão sem candidato, retry com backoff, erro permanente, retomada quando o
+claim já foi criado, falha isolada por item, renovação de lease, fencing das
+transições finais e encerramento após 10 tentativas. Mocks podem verificar a
+comparação estrita do prazo com `clock_timestamp()` e simular relógios da
+aplicação adiantado/atrasado, além de simular operação demorada e perda de lease;
+esses testes não comprovam o comportamento concorrente do PostgreSQL.
+
+As consultas de disponibilidade, confirmação de agendamento e projeção de
+notificações que dependem da validade de claims também devem comparar
+`expiraEm` com `clock_timestamp()` no PostgreSQL. Seus testes unitários devem
+verificar o predicado SQL e cobrir relógios da aplicação adiantado/atrasado;
+para confirmar a semântica temporal e de concorrência, usar somente PostgreSQL
+isolado.
+
+Testes de integração com PostgreSQL isolado devem verificar:
+
+- elegibilidade de claim ativo usando o relógio real do PostgreSQL;
+- retomada da pendência por uma nova instância do worker;
+- recuperação de lease vencido;
+- aquisição concorrente com `SKIP LOCKED`;
+- ausência de claims duplicados em retries concorrentes;
+- perda da autorização enquanto a transação de claim/notificação está em curso;
+- rollback atômico do claim e da notificação quando o fencing final falha;
+- atomicidade entre cada transição de origem e o registro OUTBOX.
+
+Esses testes devem usar exclusivamente o banco E2E isolado descrito neste guia;
+testes unitários ou mocks não comprovam concorrência real do PostgreSQL.
 
 ---
 

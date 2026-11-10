@@ -1,4 +1,4 @@
-import { http, authTokenStorage } from './http'
+import { http, authTokenStorage } from './http.ts'
 import type { LoginResponse, Usuario, UpdateUserInput } from '../../types/domain'
 
 export interface LoginInput {
@@ -10,11 +10,16 @@ export interface RegisterInput {
   nome: string
   telefone: string
   senha: string
+  email: string
+}
+
+export interface AuthMessageResponse {
+  message: string
 }
 
 /**
  * Serviço de autenticação — endpoints reais do backend.
- * POST /auth/login, POST /auth/register, GET /auth/me.
+ * Endpoints de autenticação, perfil, confirmação de e-mail e recuperação.
  */
 export const authService = {
   async login(input: LoginInput): Promise<LoginResponse> {
@@ -27,6 +32,37 @@ export const authService = {
 
   register(input: RegisterInput): Promise<Usuario> {
     return http.post<Usuario>('/auth/register', input, { skipAuth: true })
+  },
+
+  requestEmailVerification(): Promise<AuthMessageResponse> {
+    return http.post<AuthMessageResponse>(
+      '/auth/email/verification/request',
+      undefined,
+    )
+  },
+
+  confirmEmail(token: string): Promise<AuthMessageResponse> {
+    return http.post<AuthMessageResponse>(
+      '/auth/email/verification/confirm',
+      { token },
+      { skipAuth: true },
+    )
+  },
+
+  requestPasswordRecovery(email: string): Promise<AuthMessageResponse> {
+    return http.post<AuthMessageResponse>(
+      '/auth/password-recovery',
+      { email },
+      { skipAuth: true },
+    )
+  },
+
+  resetPassword(token: string, senha: string): Promise<AuthMessageResponse> {
+    return http.post<AuthMessageResponse>(
+      '/auth/password-reset',
+      { token, senha },
+      { skipAuth: true },
+    )
   },
 
   me(signal?: AbortSignal): Promise<Usuario> {

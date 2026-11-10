@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
   UnauthorizedException,
@@ -10,7 +11,12 @@ import {
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma, PrismaClient } from '../generated/prisma/client';
-import { StatusAgendamento, TipoUsuario } from '../generated/prisma/enums';
+import {
+  OrigemWaitlistReoffer,
+  StatusAgendamento,
+  StatusWaitlistClaim,
+  TipoUsuario,
+} from '../generated/prisma/enums';
 import { UsersService } from '../users/users.service';
 import { AvailabilityQueryDto } from './dto/availability-query.dto';
 import { AvailabilityResponseDto } from './dto/availability-response.dto';
@@ -18,10 +24,13 @@ import { BusinessHourResponseDto } from './dto/business-hour-response.dto';
 import { CreateScheduleBlockDto } from './dto/create-schedule-block.dto';
 import { ReplaceBusinessHoursDto } from './dto/replace-business-hours.dto';
 import { ScheduleBlockResponseDto } from './dto/schedule-block-response.dto';
+import type {
+  EnqueueWaitlistReoffer,
+  WaitlistReofferOutboxService,
+} from '../waitlist/waitlist-reoffer-outbox.service';
 import {
   dateKeyFromUtcMidnight,
   formatLocalHHmm,
-  getZonedParts,
   isValidDateKey,
   localMinuteOfDay,
   prismaDateFilter,
@@ -79,8 +88,8 @@ export interface MinuteInterval {
   fim: number;
 }
 
-/** Origem de uma ocupação do dia (define 400 vs 409 na criação de agendamentos). */
-export type ScheduleBusySource = 'BLOQUEIO' | 'AGENDAMENTO';
+/** Origem de uma ocupação do dia. */
+export type ScheduleBusySource = 'BLOQUEIO' | 'AGENDAMENTO' | 'CLAIM';
 
 export interface ScheduleBusyInterval {
   ini: number;
@@ -91,7 +100,7 @@ export interface ScheduleBusyInterval {
 export interface ScheduleDaySnapshot {
   /** Janelas ATIVAS do dia, ordenadas por início. */
   windows: MinuteInterval[];
-  /** Ocupações do dia (bloqueios ativos + agendamentos CONFIRMADOS). */
+  /** Bloqueios, agendamentos confirmados e claims ativos ainda vigentes. */
   busy: ScheduleBusyInterval[];
 }
 
@@ -107,29 +116,63 @@ interface BlockRow {
 
 @Injectable()
 export class ScheduleService {
+  private readonly logger = new Logger(ScheduleService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
     @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
-  private async triggerWaitlistOpportunity(block: BlockRow): Promise<void> {
-    if (!this.moduleRef) {
+  private getReofferOutboxService(): WaitlistReofferOutboxService {
+    const outboxService = this.moduleRef?.get<WaitlistReofferOutboxService>(
+      'WAITLIST_REOFFER_OUTBOX_SERVICE',
+      { strict: false },
+    );
+    if (!outboxService) {
+      throw new Error('Serviço OUTBOX de reofertas não está disponível.');
+    }
+    return outboxService;
+  }
+
+  private async enqueueWaitlistOpportunity(
+    tx: Prisma.TransactionClient,
+    block: BlockRow,
+  ): Promise<void> {
+    const event: EnqueueWaitlistReoffer = {
+      idempotencyKey: `block-removed:${block.id}`,
+      origin: OrigemWaitlistReoffer.BLOQUEIO_REMOVIDO,
+      originId: block.id,
+      window: {
+        barbeiroId: block.barbeiroId,
+        dateKey: dateKeyFromUtcMidnight(block.data),
+        horaInicio: formatLocalHHmm(block.horaInicio),
+        horaFim: formatLocalHHmm(block.horaFim),
+      },
+    };
+    await this.getReofferOutboxService().enqueue(tx, event);
+  }
+
+  private async dispatchWaitlistOpportunities(): Promise<void> {
+    const outboxService = this.moduleRef?.get<WaitlistReofferOutboxService>(
+      'WAITLIST_REOFFER_OUTBOX_SERVICE',
+      { strict: false },
+    );
+    if (!outboxService) {
+      this.logger.error(
+        'Serviço OUTBOX de reofertas indisponível; pendências aguardam o scheduler.',
+      );
       return;
     }
 
-    const opportunityService = this.moduleRef.get(
-      'WAITLIST_OPPORTUNITY_SERVICE',
-      {
-        strict: false,
-      },
-    );
-    await opportunityService.tryCreateForReleasedWindow({
-      barbeiroId: block.barbeiroId,
-      dateKey: dateKeyFromUtcMidnight(block.data),
-      horaInicio: formatLocalHHmm(block.horaInicio),
-      horaFim: formatLocalHHmm(block.horaFim),
-    });
+    try {
+      await outboxService.processPendingReoffers();
+    } catch (error) {
+      this.logger.error(
+        `Falha no processamento imediato do OUTBOX de reofertas: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -430,8 +473,11 @@ export class ScheduleService {
       throw new NotFoundException('Bloqueio não encontrado.');
     }
 
-    await this.prisma.bloqueioAgenda.delete({ where: { id: block.id } });
-    await this.triggerWaitlistOpportunity(block);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.bloqueioAgenda.delete({ where: { id: block.id } });
+      await this.enqueueWaitlistOpportunity(tx, block);
+    });
+    await this.dispatchWaitlistOpportunities();
   }
 
   // ---------------------------------------------------------------------
@@ -440,7 +486,7 @@ export class ScheduleService {
 
   /**
    * Snapshot do dia para o barbeiro: janelas ativas + ocupações (bloqueios
-   * ativos e agendamentos CONFIRMADOS), tudo em minutos locais
+   * ativos, agendamentos CONFIRMADOS e claims ativos ainda vigentes), tudo em minutos locais
    * (America/Sao_Paulo). `client` deve ser o MESMO client da transação
    * chamadora quando usado dentro de um advisory lock.
    */
@@ -491,6 +537,20 @@ export class ScheduleService {
         ini: localMinuteOfDay(appointment.horaInicio),
         fim: localMinuteOfDay(appointment.horaFim),
         origem: 'AGENDAMENTO' as const,
+      })),
+      ...(
+        await client.$queryRaw<Array<{ horaInicio: string; horaFim: string }>>`
+          SELECT claim."horaInicio", claim."horaFim"
+          FROM "WaitlistClaim" AS claim
+          WHERE claim."barbeiroId" = ${barbeiroId}
+            AND claim."data" = ${dateKey}::date
+            AND claim."status" = ${StatusWaitlistClaim.ATIVO}::"StatusWaitlistClaim"
+            AND claim."expiraEm" > (clock_timestamp() AT TIME ZONE 'UTC')
+        `
+      ).map((claim) => ({
+        ini: this.parseHHmm(claim.horaInicio),
+        fim: this.parseHHmm(claim.horaFim),
+        origem: 'CLAIM' as const,
       })),
     ];
 
@@ -571,9 +631,31 @@ export class ScheduleService {
     //   - data consultada = hoje  → remove slots cujo início já chegou;
     //   - data consultada > hoje  → comportamento inalterado.
     // Esta regra espelha a validação de POST /appointments (startInstant <= agora).
-    const agora = new Date();
-    const hojeParts = getZonedParts(agora);
-    const hojeKey = `${hojeParts.year}-${String(hojeParts.month).padStart(2, '0')}-${String(hojeParts.day).padStart(2, '0')}`;
+    const clockRows = await this.prisma.$queryRaw<
+      Array<{ agora: Date; hojeKey: string }>
+    >`
+      WITH database_clock AS (
+        SELECT clock_timestamp() AS "agora"
+      )
+      SELECT
+        "agora",
+        to_char(
+          ("agora" AT TIME ZONE 'America/Sao_Paulo')::date,
+          'YYYY-MM-DD'
+        ) AS "hojeKey"
+      FROM database_clock
+    `;
+    if (
+      !clockRows[0] ||
+      !(clockRows[0].agora instanceof Date) ||
+      typeof clockRows[0].hojeKey !== 'string'
+    ) {
+      throw new Error(
+        'Consulta do relógio do banco não retornou um instante válido.',
+      );
+    }
+    const agora = clockRows[0].agora;
+    const hojeKey = clockRows[0].hojeKey;
 
     if (query.data < hojeKey) {
       return buildEmpty();

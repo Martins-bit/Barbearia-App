@@ -20,14 +20,12 @@ export const WAITLIST_EXPIRATION_INTERVAL_MS = 60 * 1000;
 export class WaitlistSchedulerService {
   private readonly logger = new Logger(WaitlistSchedulerService.name);
 
-  constructor(private readonly waitlistService: WaitlistService) {}
+  constructor(private readonly waitlistService: WaitlistService) { }
 
   @Interval(WAITLIST_EXPIRATION_INTERVAL_MS)
   async handleExpiredClaims(): Promise<void> {
     try {
-      const result = await this.waitlistService.processExpiredClaims(
-        new Date(),
-      );
+      const result = await this.waitlistService.processExpiredClaims();
       if (result.expiredCount > 0) {
         this.logger.log(
           `Scheduler expirou ${result.expiredCount} claim(s) e reofertou ${result.reofferedWindows} janela(s).`,

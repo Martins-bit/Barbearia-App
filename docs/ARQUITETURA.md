@@ -212,6 +212,31 @@ e a transição de um agendamento para `CANCELADO` também geram notificação
 interna no mesmo `TransactionClient`, com referência tipada por
 `agendamentoId`; nenhum advisory lock adicional é criado.
 
+Eventos de reoferta por recusa/cancelamento/expiração de claim, cancelamento de
+agendamento e remoção de bloqueio são persistidos em `WaitlistReofferOutbox`
+na mesma transação da mudança que libera a janela. O worker adquire um item
+com `FOR UPDATE SKIP LOCKED`, registra lease e tentativa e processa-o fora do
+lock da fila, usando os advisory locks de calendário e claim já existentes.
+O worker renova periodicamente seu lease; a renovação e as transições finais
+exigem que a tentativa ainda seja proprietária e que o lease esteja válido pelo
+relógio do PostgreSQL. A transação de criação consulta a autorização sem manter
+lock na linha OUTBOX durante a validação da agenda; o heartbeat pode, assim,
+renovar o lease enquanto a operação está em andamento. Depois de criar claim e
+notificação, a transação aplica um fencing final condicionado à tentativa e ao
+lease ainda vigente, renovando-o e mantendo o lock da linha até o commit. Se a
+autorização foi perdida, a transação aborta e reverte claim, notificação e
+vínculo OUTBOX juntos. Leases vencidos são recuperáveis. Erros transitórios
+voltam a `PENDENTE` com backoff limitado; após 10 tentativas a pendência vai
+para `FALHA_FINAL`. Ausência de candidato conclui a tentativa sem loop.
+O vínculo único entre claim e OUTBOX torna idempotente a retomada após um claim
+ter sido criado e antes da conclusão do evento. Novas entradas da lista de
+espera não são eventos integrados por esta fase.
+
+A expiração periódica dos claims compara `expiraEm` com `clock_timestamp()` do
+PostgreSQL na própria atualização, sem usar o horário recebido da aplicação. O
+prazo inicial de cinco minutos do claim também é calculado a partir do relógio
+do PostgreSQL, evitando que o desvio do relógio da aplicação altere sua vigência.
+
 O motor de lembretes (`NotificationsService.processAppointmentReminders`)
 identifica agendamentos `CONFIRMADO` cujo `horaInicio` está na janela de
 aproximadamente 1 hora e cria a notificação `LEMBRETE` vinculada ao
@@ -299,7 +324,9 @@ agenda e não cria transações aninhadas. Ela seleciona FIFO global entre
 entradas ativas e escolhe o primeiro horário cronológico alinhado à grade de
 15 minutos que caiba na janela liberada. Ausência de candidato ou perda da
 vaga por concorrência são resultados normais; erros de infraestrutura são
-propagados. Não há cron, worker ou processamento em background.
+propagados. O sistema possui processamento em background: schedulers
+periódicos executam a expiração de claims e a geração de lembretes; o worker
+da OUTBOX processa e recupera reofertas pendentes com lease e retentativas.
 
 ---
 

@@ -1,6 +1,6 @@
 import { io, type Socket } from 'socket.io-client'
 import { authTokenStorage } from './http'
-import type { Mensagem } from '../../types/domain'
+import type { Mensagem, MessageDeletedEventPayload } from '../../types/domain'
 
 /**
  * Origem do backend: a MESMA usada pelo REST (VITE_API_URL). O Socket.IO
@@ -27,12 +27,14 @@ const SOCKET_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
  *   voltam pelo REST (GET /messages/:userId) quando a página recarrega.
  *
  * Eventos reais do `MessagesGateway` (backend/src/messages/messages.gateway.ts):
- * - envio:   `message:send`    { destinatarioId, conteudo }
- * - retorno: `message:sent`    MessageResponseDto (confirmação do próprio envio)
- * - entrega: `message:received` MessageResponseDto (mensagem do outro participante)
- * - erro:    `exception`        { status, message } (validação/autorização)
+ * - envio:    `message:send`    { destinatarioId, conteudo }
+ * - retorno:  `message:sent`    MessageResponseDto (confirmação do próprio envio)
+ * - entrega:  `message:received` MessageResponseDto (mensagem do outro participante)
+ * - exclusão: `message:deleted` MessageDeletedEventPayload (notificação PARA_TODOS)
+ * - erro:     `exception`        { status, message } (validação/autorização)
  */
 export type MensagemHandler = (mensagem: Mensagem) => void
+export type MensagemExcluidaHandler = (payload: MessageDeletedEventPayload) => void
 export type EstadoHandler = (estado: 'conectando' | 'conectado' | 'desconectado') => void
 
 export interface MensajesSocketApi {
@@ -40,6 +42,8 @@ export interface MensajesSocketApi {
   disconnect(): void
   /** Escuta `message:received` (e entrega pendentes). Retorna o unsubscribe. */
   subscribe(handler: MensagemHandler): () => void
+  /** Escuta `message:deleted` (exclusão PARA_TODOS). Retorna o unsubscribe. */
+  onMessageDeleted(handler: MensagemExcluidaHandler): () => void
   onStateChange(handler: EstadoHandler): () => void
   /** Envia por `message:send` e resolve com a confirmação `message:sent`. */
   send(destinatarioId: number, conteudo: string): Promise<Mensagem>
@@ -60,6 +64,7 @@ export const messagesSocket: MensajesSocketApi = (() => {
   let tokenDaConexao: string | null = null
   let estado: 'conectando' | 'conectado' | 'desconectado' = 'desconectado'
   const listenersRecebidos = new Set<MensagemHandler>()
+  const listenersExcluidos = new Set<MensagemExcluidaHandler>()
   const listenersEstado = new Set<EstadoHandler>()
 
   function notificarEstado(): void {
@@ -74,6 +79,10 @@ export const messagesSocket: MensajesSocketApi = (() => {
 
   function entregar(mensagem: Mensagem): void {
     for (const handler of [...listenersRecebidos]) handler(mensagem)
+  }
+
+  function entregarExclusao(payload: MessageDeletedEventPayload): void {
+    for (const handler of [...listenersExcluidos]) handler(payload)
   }
 
   /**
@@ -150,6 +159,12 @@ export const messagesSocket: MensajesSocketApi = (() => {
     instancia.on('message:received', (mensagem: Mensagem) => {
       if (mensagem && typeof mensagem === 'object' && 'id' in mensagem) {
         entregar(mensagem)
+      }
+    })
+
+    instancia.on('message:deleted', (payload: MessageDeletedEventPayload) => {
+      if (payload && typeof payload === 'object' && typeof payload.messageId === 'number') {
+        entregarExclusao(payload)
       }
     })
 
@@ -243,6 +258,13 @@ export const messagesSocket: MensajesSocketApi = (() => {
       listenersRecebidos.add(handler)
       return () => {
         listenersRecebidos.delete(handler)
+      }
+    },
+
+    onMessageDeleted(handler: MensagemExcluidaHandler): () => void {
+      listenersExcluidos.add(handler)
+      return () => {
+        listenersExcluidos.delete(handler)
       }
     },
 

@@ -18,6 +18,7 @@ import { TipoUsuario } from '../generated/prisma/enums';
 import { UsersService } from '../users/users.service';
 import { MessageResponseDto } from './dto/message-response.dto';
 import { SendMessageSocketDto } from './dto/send-message-socket.dto';
+import { MessageDeletedEventPayload } from './dto/message-deleted-event.dto';
 import { MessagesService } from './messages.service';
 import { MessagesSocketRegistry } from './messages.socket-registry';
 import { resolveAllowedOrigins } from '../common/config/cors.config';
@@ -27,6 +28,7 @@ import { SlidingWindowRateLimiter } from '../common/utils/sliding-window-rate-li
 export interface SocketIdentity {
   usuarioId: number;
   tipoUsuario: TipoUsuario;
+  authVersion: number;
   /**
    * `exp` do JWT (epoch em segundos), copiado do payload validado.
    *
@@ -121,7 +123,7 @@ export class MessagesGateway
       throw new Error('Não autorizado.');
     }
 
-    let payload: { sub?: unknown; exp?: unknown };
+    let payload: { sub?: unknown; exp?: unknown; authVersion?: unknown };
     try {
       // `verifyAsync` já valida assinatura E expiração (mesmo JwtService/segredo
       // do REST, configurado no AuthModule).
@@ -132,17 +134,22 @@ export class MessagesGateway
     }
 
     const usuarioId = Number(payload?.sub);
+    const tokenVersion = payload?.authVersion ?? 0;
     if (!Number.isInteger(usuarioId) || usuarioId < 1) {
+      throw new Error('Não autorizado.');
+    }
+    if (typeof tokenVersion !== 'number' || !Number.isInteger(tokenVersion) || tokenVersion < 0) {
       throw new Error('Não autorizado.');
     }
 
     const authorizationState = await this.getAuthorizationState(usuarioId);
-    if (!authorizationState) {
+    if (!authorizationState || authorizationState.authVersion !== tokenVersion) {
       throw new Error('Não autorizado.');
     }
 
     client.data.usuarioId = usuarioId;
     client.data.tipoUsuario = authorizationState.tipoUsuario;
+    client.data.authVersion = tokenVersion;
     // Guarda apenas o instante de expiração (nunca o token), para revalidar a
     // autorização durante a vida do socket.
     client.data.tokenExpiraEm = this.readTokenExpiration(payload);
@@ -158,7 +165,7 @@ export class MessagesGateway
    */
   private async getAuthorizationState(
     usuarioId: number,
-  ): Promise<{ tipoUsuario: TipoUsuario } | null> {
+  ): Promise<{ tipoUsuario: TipoUsuario; authVersion: number } | null> {
     const authorizationState =
       await this.usersService.findAuthorizationStateById(usuarioId);
 
@@ -173,7 +180,10 @@ export class MessagesGateway
       return null;
     }
 
-    return { tipoUsuario: authorizationState.tipoUsuario };
+    return {
+      tipoUsuario: authorizationState.tipoUsuario,
+      authVersion: authorizationState.authVersion ?? 0,
+    };
   }
 
   /** `exp` do payload (epoch em segundos) ou `null` quando ausente/ inválido. */
@@ -214,7 +224,10 @@ export class MessagesGateway
     const authorizationState = await this.getAuthorizationState(
       identity.usuarioId,
     );
-    if (!authorizationState) {
+    if (
+      !authorizationState ||
+      authorizationState.authVersion !== identity.authVersion
+    ) {
       // Conta desativada ou barbeiro sem perfil ativo após a conexão.
       this.rejectUnauthorized(client);
       return null;
@@ -351,6 +364,25 @@ export class MessagesGateway
   }
 
   /**
+   * Notifica a exclusão global de uma mensagem (PARA_TODOS) para o remetente
+   * e o destinatário através de suas respectivas salas Socket.IO.
+   * Não emite se a mensagem não foi apagada para todos ou se o servidor socket
+   * não estiver inicializado.
+   */
+  notifyMessageDeleted(
+    remetenteId: number,
+    destinatarioId: number,
+    payload: MessageDeletedEventPayload,
+  ): void {
+    if (!payload.apagadaParaTodos || !this.server) {
+      return;
+    }
+
+    this.emitToUser(remetenteId, 'message:deleted', payload);
+    this.emitToUser(destinatarioId, 'message:deleted', payload);
+  }
+
+  /**
    * Entrega um evento a TODAS as conexões ativas do usuário (um usuário pode
    * ter vários dispositivos/abas). Destinatário offline não é erro: a mensagem
    * já está persistida e será recuperada via REST (sem fila offline nesta
@@ -409,13 +441,18 @@ export class MessagesGateway
   }
 
   private getIdentity(client: Socket): SocketIdentity | null {
-    const { usuarioId, tipoUsuario, tokenExpiraEm } = client.data ?? {};
+    const { usuarioId, tipoUsuario, tokenExpiraEm, authVersion } =
+      client.data ?? {};
     if (typeof usuarioId !== 'number' || !tipoUsuario) {
       return null;
     }
     return {
       usuarioId,
       tipoUsuario,
+      authVersion:
+        typeof authVersion === 'number' && Number.isInteger(authVersion)
+          ? authVersion
+          : 0,
       tokenExpiraEm: typeof tokenExpiraEm === 'number' ? tokenExpiraEm : null,
     };
   }

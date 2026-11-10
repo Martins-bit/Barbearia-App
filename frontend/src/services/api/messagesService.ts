@@ -1,16 +1,17 @@
 import { http } from './http'
-import type { Conversa, Mensagem } from '../../types/domain'
+import type { Conversa, Mensagem, ModoExclusaoMensagem } from '../../types/domain'
 
 /**
  * Serviço REST de mensagens (CLIENTE <-> BARBEIRO).
  *
  * Contrato exato do backend (`MessagesController`, Etapas 7A/7B, mesma
  * camada já usada pelo cliente — nada aqui é específico do barbeiro):
- * - POST  /messages               { destinatarioId, conteudo } → Mensagem
- * - GET   /messages/conversations → Conversa[]
- * - GET   /messages/unread-count  → { count: number }
- * - GET   /messages/:userId       → Mensagem[] (ordem cronológica crescente)
- * - PATCH /messages/:id/read      → Mensagem
+ * - POST   /messages               { destinatarioId, conteudo } → Mensagem
+ * - GET    /messages/conversations → Conversa[]
+ * - GET    /messages/unread-count  → { count: number }
+ * - GET    /messages/:userId       → Mensagem[] (ordem cronológica crescente)
+ * - PATCH  /messages/:id/read      → Mensagem
+ * - DELETE /messages/:id           { modo: 'PARA_MIM' | 'PARA_TODOS' } → Mensagem
  *
  * O remetente NUNCA vem do payload: o servidor decide pelo JWT.
  */
@@ -19,6 +20,10 @@ export interface EnviarMensagemInput {
   destinatarioId: number
   /** 1..500 caracteres (validado no servidor). */
   conteudo: string
+}
+
+export interface ExcluirMensagemInput {
+  modo: ModoExclusaoMensagem
 }
 
 export const messagesService = {
@@ -51,5 +56,10 @@ export const messagesService = {
   /** Marca uma mensagem como lida (idempotente, do próprio destinatário). */
   markAsRead(id: number): Promise<Mensagem> {
     return http.patch<Mensagem>(`/messages/${id}/read`)
+  },
+
+  /** Exclui uma mensagem (PARA_MIM ou PARA_TODOS). */
+  delete(id: number, input: ExcluirMensagemInput): Promise<Mensagem> {
+    return http.delete<Mensagem>(`/messages/${id}`, input)
   },
 }

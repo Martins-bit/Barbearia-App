@@ -141,6 +141,11 @@ Um horário somente deverá ser considerado disponível quando:
 - A duração do serviço couber no período disponível;
 - Não existir outro agendamento conflitante;
 - Não existir bloqueio válido para aquele período.
+- Não existir claim ativo e vigente da lista de espera que conflite com o
+  período.
+
+Claims expirados ou recusados não bloqueiam a disponibilidade. Claims ativos
+bloqueiam somente os intervalos que efetivamente se sobrepõem ao serviço.
 
 ---
 
@@ -247,6 +252,14 @@ aceitá-la ou recusá-la enquanto o claim estiver ativo e vigente. O aceite cria
 um agendamento confirmado e muda a entrada para `ATENDIDA`. A recusa muda o
 claim para `RECUSADO` e mantém a entrada `ATIVA`. Claims expirados são
 rejeitados logicamente pelo horário de expiração.
+
+Ao cancelar uma entrada da lista de espera, claims ainda `ATIVO` devem ser
+classificados pelo prazo no banco: `RECUSADO` se `expiraEm` for posterior ao
+instante da transição e `EXPIRADO` se o prazo já tiver sido atingido. Somente
+claims que ainda estejam `ATIVO` podem ser alterados. Um claim `ATIVO` cujo
+prazo já venceu não impede que a entrada volte a ser considerada elegível para
+uma oportunidade compatível, mesmo antes de o processamento periódico atualizar
+seu status.
 
 O cancelamento de um agendamento confirmado e a remoção de um bloqueio podem
 liberar uma oportunidade automaticamente. O sistema considera serviços ativos

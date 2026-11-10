@@ -115,6 +115,10 @@ export function BarberLayout({ children }: { children: ReactNode }) {
       })
       .catch(() => undefined)
   }, [])
+  const setCount = useCallback((count: number) => {
+    controllerRef.current?.abort()
+    setNaoLidas(count)
+  }, [])
 
   useEffect(() => {
     refresh()
@@ -133,8 +137,8 @@ export function BarberLayout({ children }: { children: ReactNode }) {
   const navComMensagens = useNavComBadgeMensagens(navItems, ROUTES.barbeiro.mensagens)
 
   const contexto = useMemo(
-    () => ({ count: naoLidas, refresh }),
-    [naoLidas, refresh],
+    () => ({ count: naoLidas, refresh, setCount }),
+    [naoLidas, refresh, setCount],
   )
 
   return (

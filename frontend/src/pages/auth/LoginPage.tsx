@@ -86,6 +86,10 @@ export function LoginPage() {
           required
         />
 
+        <Link className={styles.link} to={ROUTES.recoverPassword}>
+          Esqueci minha senha
+        </Link>
+
         {error && (
           <p className={styles.error} role="alert">
             {error}

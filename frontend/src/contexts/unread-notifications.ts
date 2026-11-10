@@ -13,6 +13,8 @@ export interface UnreadNotificationsValue {
   count: number
   /** Ressincroniza o contador junto ao backend (após uma ação do usuário). */
   refresh: () => void
+  /** Atualiza o contador com o valor confirmado pelo backend. */
+  setCount: (count: number) => void
 }
 
 export const UnreadNotificationsContext =

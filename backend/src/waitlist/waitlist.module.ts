@@ -7,6 +7,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { WaitlistController } from './waitlist.controller';
 import { WaitlistService } from './waitlist.service';
 import { WaitlistOpportunityService } from './waitlist-opportunity.service';
+import { WaitlistReofferOutboxService } from './waitlist-reoffer-outbox.service';
 import { WaitlistSchedulerService } from './waitlist-scheduler.service';
 
 @Module({
@@ -21,10 +22,15 @@ import { WaitlistSchedulerService } from './waitlist-scheduler.service';
   providers: [
     WaitlistService,
     WaitlistOpportunityService,
+    WaitlistReofferOutboxService,
     WaitlistSchedulerService,
     {
       provide: 'WAITLIST_OPPORTUNITY_SERVICE',
       useExisting: WaitlistOpportunityService,
+    },
+    {
+      provide: 'WAITLIST_REOFFER_OUTBOX_SERVICE',
+      useExisting: WaitlistReofferOutboxService,
     },
   ],
   exports: [WaitlistService],

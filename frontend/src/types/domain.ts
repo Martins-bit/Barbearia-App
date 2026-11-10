@@ -76,6 +76,14 @@ export interface Servico {
   ativo: boolean
 }
 
+export type ModoExclusaoMensagem = 'PARA_MIM' | 'PARA_TODOS'
+
+export interface MessageDeletedEventPayload {
+  messageId: number
+  apagadaParaTodos: boolean
+  dataExclusao: string
+}
+
 /** Mensagem CLIENTE <-> BARBEIRO (`MessageResponseDto`). */
 export interface Mensagem {
   id: number
@@ -89,6 +97,8 @@ export interface Mensagem {
   lida: boolean
   dataCriacao: string
   dataLeitura: string | null
+  /** `true` quando a mensagem foi apagada globalmente (PARA_TODOS). */
+  apagadaParaTodos?: boolean
 }
 
 /** `GET /messages/conversations` — outro participante de uma conversa. */
@@ -220,5 +230,7 @@ export interface Notificacao {
   dataCriacao: string
   dataLeitura: string | null
   claimId?: number
+  claimStatus?: StatusWaitlistClaim
+  claimExpiraEm?: string
   agendamentoId?: number
 }

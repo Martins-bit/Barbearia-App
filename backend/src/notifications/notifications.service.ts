@@ -1,6 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, PrismaClient } from '../generated/prisma/client';
-import { StatusAgendamento, TipoNotificacao } from '../generated/prisma/enums';
+import {
+  StatusAgendamento,
+  StatusListaEspera,
+  StatusWaitlistClaim,
+  TipoNotificacao,
+} from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 
 export type NotificationsDbClient = PrismaClient | Prisma.TransactionClient;
@@ -34,14 +39,46 @@ export interface NotificationResponse {
   dataCriacao: Date;
   dataLeitura: Date | null;
   claimId?: number;
+  claimStatus?: StatusWaitlistClaim;
+  claimExpiraEm?: Date;
   agendamentoId?: number;
+}
+
+interface NotificationProjection {
+  id: number;
+  tipo: TipoNotificacao;
+  titulo: string;
+  mensagem: string;
+  lida: boolean;
+  dataCriacao: Date;
+  dataLeitura?: Date | null;
+  claimId?: number | null;
+  claim?: {
+    id: number;
+    status: StatusWaitlistClaim;
+    expiraEm: Date;
+  } | null;
+  agendamentoId?: number | null;
 }
 
 @Injectable()
 export class NotificationsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  private toResponse(notification: any): NotificationResponse {
+  private toResponse(
+    notification: NotificationProjection,
+    currentClaimStatuses?: Map<number, StatusWaitlistClaim>,
+  ): NotificationResponse {
+    let claimStatus: StatusWaitlistClaim | undefined = undefined;
+    let claimExpiraEm: Date | undefined = undefined;
+
+    if (notification.claim) {
+      claimExpiraEm = notification.claim.expiraEm;
+      claimStatus =
+        currentClaimStatuses?.get(notification.claim.id) ??
+        notification.claim.status;
+    }
+
     return {
       id: notification.id,
       tipo: notification.tipo,
@@ -53,11 +90,47 @@ export class NotificationsService {
       ...(notification.claimId !== null && notification.claimId !== undefined
         ? { claimId: notification.claimId }
         : {}),
+      ...(claimStatus ? { claimStatus } : {}),
+      ...(claimExpiraEm ? { claimExpiraEm } : {}),
       ...(notification.agendamentoId !== null &&
       notification.agendamentoId !== undefined
         ? { agendamentoId: notification.agendamentoId }
         : {}),
     };
+  }
+
+  private async getCurrentClaimStatuses(
+    client: NotificationsDbClient,
+    notifications: NotificationProjection[],
+  ): Promise<Map<number, StatusWaitlistClaim>> {
+    const activeClaimIds = Array.from(
+      new Set(
+        notifications.flatMap((notification) =>
+          notification.claim?.status === StatusWaitlistClaim.ATIVO
+            ? [notification.claim.id]
+            : [],
+        ),
+      ),
+    );
+    if (activeClaimIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = await client.$queryRaw<
+      Array<{ id: number; status: StatusWaitlistClaim }>
+    >`
+      SELECT
+        claim."id",
+        CASE
+          WHEN claim."status" = ${StatusWaitlistClaim.ATIVO}::"StatusWaitlistClaim"
+            AND claim."expiraEm" <= (clock_timestamp() AT TIME ZONE 'UTC')
+            THEN ${StatusWaitlistClaim.EXPIRADO}::"StatusWaitlistClaim"
+          ELSE claim."status"
+        END AS "status"
+      FROM "WaitlistClaim" AS claim
+      WHERE claim."id" IN (${Prisma.join(activeClaimIds)})
+    `;
+    return new Map(rows.map(({ id, status }) => [id, status]));
   }
 
   /**
@@ -206,8 +279,8 @@ export class NotificationsService {
   /**
    * Motor de lembretes (ETAPA 6H). Seleciona agendamentos CONFIRMADO cujo
    * horaInicio está na janela (now, now + 1h] e cria UMA notificação
-   * LEMBRETE por agendamento. Sem endpoint público e, nesta etapa, ainda SEM
-   * scheduler automático (execução periódica será etapa posterior).
+   * LEMBRETE por agendamento. Sem endpoint público; o scheduler periódico
+   * delega a execução ao motor, que usa a referência temporal do PostgreSQL.
    *
    * Idempotência: seleção + criação ocorrem em UMA transação serializada pelo
    * advisory lock de lembretes; agendamentos que já possuem notificação
@@ -217,20 +290,35 @@ export class NotificationsService {
    * Status CANCELADO/CONCLUIDO/NAO_COMPARECEU e horários após o início nunca
    * são selecionados.
    */
-  async processAppointmentReminders(
-    now: Date = new Date(),
-  ): Promise<{ created: number }> {
-    const windowEnd = new Date(
-      now.getTime() + REMINDER_WINDOW_MINUTES * 60 * 1000,
-    );
-
+  async processAppointmentReminders(): Promise<{ created: number }> {
     return this.prisma.$transaction(async (tx) => {
       await acquireReminderLock(tx);
+
+      const timeRows = await tx.$queryRaw<
+        Array<{ now: Date; windowEnd: Date }>
+      >`
+        WITH reminder_time AS (
+          SELECT clock_timestamp() AS "now"
+        )
+        SELECT
+          "now",
+          "now" + (${REMINDER_WINDOW_MINUTES} * INTERVAL '1 minute') AS "windowEnd"
+        FROM reminder_time
+      `;
+      if (
+        !timeRows[0] ||
+        !(timeRows[0].now instanceof Date) ||
+        !(timeRows[0].windowEnd instanceof Date)
+      ) {
+        throw new Error(
+          'Consulta temporal dos lembretes não retornou valores válidos.',
+        );
+      }
 
       const appointments = await tx.agendamento.findMany({
         where: {
           status: StatusAgendamento.CONFIRMADO,
-          horaInicio: { gt: now, lte: windowEnd },
+          horaInicio: { gt: timeRows[0].now, lte: timeRows[0].windowEnd },
           notificacoes: { none: { tipo: TipoNotificacao.LEMBRETE } },
         },
         select: { id: true, cliente: { select: { usuarioId: true } } },
@@ -256,15 +344,30 @@ export class NotificationsService {
 
   async findMine(userId: number): Promise<NotificationResponse[]> {
     const notifications = await this.prisma.notificacao.findMany({
-      where: { usuarioId: userId },
+      where: { usuarioId: userId, limpa: false },
+      include: {
+        claim: {
+          select: {
+            id: true,
+            status: true,
+            expiraEm: true,
+          },
+        },
+      },
       orderBy: [{ dataCriacao: 'desc' }, { id: 'desc' }],
     });
-    return notifications.map((notification) => this.toResponse(notification));
+    const currentClaimStatuses = await this.getCurrentClaimStatuses(
+      this.prisma,
+      notifications,
+    );
+    return notifications.map((notification) =>
+      this.toResponse(notification, currentClaimStatuses),
+    );
   }
 
   async unreadCount(userId: number): Promise<{ count: number }> {
     const count = await this.prisma.notificacao.count({
-      where: { usuarioId: userId, lida: false },
+      where: { usuarioId: userId, lida: false, limpa: false },
     });
     return { count };
   }
@@ -274,24 +377,130 @@ export class NotificationsService {
     notificationId: number,
   ): Promise<NotificationResponse> {
     await this.prisma.notificacao.updateMany({
-      where: { id: notificationId, usuarioId: userId, lida: false },
+      where: {
+        id: notificationId,
+        usuarioId: userId,
+        lida: false,
+        limpa: false,
+      },
       data: { lida: true, dataLeitura: new Date() },
     });
 
     const notification = await this.prisma.notificacao.findFirst({
-      where: { id: notificationId, usuarioId: userId },
+      where: { id: notificationId, usuarioId: userId, limpa: false },
+      include: {
+        claim: {
+          select: {
+            id: true,
+            status: true,
+            expiraEm: true,
+          },
+        },
+      },
     });
     if (!notification) {
       throw new NotFoundException('Notificação não encontrada.');
     }
-    return this.toResponse(notification);
+    const currentClaimStatuses = await this.getCurrentClaimStatuses(
+      this.prisma,
+      [notification],
+    );
+    return this.toResponse(notification, currentClaimStatuses);
   }
 
   async markAllAsRead(userId: number): Promise<{ updated: number }> {
     const result = await this.prisma.notificacao.updateMany({
-      where: { usuarioId: userId, lida: false },
+      where: { usuarioId: userId, lida: false, limpa: false },
       data: { lida: true, dataLeitura: new Date() },
     });
     return { updated: result.count };
+  }
+
+  private isClearableWaitlistNotification(
+    notification: {
+      tipo: TipoNotificacao;
+      claimId?: number | null;
+      claim?: {
+        status: StatusWaitlistClaim;
+        listaEspera?: {
+          status?: StatusListaEspera | null;
+          cliente?: {
+            usuarioId?: number | null;
+          } | null;
+        } | null;
+      } | null;
+    },
+    userId: number,
+  ): boolean {
+    const isWaitlist =
+      notification.tipo === TipoNotificacao.WAITLIST_OPPORTUNITY ||
+      notification.tipo === TipoNotificacao.LISTA_ESPERA;
+
+    if (!isWaitlist) {
+      return true;
+    }
+
+    if (
+      notification.claimId === null ||
+      notification.claimId === undefined ||
+      !notification.claim ||
+      !notification.claim.listaEspera ||
+      !notification.claim.listaEspera.cliente ||
+      notification.claim.listaEspera.cliente.usuarioId !== userId
+    ) {
+      return false;
+    }
+
+    const isClaimAccepted =
+      notification.claim.status === StatusWaitlistClaim.ACEITO;
+    const isEntryAttended =
+      notification.claim.listaEspera.status === StatusListaEspera.ATENDIDA;
+
+    return isClaimAccepted && isEntryAttended;
+  }
+
+  async clearAll(userId: number): Promise<{ cleared: number }> {
+    const activeNotifications = await this.prisma.notificacao.findMany({
+      where: { usuarioId: userId, limpa: false },
+      select: {
+        id: true,
+        tipo: true,
+        claimId: true,
+        claim: {
+          select: {
+            status: true,
+            listaEspera: {
+              select: {
+                status: true,
+                cliente: {
+                  select: {
+                    usuarioId: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const eligibleIds = activeNotifications
+      .filter((n) => this.isClearableWaitlistNotification(n, userId))
+      .map((n) => n.id);
+
+    if (eligibleIds.length === 0) {
+      return { cleared: 0 };
+    }
+
+    const result = await this.prisma.notificacao.updateMany({
+      where: {
+        id: { in: eligibleIds },
+        usuarioId: userId,
+        limpa: false,
+      },
+      data: { limpa: true, lida: true },
+    });
+
+    return { cleared: result.count };
   }
 }

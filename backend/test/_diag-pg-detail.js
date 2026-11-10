@@ -1,3 +1,4 @@
+require('./e2e-safety.setup.cjs');
 require('dotenv/config');
 const { Client } = require('pg');
 

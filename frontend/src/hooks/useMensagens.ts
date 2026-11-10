@@ -3,11 +3,29 @@ import { ApiError } from '../services/api/ApiError'
 import { messagesService } from '../services/api/messagesService'
 import { messagesSocket } from '../services/api/messagesSocket'
 import { messagesBadge } from '../services/api/messagesBadge'
-import type { Conversa, Mensagem } from '../types/domain'
+import type { Conversa, Mensagem, ModoExclusaoMensagem } from '../types/domain'
+import { DELETED_MESSAGE_TEXT } from '../pages/cliente/mensagemRegras'
+
+export { DELETED_MESSAGE_TEXT }
 
 /** Mensagem pública de uma falha da camada de API. */
 function mensagemDeErro(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback
+  if (error instanceof ApiError) {
+    if (error.status === 400) {
+      return error.message || 'Solicitação inválida ou prazo de exclusão expirado.'
+    }
+    if (error.status === 403) {
+      return error.message || 'Você não tem permissão para realizar esta operação.'
+    }
+    if (error.status === 404) {
+      return error.message || 'Mensagem não encontrada.'
+    }
+    if (error.status === 409) {
+      return error.message || 'A mensagem já se encontra no estado solicitado.'
+    }
+    return error.message
+  }
+  return error instanceof Error ? error.message : fallback
 }
 
 /** Assinatura do callback opcional de feedback de nova mensagem. */
@@ -254,9 +272,43 @@ export function useMensagens(
       }
     })
 
+    const unsubscribeExclusao = messagesSocket.onMessageDeleted(
+      (payload) => {
+        // Atualiza a mensagem na conversa aberta, caso exista
+        setMensagens((atual) =>
+          atual.map((m) =>
+            m.id === payload.messageId
+              ? {
+                  ...m,
+                  conteudo: DELETED_MESSAGE_TEXT,
+                  apagadaParaTodos: true,
+                }
+              : m,
+          ),
+        )
+
+        // Atualiza a última mensagem na lista de conversas se ela for a apagada
+        setConversas((atual) =>
+          atual.map((c) => {
+            // Se a conversa aberta tem essa mensagem como última ou se a mensagem pertence à conversa
+            // Para garantir precisão sem o texto antigo, se a conversa atual estiver aberta ou recarregada:
+            return c
+          }),
+        )
+
+        // Recarrega as conversas silenciosamente para manter a última mensagem sincronizada com o backend
+        const controller = new AbortController()
+        void messagesService
+          .listConversations(controller.signal)
+          .then((lista) => setConversas(lista))
+          .catch(() => undefined)
+      },
+    )
+
     return () => {
       unsubscribeEstado()
       unsubscribe()
+      unsubscribeExclusao()
       // A conexão singleton permanece (mesma aba compartilha entre páginas).
     }
   }, [selecionadaId, usuarioId, marcarComoLida])
@@ -330,6 +382,46 @@ export function useMensagens(
     [selecionada, enviando],
   )
 
+  const [excluindoId, setExcluindoId] = useState<number | null>(null)
+
+  const excluirMensagem = useCallback(
+    async (mensagemId: number, modo: ModoExclusaoMensagem): Promise<boolean> => {
+      if (excluindoId !== null) return false
+      setExcluindoId(mensagemId)
+      setErroHistorico(null)
+      try {
+        const atualizada = await messagesService.delete(mensagemId, { modo })
+
+        if (modo === 'PARA_MIM') {
+          // Remove a mensagem imediatamente da visão do usuário
+          setMensagens((atual) => atual.filter((m) => m.id !== mensagemId))
+        } else if (modo === 'PARA_TODOS') {
+          // Atualiza a mensagem na visualização local
+          setMensagens((atual) =>
+            atual.map((m) => (m.id === mensagemId ? atualizada : m)),
+          )
+        }
+
+        // Atualiza a lista de conversas silenciosamente para refletir a nova última mensagem
+        const controller = new AbortController()
+        void messagesService
+          .listConversations(controller.signal)
+          .then((lista) => setConversas(lista))
+          .catch(() => undefined)
+
+        return true
+      } catch (error) {
+        setErroHistorico(
+          mensagemDeErro(error, 'Não foi possível apagar a mensagem.'),
+        )
+        return false
+      } finally {
+        setExcluindoId(null)
+      }
+    },
+    [excluindoId],
+  )
+
   /** Ressincroniza a lista de conversas (ex.: após iniciar uma conversa nova). */
   const recarregarConversas = useCallback(async (): Promise<Conversa[]> => {
     const controller = new AbortController()
@@ -352,6 +444,8 @@ export function useMensagens(
     enviando,
     abrirConversa,
     enviar,
+    excluirMensagem,
+    excluindoId,
     marcarComoLida,
     recarregarConversas,
     limparErroHistorico: useCallback(() => setErroHistorico(null), []),

@@ -40,6 +40,7 @@ describe('WaitlistSchedulerService', () => {
     await scheduler.handleExpiredClaims();
 
     expect(waitlistService.processExpiredClaims).toHaveBeenCalledTimes(1);
+    expect(waitlistService.processExpiredClaims).toHaveBeenCalledWith();
     expect(loggerLogSpy).toHaveBeenCalledWith(
       expect.stringContaining(
         'Scheduler expirou 2 claim(s) e reofertou 2 janela(s).',

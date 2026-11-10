@@ -1,3 +1,4 @@
+import { Transform } from 'class-transformer';
 import {
   IsEmail,
   IsOptional,
@@ -7,6 +8,7 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import { normalizeEmail } from '../../common/utils/email.util';
 
 export class UpdateUserDto {
   /**
@@ -33,6 +35,9 @@ export class UpdateUserDto {
    * dá exatamente esse contrato: `undefined` = não alterar, `null` = limpar,
    * string = precisa ser e-mail válido.
    */
+  @Transform(({ value }) =>
+    typeof value === 'string' ? normalizeEmail(value) : value,
+  )
   @IsOptional()
   @IsEmail()
   email?: string | null;

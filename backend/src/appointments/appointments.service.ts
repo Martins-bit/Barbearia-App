@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -9,6 +10,7 @@ import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '../generated/prisma/client';
 import {
+  OrigemWaitlistReoffer,
   StatusAgendamento,
   StatusWaitlistClaim,
 } from '../generated/prisma/enums';
@@ -22,7 +24,6 @@ import {
 import {
   dateKeyFromUtcMidnight,
   formatLocalHHmm,
-  getZonedParts,
   isValidDateKey,
   localMinuteOfDay,
   prismaDateFilter,
@@ -31,6 +32,10 @@ import {
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { AppointmentResponseDto } from './dto/appointment-response.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import type {
+  EnqueueWaitlistReoffer,
+  WaitlistReofferOutboxService,
+} from '../waitlist/waitlist-reoffer-outbox.service';
 
 /**
  * Lock de CLIENTE (namespace 2 — ver schedule.service.ts). SEMPRE adquirido
@@ -76,6 +81,8 @@ export async function acquireClienteLock(
 
 @Injectable()
 export class AppointmentsService {
+  private readonly logger = new Logger(AppointmentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly scheduleService: ScheduleService,
@@ -83,28 +90,61 @@ export class AppointmentsService {
     @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
-  private async triggerWaitlistOpportunity(row: {
-    barbeiroId: number;
-    data: Date;
-    horaInicio: Date;
-    horaFim: Date;
-  }): Promise<void> {
-    if (!this.moduleRef) {
+  private getReofferOutboxService(): WaitlistReofferOutboxService {
+    const outboxService = this.moduleRef?.get<WaitlistReofferOutboxService>(
+      'WAITLIST_REOFFER_OUTBOX_SERVICE',
+      { strict: false },
+    );
+    if (!outboxService) {
+      throw new Error('Serviço OUTBOX de reofertas não está disponível.');
+    }
+    return outboxService;
+  }
+
+  private async enqueueWaitlistOpportunity(
+    tx: Prisma.TransactionClient,
+    row: {
+      barbeiroId: number;
+      data: Date;
+      horaInicio: Date;
+      horaFim: Date;
+    },
+    appointmentId: number,
+  ): Promise<void> {
+    const event: EnqueueWaitlistReoffer = {
+      idempotencyKey: `appointment-cancelled:${appointmentId}`,
+      origin: OrigemWaitlistReoffer.AGENDAMENTO_CANCELADO,
+      originId: appointmentId,
+      window: {
+        barbeiroId: row.barbeiroId,
+        dateKey: dateKeyFromUtcMidnight(row.data),
+        horaInicio: formatLocalHHmm(row.horaInicio),
+        horaFim: formatLocalHHmm(row.horaFim),
+      },
+    };
+    await this.getReofferOutboxService().enqueue(tx, event);
+  }
+
+  private async dispatchWaitlistOpportunities(): Promise<void> {
+    const outboxService = this.moduleRef?.get<WaitlistReofferOutboxService>(
+      'WAITLIST_REOFFER_OUTBOX_SERVICE',
+      { strict: false },
+    );
+    if (!outboxService) {
+      this.logger.error(
+        'Serviço OUTBOX de reofertas indisponível; pendências aguardam o scheduler.',
+      );
       return;
     }
 
-    const opportunityService = this.moduleRef.get(
-      'WAITLIST_OPPORTUNITY_SERVICE',
-      {
-        strict: false,
-      },
-    );
-    await opportunityService.tryCreateForReleasedWindow({
-      barbeiroId: row.barbeiroId,
-      dateKey: dateKeyFromUtcMidnight(row.data),
-      horaInicio: formatLocalHHmm(row.horaInicio),
-      horaFim: formatLocalHHmm(row.horaFim),
-    });
+    try {
+      await outboxService.processPendingReoffers();
+    } catch (error) {
+      this.logger.error(
+        `Falha no processamento imediato do OUTBOX de reofertas: ${error instanceof Error ? error.message : String(error)}`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
   }
 
   /**
@@ -155,8 +195,6 @@ export class AppointmentsService {
     tx: ScheduleDbClient,
     input: ConfirmedAppointmentInput,
   ): Promise<AppointmentResponseDto> {
-    const agora = new Date();
-
     const barber = await tx.barbeiro.findFirst({
       where: { id: input.barbeiroId, ativo: true },
       select: { id: true },
@@ -175,7 +213,15 @@ export class AppointmentsService {
 
     const startMinutes = this.parseHHmm(input.horaInicio);
     const startInstant = zonedWallTimeToUtc(input.data, input.horaInicio);
-    if (startInstant <= agora) {
+    const startEligibility = await tx.$queryRaw<Array<{ isFuture: boolean }>>`
+      SELECT ${startInstant}::timestamptz > clock_timestamp() AS "isFuture"
+    `;
+    if (!startEligibility[0]) {
+      throw new Error(
+        'Consulta temporal do agendamento não retornou resultado.',
+      );
+    }
+    if (!startEligibility[0].isFuture) {
       throw new BadRequestException(
         'Não é possível agendar um horário que já passou.',
       );
@@ -209,15 +255,17 @@ export class AppointmentsService {
       throw new ConflictException('Horário não está mais disponível.');
     }
 
-    const activeClaims = await tx.waitlistClaim.findMany({
-      where: {
-        barbeiroId: input.barbeiroId,
-        data: prismaDateFilter(input.data),
-        status: StatusWaitlistClaim.ATIVO,
-        expiraEm: { gt: agora },
-        ...(input.claimId !== undefined ? { id: { not: input.claimId } } : {}),
-      },
-    });
+    const activeClaims = await tx.$queryRaw<
+      Array<{ horaInicio: string; horaFim: string }>
+    >`
+        SELECT claim."horaInicio", claim."horaFim"
+        FROM "WaitlistClaim" AS claim
+        WHERE claim."barbeiroId" = ${input.barbeiroId}
+          AND claim."data" = ${input.data}::date
+          AND claim."status" = ${StatusWaitlistClaim.ATIVO}::"StatusWaitlistClaim"
+          AND claim."expiraEm" > (clock_timestamp() AT TIME ZONE 'UTC')
+          AND claim."id" IS DISTINCT FROM ${input.claimId ?? null}::int
+      `;
     if (
       activeClaims.some((claim) =>
         overlaps({
@@ -286,7 +334,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
     if (!row) {
@@ -351,7 +405,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
 
@@ -367,7 +427,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
 
@@ -405,7 +471,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
 
@@ -452,29 +524,64 @@ export class AppointmentsService {
       // A data do agendamento é derivada do INSTANTE persistido (horaInicio),
       // nunca da coluna `data`, garantindo a comparação no fuso da barbearia.
       // BARBEIRO não passa por esta checagem (pode cancelar no mesmo dia).
-      const hojeKey = this.dateKeyFromInstantLocal(new Date());
-      const dataAgendamentoKey = this.dateKeyFromInstantLocal(row.horaInicio);
-      if (dataAgendamentoKey <= hojeKey) {
-        throw new BadRequestException(
-          'Cliente só pode cancelar até o dia anterior ao agendamento.',
-        );
-      }
-
       // Transição + notificação na MESMA transação (sem nested transaction):
       // ou ambas ocorrem, ou nenhuma. O update condicional por status garante
       // que nova tentativa/corrida de cancelamento não gere notificação
       // duplicada (count === 0 → conflito, sem notificação).
       await this.prisma.$transaction(async (tx) => {
-        const updated = await tx.agendamento.updateMany({
-          where: {
-            id: appointmentId,
-            clienteId: cliente.id,
-            status: StatusAgendamento.CONFIRMADO,
-          },
-          data: { status: StatusAgendamento.CANCELADO },
-        });
+        const updated = await tx.$executeRaw`
+          UPDATE "Agendamento"
+          SET
+            "status" = ${StatusAgendamento.CANCELADO}::"StatusAgendamento",
+            "dataAtualizacao" = (clock_timestamp() AT TIME ZONE 'UTC')
+          WHERE "id" = ${appointmentId}
+            AND "clienteId" = ${cliente.id}
+            AND "status" = ${StatusAgendamento.CONFIRMADO}::"StatusAgendamento"
+            AND (
+              "horaInicio" AT TIME ZONE 'UTC'
+                AT TIME ZONE 'America/Sao_Paulo'
+            )::date > (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date
+        `;
 
-        if (updated.count === 0) {
+        if (updated === 0) {
+          const currentDay = await tx.$queryRaw<
+            Array<{
+              hojeKey: string;
+              dataAgendamentoKey: string;
+              status: StatusAgendamento;
+              clienteId: number;
+            }>
+          >`
+            SELECT to_char(
+              (clock_timestamp() AT TIME ZONE 'America/Sao_Paulo')::date,
+              'YYYY-MM-DD'
+            ) AS "hojeKey",
+            to_char(
+              (
+                "horaInicio" AT TIME ZONE 'UTC'
+                  AT TIME ZONE 'America/Sao_Paulo'
+              )::date,
+              'YYYY-MM-DD'
+            ) AS "dataAgendamentoKey",
+            "status",
+            "clienteId"
+            FROM "Agendamento"
+            WHERE "id" = ${appointmentId}
+          `;
+          if (!currentDay[0]) {
+            throw new Error(
+              'Consulta da data local do banco não retornou resultado.',
+            );
+          }
+          if (
+            currentDay[0].status === StatusAgendamento.CONFIRMADO &&
+            currentDay[0].clienteId === cliente.id &&
+            currentDay[0].dataAgendamentoKey <= currentDay[0].hojeKey
+          ) {
+            throw new BadRequestException(
+              'Cliente só pode cancelar até o dia anterior ao agendamento.',
+            );
+          }
           throw new ConflictException(
             'Agendamento não pode mais ser cancelado.',
           );
@@ -491,6 +598,7 @@ export class AppointmentsService {
           row.barbeiroId,
           appointmentId,
         );
+        await this.enqueueWaitlistOpportunity(tx, row, appointmentId);
       });
 
       const refreshed = await this.prisma.agendamento.findUnique({
@@ -510,7 +618,7 @@ export class AppointmentsService {
         throw new NotFoundException('Agendamento não encontrado.');
       }
 
-      await this.triggerWaitlistOpportunity(refreshed);
+      await this.dispatchWaitlistOpportunities();
 
       return this.toResponse(refreshed);
     }
@@ -529,7 +637,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
 
@@ -562,6 +676,7 @@ export class AppointmentsService {
         row.clienteId,
         appointmentId,
       );
+      await this.enqueueWaitlistOpportunity(tx, row, appointmentId);
     });
 
     const refreshed = await this.prisma.agendamento.findUnique({
@@ -569,7 +684,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
 
@@ -577,7 +698,7 @@ export class AppointmentsService {
       throw new NotFoundException('Agendamento não encontrado.');
     }
 
-    await this.triggerWaitlistOpportunity(refreshed);
+    await this.dispatchWaitlistOpportunities();
 
     return this.toResponse(refreshed);
   }
@@ -600,7 +721,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
 
@@ -612,7 +739,15 @@ export class AppointmentsService {
       throw new ConflictException('Status incompatível para conclusão.');
     }
 
-    if (row.horaFim > new Date()) {
+    const completionEligibility = await this.prisma.$queryRaw<
+      Array<{ allowed: boolean }>
+    >`
+      SELECT ${row.horaFim}::timestamptz <= clock_timestamp() AS "allowed"
+    `;
+    if (!completionEligibility[0]) {
+      throw new Error('Consulta temporal da conclusão não retornou resultado.');
+    }
+    if (!completionEligibility[0].allowed) {
       throw new BadRequestException(
         'Só é possível concluir após o fim do agendamento.',
       );
@@ -638,7 +773,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
 
@@ -667,7 +808,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
 
@@ -679,7 +826,15 @@ export class AppointmentsService {
       throw new ConflictException('Status incompatível para falta.');
     }
 
-    if (row.horaInicio > new Date()) {
+    const noShowEligibility = await this.prisma.$queryRaw<
+      Array<{ allowed: boolean }>
+    >`
+      SELECT ${row.horaInicio}::timestamptz <= clock_timestamp() AS "allowed"
+    `;
+    if (!noShowEligibility[0]) {
+      throw new Error('Consulta temporal da falta não retornou resultado.');
+    }
+    if (!noShowEligibility[0].allowed) {
       throw new BadRequestException(
         'Só é possível marcar falta após o início do agendamento.',
       );
@@ -705,7 +860,13 @@ export class AppointmentsService {
       include: {
         servico: { select: { id: true, nome: true, preco: true } },
         barbeiro: { select: { id: true, usuario: { select: { nome: true } } } },
-        cliente: { select: { id: true, usuarioId: true, usuario: { select: { nome: true } } } },
+        cliente: {
+          select: {
+            id: true,
+            usuarioId: true,
+            usuario: { select: { nome: true } },
+          },
+        },
       },
     });
 
@@ -714,12 +875,6 @@ export class AppointmentsService {
     }
 
     return this.toResponse(refreshed);
-  }
-
-  private dateKeyFromInstantLocal(instant: Date): string {
-    const { year, month, day } = getZonedParts(instant);
-    const pad = (value: number): string => String(value).padStart(2, '0');
-    return `${year}-${pad(month)}-${pad(day)}`;
   }
 
   private toResponse(row: AppointmentRow): AppointmentResponseDto {

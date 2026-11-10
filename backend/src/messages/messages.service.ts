@@ -3,7 +3,9 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { TipoUsuario } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -12,6 +14,14 @@ import {
   UnreadCountDto,
 } from './dto/message-response.dto';
 import { SendMessageDto, MAX_MESSAGE_LENGTH } from './dto/send-message.dto';
+import {
+  DeleteMessageDto,
+  ModoExclusaoMensagem,
+} from './dto/delete-message.dto';
+import { MessageDeletedEventPayload } from './dto/message-deleted-event.dto';
+
+export const MESSAGE_DELETION_WINDOW_MS = 60 * 60 * 1000;
+export const DELETED_MESSAGE_TEXT = 'Esta mensagem foi apagada';
 
 /**
  * Mensagens CLIENTE <-> BARBEIRO (ETAPAS 7A/7B). Sem tempo real.
@@ -25,17 +35,22 @@ import { SendMessageDto, MAX_MESSAGE_LENGTH } from './dto/send-message.dto';
  */
 @Injectable()
 export class MessagesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly moduleRef?: ModuleRef,
+  ) {}
 
   private toResponse(message: any): MessageResponseDto {
+    const apagadaParaTodos = Boolean(message.apagadaParaTodos);
     return {
       id: message.id,
       remetenteUsuarioId: message.remetenteId,
       destinatarioUsuarioId: message.destinatarioId,
-      conteudo: message.conteudo,
+      conteudo: apagadaParaTodos ? DELETED_MESSAGE_TEXT : message.conteudo,
       lida: message.lida,
       dataCriacao: message.dataCriacao,
       dataLeitura: message.dataLeitura ?? null,
+      ...(apagadaParaTodos ? { apagadaParaTodos: true } : {}),
     };
   }
 
@@ -74,6 +89,14 @@ export class MessagesService {
     return destinatario;
   }
 
+  private async hasActiveBarberProfile(usuarioId: number): Promise<boolean> {
+    const barbeiro = await this.prisma.barbeiro.findUnique({
+      where: { usuarioId },
+      select: { ativo: true },
+    });
+    return Boolean(barbeiro?.ativo);
+  }
+
   async sendMessage(
     remetenteUsuarioId: number,
     dto: SendMessageDto,
@@ -99,14 +122,11 @@ export class MessagesService {
       );
     }
 
-    if (remetente.tipoUsuario === TipoUsuario.BARBEIRO) {
-      const barbeiro = await this.prisma.barbeiro.findUnique({
-        where: { usuarioId: remetente.id },
-        select: { ativo: true },
-      });
-      if (!barbeiro || !barbeiro.ativo) {
-        throw new ForbiddenException('Remetente não autorizado.');
-      }
+    if (
+      remetente.tipoUsuario === TipoUsuario.BARBEIRO &&
+      !(await this.hasActiveBarberProfile(remetente.id))
+    ) {
+      throw new ForbiddenException('Remetente não autorizado.');
     }
 
     const destinatario = await this.resolveValidDestination(
@@ -140,6 +160,12 @@ export class MessagesService {
     if (!usuario || !usuario.ativo) {
       throw new ForbiddenException('Usuário não autorizado.');
     }
+    if (
+      usuario.tipoUsuario === TipoUsuario.BARBEIRO &&
+      !(await this.hasActiveBarberProfile(usuario.id))
+    ) {
+      throw new ForbiddenException('Usuário não autorizado.');
+    }
 
     // Participantes precisam ser do perfil oposto (CLIENTE <-> BARBEIRO).
     const outro = await this.prisma.usuario.findUnique({
@@ -148,12 +174,26 @@ export class MessagesService {
     if (!outro || !outro.ativo || outro.tipoUsuario === usuario.tipoUsuario) {
       throw new NotFoundException('Conversa não encontrada.');
     }
+    if (
+      outro.tipoUsuario === TipoUsuario.BARBEIRO &&
+      !(await this.hasActiveBarberProfile(outro.id))
+    ) {
+      throw new NotFoundException('Conversa não encontrada.');
+    }
 
     const messages = await this.prisma.mensagem.findMany({
       where: {
         OR: [
-          { remetenteId: usuarioId, destinatarioId: outroUsuarioId },
-          { remetenteId: outroUsuarioId, destinatarioId: usuarioId },
+          {
+            remetenteId: usuarioId,
+            destinatarioId: outroUsuarioId,
+            excluidaPeloRemetente: false,
+          },
+          {
+            remetenteId: outroUsuarioId,
+            destinatarioId: usuarioId,
+            excluidaPeloDestinatario: false,
+          },
         ],
       },
       orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
@@ -194,11 +234,11 @@ export class MessagesService {
 
   /**
    * Lista de conversas (ETAPA 7B): somente conversas em que o usuário
-   * autenticado participa, sempre CLIENTE <-> BARBEIRO, com o outro
-   * participante ativo. Retorna a última mensagem (conteúdo + data/hora) e a
-   * quantidade de não lidas da conversa, ordenada pela mensagem mais recente
-   * primeiro. Nenhuma conversa artificial é criada: sem mensagens, lista
-   * vazia. Nenhum dado sensível é exposto.
+   * autenticado participa, sempre CLIENTE <-> BARBEIRO, com conta ativa e,
+   * para barbeiros, perfil ativo nos dois lados da conversa. Retorna a última
+   * mensagem (conteúdo + data/hora) e a quantidade de não lidas da conversa,
+   * ordenada pela mensagem mais recente primeiro. Nenhuma conversa artificial
+   * é criada: sem mensagens, lista vazia. Nenhum dado sensível é exposto.
    */
   async findConversations(
     usuarioId: number,
@@ -209,14 +249,23 @@ export class MessagesService {
     if (!usuario || !usuario.ativo) {
       throw new ForbiddenException('Usuário não autorizado.');
     }
+    if (
+      usuario.tipoUsuario === TipoUsuario.BARBEIRO &&
+      !(await this.hasActiveBarberProfile(usuario.id))
+    ) {
+      throw new ForbiddenException('Usuário não autorizado.');
+    }
 
-    // Leitura única das mensagens do usuário (sem paginação nesta etapa). A
+    // Leitura única das mensagens visíveis do usuário (sem paginação nesta etapa). A
     // agregação (última mensagem e não lidas por parceiro) é feita em
     // aplicação sobre as linhas já cobertas pelos índices de remetente e
-    // destinatário — os índices existentes são suficientes para esta consulta.
+    // destinatário.
     const messages = await this.prisma.mensagem.findMany({
       where: {
-        OR: [{ remetenteId: usuarioId }, { destinatarioId: usuarioId }],
+        OR: [
+          { remetenteId: usuarioId, excluidaPeloRemetente: false },
+          { destinatarioId: usuarioId, excluidaPeloDestinatario: false },
+        ],
       },
       select: {
         id: true,
@@ -225,6 +274,9 @@ export class MessagesService {
         conteudo: true,
         lida: true,
         dataCriacao: true,
+        apagadaParaTodos: true,
+        excluidaPeloRemetente: true,
+        excluidaPeloDestinatario: true,
       },
     });
 
@@ -247,6 +299,10 @@ export class MessagesService {
         continue; // auto-mensagem não deve existir; ignorada por segurança
       }
 
+      const conteudoFinal = message.apagadaParaTodos
+        ? DELETED_MESSAGE_TEXT
+        : message.conteudo;
+
       const atual = ultimaMensagemPorParceiro.get(parceiroId);
       const maisRecente =
         !atual ||
@@ -256,13 +312,18 @@ export class MessagesService {
       if (maisRecente) {
         ultimaMensagemPorParceiro.set(parceiroId, {
           id: message.id,
-          conteudo: message.conteudo,
+          conteudo: conteudoFinal,
           dataCriacao: message.dataCriacao,
         });
       }
 
-      // Não lidas: somente mensagens recebidas pelo usuário autenticado.
-      if (message.destinatarioId === usuarioId && !message.lida) {
+      // Não lidas: somente mensagens recebidas pelo usuário autenticado,
+      // não lidas e não excluídas pelo destinatário.
+      if (
+        message.destinatarioId === usuarioId &&
+        !message.lida &&
+        !message.excluidaPeloDestinatario
+      ) {
         naoLidasPorParceiro.set(
           parceiroId,
           (naoLidasPorParceiro.get(parceiroId) ?? 0) + 1,
@@ -281,10 +342,20 @@ export class MessagesService {
         tipoUsuario: oppositeTipoUsuario,
         ativo: true,
       },
-      select: { id: true, nome: true, tipoUsuario: true },
+      select: {
+        id: true,
+        nome: true,
+        tipoUsuario: true,
+        barbeiro: { select: { ativo: true } },
+      },
     });
 
-    const conversations = partners.map((partner) => {
+    const activePartners = partners.filter(
+      (partner) =>
+        partner.tipoUsuario !== TipoUsuario.BARBEIRO ||
+        partner.barbeiro?.ativo,
+    );
+    const conversations = activePartners.map((partner) => {
       const ultima = ultimaMensagemPorParceiro.get(partner.id)!;
       return {
         partner,
@@ -313,7 +384,7 @@ export class MessagesService {
   /**
    * Contador global de não lidas (ETAPA 7B): considera somente mensagens com
    * destinatarioId = usuário autenticado (identidade SEMPRE do JWT, nunca do
-   * frontend) e lida = false.
+   * frontend), lida = false e não excluída pelo destinatário.
    */
   async unreadCount(usuarioId: number): Promise<UnreadCountDto> {
     const usuario = await this.prisma.usuario.findUnique({
@@ -325,8 +396,180 @@ export class MessagesService {
     }
 
     const count = await this.prisma.mensagem.count({
-      where: { destinatarioId: usuarioId, lida: false },
+      where: {
+        destinatarioId: usuarioId,
+        lida: false,
+        excluidaPeloDestinatario: false,
+      },
     });
     return { count };
+  }
+
+  /**
+   * Exclusão de mensagem (Apagar para mim / Apagar para todos).
+   *
+   * Ordem estrita de validação e idempotência:
+   * 1. Buscar a mensagem.
+   * 2. Validar se o usuário participa da conversa (remetente ou destinatário).
+   * 3. Validar autoria quando o modo for PARA_TODOS (apenas remetente pode).
+   * 4. Verificar se a operação solicitada já foi concluída:
+   *    - Se PARA_MIM pelo remetente e já está excluidaPeloRemetente -> retorno imediato (idempotente).
+   *    - Se PARA_MIM pelo destinatário e já está excluidaPeloDestinatario -> retorno imediato (idempotente).
+   *    - Se PARA_TODOS pelo remetente e já está apagadaParaTodos -> retorno imediato (idempotente).
+   * 5. Se ainda não estiver concluída, validar o prazo de 60 minutos (inclusivo).
+   * 6. Executar a operação de forma segura em transação atômica ($transaction)
+   *    com updateMany condicional para evitar race conditions e não sobrescrever estados consolidados.
+   *    - PARA_MIM nunca preenche dataExclusao (reservada exclusivamente para PARA_TODOS).
+   *    - PARA_TODOS preenche apagadaParaTodos = true e dataExclusao (se ainda nulo).
+   */
+  async deleteMessage(
+    usuarioId: number,
+    messageId: number,
+    dto: DeleteMessageDto,
+  ): Promise<MessageResponseDto> {
+    const usuario = await this.prisma.usuario.findUnique({
+      where: { id: usuarioId },
+      select: { id: true, ativo: true },
+    });
+    if (!usuario || !usuario.ativo) {
+      throw new ForbiddenException('Usuário não autorizado.');
+    }
+
+    // 1. Buscar a mensagem
+    const message = await this.prisma.mensagem.findUnique({
+      where: { id: messageId },
+    });
+    if (!message) {
+      throw new NotFoundException('Mensagem não encontrada.');
+    }
+
+    // 2. Validar se o usuário participa da conversa
+    const isRemetente = message.remetenteId === usuarioId;
+    const isDestinatario = message.destinatarioId === usuarioId;
+
+    if (!isRemetente && !isDestinatario) {
+      throw new NotFoundException('Mensagem não encontrada.');
+    }
+
+    // 3. Validar autoria quando o modo for PARA_TODOS
+    if (dto.modo === ModoExclusaoMensagem.PARA_TODOS && !isRemetente) {
+      throw new ForbiddenException(
+        'Somente o autor da mensagem pode apagá-la para todos.',
+      );
+    }
+
+    // 4. Verificar se a operação solicitada já foi concluída (Idempotência pré-prazo)
+    if (dto.modo === ModoExclusaoMensagem.PARA_MIM) {
+      if (isRemetente && message.excluidaPeloRemetente) {
+        return this.toResponse(message);
+      }
+      if (isDestinatario && message.excluidaPeloDestinatario) {
+        return this.toResponse(message);
+      }
+    } else if (dto.modo === ModoExclusaoMensagem.PARA_TODOS) {
+      if (message.apagadaParaTodos) {
+        return this.toResponse(message);
+      }
+    } else {
+      throw new BadRequestException('Modo de exclusão inválido.');
+    }
+
+    // 5. Se ainda não estiver concluída, validar o prazo de 60 minutos (inclusivo)
+    const agora = Date.now();
+    const criacao = new Date(message.dataCriacao).getTime();
+    if (agora - criacao > MESSAGE_DELETION_WINDOW_MS) {
+      throw new BadRequestException(
+        'Mensagens só podem ser apagadas até 60 minutos após o envio.',
+      );
+    }
+
+    // 6. Executar em transação atômica com updateMany condicional
+    let apagadaAgoraParaTodos = false;
+    let dataExclusaoEfetiva: Date | null = null;
+
+    await this.prisma.$transaction(async (tx) => {
+      if (dto.modo === ModoExclusaoMensagem.PARA_TODOS) {
+        dataExclusaoEfetiva = new Date();
+        const updated = await tx.mensagem.updateMany({
+          where: {
+            id: messageId,
+            remetenteId: usuarioId,
+            apagadaParaTodos: false,
+          },
+          data: {
+            apagadaParaTodos: true,
+            dataExclusao: dataExclusaoEfetiva,
+          },
+        });
+        if (updated.count === 1) {
+          apagadaAgoraParaTodos = true;
+        }
+      } else if (dto.modo === ModoExclusaoMensagem.PARA_MIM) {
+        if (isRemetente) {
+          // Atualiza SOMENTE excluidaPeloRemetente; dataExclusao permanece intacta
+          await tx.mensagem.updateMany({
+            where: {
+              id: messageId,
+              remetenteId: usuarioId,
+              excluidaPeloRemetente: false,
+            },
+            data: {
+              excluidaPeloRemetente: true,
+            },
+          });
+        } else {
+          // Atualiza SOMENTE excluidaPeloDestinatario; dataExclusao permanece intacta
+          await tx.mensagem.updateMany({
+            where: {
+              id: messageId,
+              destinatarioId: usuarioId,
+              excluidaPeloDestinatario: false,
+            },
+            data: {
+              excluidaPeloDestinatario: true,
+            },
+          });
+        }
+      }
+    });
+
+    const updated = await this.prisma.mensagem.findUnique({
+      where: { id: messageId },
+    });
+
+    // 7. Notificação Socket.IO (ETAPA 3):
+    // Somente emite message:deleted se a exclusão PARA_TODOS foi efetivamente
+    // gravada no banco de dados agora (updated.count === 1).
+    // Se for retry idempotente ou falha na transação, nenhuma emissão duplicada ocorre.
+    if (apagadaAgoraParaTodos && updated && updated.apagadaParaTodos) {
+      this.triggerSocketMessageDeleted(updated.remetenteId, updated.destinatarioId, {
+        messageId: updated.id,
+        apagadaParaTodos: true,
+        dataExclusao: updated.dataExclusao ?? dataExclusaoEfetiva ?? new Date(),
+      });
+    }
+
+    return this.toResponse(updated!);
+  }
+
+  private triggerSocketMessageDeleted(
+    remetenteId: number,
+    destinatarioId: number,
+    payload: MessageDeletedEventPayload,
+  ): void {
+    if (!this.moduleRef) {
+      return;
+    }
+
+    try {
+      const gateway = this.moduleRef.get<any>('MESSAGES_GATEWAY', {
+        strict: false,
+      });
+      if (gateway && typeof gateway.notifyMessageDeleted === 'function') {
+        gateway.notifyMessageDeleted(remetenteId, destinatarioId, payload);
+      }
+    } catch {
+      // Falha ao obter o gateway não impede nem desfaz a exclusão confirmada no banco
+    }
   }
 }

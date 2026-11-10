@@ -30,4 +30,9 @@ export const notificationsService = {
   markAllAsRead(): Promise<{ updated: number }> {
     return http.patch<{ updated: number }>('/notifications/read-all')
   },
+
+  /** DELETE /notifications — limpa todas as notificações do usuário autenticado. */
+  clearAll(): Promise<{ cleared: number }> {
+    return http.delete<{ cleared: number }>('/notifications')
+  },
 }

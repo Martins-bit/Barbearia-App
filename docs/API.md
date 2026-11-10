@@ -112,6 +112,7 @@ Criar uma nova conta de cliente.
 
 - Nome;
 - Telefone;
+- E-mail;
 - Senha;
 - Outros campos definidos posteriormente.
 
@@ -121,12 +122,16 @@ O backend deverá verificar:
 
 - Campos obrigatórios;
 - Formato dos dados;
+- Formato e unicidade do e-mail;
 - Regras de senha;
 - Existência de conta duplicada.
 
 ### Resultado
 
-Em caso de sucesso, a conta deverá ser criada.
+Em caso de sucesso, a conta deverá ser criada com o e-mail ainda não confirmado.
+O cadastro não deverá marcar automaticamente o endereço como verificado. O
+e-mail é normalizado para evitar duplicidades por diferenças de maiúsculas e
+minúsculas.
 
 ---
 
@@ -181,6 +186,95 @@ A resposta não deverá conter:
 
 Observação: o mesmo dado também é exposto em `GET /users/me` (ver seção 13).
 `GET /auth/me` é mantido como endpoint canônico de sessão.
+
+## 6.5. Confirmação de e-mail
+
+### Solicitar confirmação
+
+`POST /auth/email/verification/request`
+
+Requer JWT e usuário ativo CLIENTE ou BARBEIRO; para BARBEIRO, o perfil também
+precisa estar ativo. O endereço utilizado é sempre o e-mail do próprio usuário
+autenticado, nunca um endereço arbitrário enviado no corpo.
+
+O endpoint é limitado por IP e por usuário. Quando o e-mail já está confirmado,
+retorna apenas esse estado. Para e-mail pendente, a resposta de sucesso só é
+retornada depois que o provedor aceitar o envio; nenhum endereço ou token é
+incluído na resposta. Até a configuração de um provedor, a rota retorna `503`
+sem criar token ou alegar que uma mensagem foi enviada.
+
+### Confirmar endereço
+
+`POST /auth/email/verification/confirm`
+
+Corpo:
+
+```json
+{
+  "token": "token recebido no e-mail"
+}
+```
+
+Não exige sessão, pois o link é destinado a usuários que podem não conseguir
+entrar. O token aleatório tem 32 bytes, é armazenado somente como hash SHA-256,
+expira em 30 minutos e só pode ser consumido uma vez. Tokens inválidos,
+expirados, reutilizados ou associados a um endereço que mudou recebem a mesma
+resposta genérica. A confirmação e o consumo são atômicos.
+
+Alterar ou remover o e-mail do perfil limpa a confirmação anterior e invalida
+tokens pendentes. Endereços só devem ser usados em fluxos de recuperação quando
+`emailVerificadoEm` estiver preenchido.
+
+## 6.6. Recuperação e redefinição de senha
+
+### Solicitar recuperação
+
+`POST /auth/password-recovery`
+
+Corpo:
+
+```json
+{
+  "email": "usuario@exemplo.com"
+}
+```
+
+Não exige sessão (público com rate limiting por IP e por identificador).
+Disponível para contas ativas com e-mail confirmado (CLIENTE e BARBEIRO).
+A resposta é sempre genérica e uniforme (`202 Accepted`), evitando enumeração
+de contas, mesmo se o e-mail não existir, não estiver confirmado ou estiver inativo:
+
+```json
+{
+  "message": "Se houver uma conta elegível, as instruções serão enviadas."
+}
+```
+
+Tokens são gerados com `randomBytes(32)` codificados em base64url, armazenando
+exclusivamente o hash SHA-256 no banco com expiração de 15 minutos e uso único.
+Se o provedor de e-mail estiver indisponível, retorna `503` genérico sem criar
+tokens inúteis nem revelar dados internos.
+
+### Redefinir senha
+
+`POST /auth/password-reset`
+
+Corpo:
+
+```json
+{
+  "token": "token recebido no e-mail",
+  "senha": "novaSenhaSegura123"
+}
+```
+
+Não exige sessão. Valida se a senha tem no mínimo 8 caracteres e no máximo 72 bytes
+UTF-8 (limite do algoritmo bcrypt), rejeitando truncamento silencioso.
+O consumo do token é atômico e transacional com `SELECT FOR UPDATE`, impedindo
+consumo concorrente. Na mesma transação, a senha é atualizada e o `authVersion`
+do usuário é incrementado, invalidando imediatamente todos os JWTs emitidos antes
+da redefinição. Tokens inválidos, expirados ou reutilizados recebem mensagem de
+erro genérica.
 
 ---
 
@@ -327,12 +421,16 @@ Poderão incluir:
 - Duração do serviço;
 - Agendamentos existentes;
 - Bloqueios;
+- Claims da lista de espera com status `ATIVO` e prazo ainda vigente;
 - Serviços ativos;
 - Regras de negócio.
 
 ### Resultado
 
 A API deverá retornar somente horários que possam realmente ser utilizados para novos agendamentos.
+Claims ativos e vigentes ocupam seu intervalo exato. Claims recusados ou
+expirados não bloqueiam a disponibilidade. Horários adjacentes, sem sobreposição,
+continuam disponíveis.
 
 ### Regra de horários passados
 
@@ -532,6 +630,11 @@ Endpoint conceitual:
 
 Cliente proprietário da solicitação.
 
+Ao cancelar, claims vinculados que ainda estejam `ATIVO` passam para
+`RECUSADO` se ainda estiverem vigentes ou para `EXPIRADO` quando o prazo tiver
+sido atingido, inclusive no limite exato. A transição é condicional ao status
+`ATIVO`, preservando estados finais definidos por operações concorrentes.
+
 ---
 
 ## 10.4. Lista de espera do barbeiro
@@ -624,6 +727,20 @@ Endpoint conceitual:
 Atualiza somente as notificações não lidas do usuário autenticado e retorna a
 quantidade alterada.
 
+## 11.5. Limpar notificações
+
+Endpoint conceitual:
+
+`DELETE /api/notifications`
+
+Aplica a limpeza lógica somente às notificações autorizadas para o usuário
+autenticado e retorna `{ cleared }`, a quantidade efetivamente limpa.
+Notificações da lista de espera só podem ser limpas com `claimId` e
+relacionamentos válidos, claim pertencente ao usuário, `claim.status = ACEITO` e
+`listaEspera.status = ATENDIDA`; notificações sem essa comprovação permanecem
+visíveis. Como a resposta não contém a lista atualizada, o frontend deve buscar
+novamente as notificações e o contador de não lidas após a operação.
+
 ---
 
 # 12. MENSAGENS
@@ -674,6 +791,9 @@ aparece no resultado.
 
 Conversa consigo mesmo é inválida; participante de perfil igual (ou inexistente)
 retorna 404, sem revelar a existência do recurso.
+Ambos os participantes devem ter a conta ativa; se um participante for barbeiro,
+seu perfil também deve estar ativo. O próprio usuário autenticado precisa estar
+autorizado, incluindo perfil ativo quando for barbeiro.
 
 ### Ordem
 Ordem cronológica **crescente** (`dataCriacao`, com `id` como desempate).
@@ -685,8 +805,10 @@ Ordem cronológica **crescente** (`dataCriacao`, com `id` como desempate).
 
 ### Regra
 Retorna somente as conversas das quais o usuário autenticado participa, sempre
-CLIENTE ↔ BARBEIRO e com o outro participante ativo. Não são criadas conversas
-artificiais: usuário com quem nunca houve mensagem não aparece.
+CLIENTE ↔ BARBEIRO e com ambos os participantes ativos. Para barbeiros, isso
+exige conta e perfil ativos. Usuários não autorizados não podem listar conversas.
+Não são criadas conversas artificiais: usuário com quem nunca houve mensagem não
+aparece.
 
 ### Resposta
 Cada conversa retorna:

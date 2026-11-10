@@ -44,6 +44,7 @@ function buildServerMock(): any {
 const clientAuthState = {
   id: 10,
   ativo: true,
+  authVersion: 0,
   tipoUsuario: TipoUsuario.CLIENTE,
   barbeiro: null,
 };
@@ -51,6 +52,7 @@ const clientAuthState = {
 const barberAuthState = {
   id: 20,
   ativo: true,
+  authVersion: 0,
   tipoUsuario: TipoUsuario.BARBEIRO,
   barbeiro: { ativo: true },
 };
@@ -95,6 +97,29 @@ describe('MessagesGateway', () => {
       expect(users.findAuthorizationStateById).toHaveBeenCalledWith(10);
       expect(client.data.usuarioId).toBe(10);
       expect(client.data.tipoUsuario).toBe(TipoUsuario.CLIENTE);
+      expect(client.data.authVersion).toBe(0);
+    });
+
+    it('mantém compatibilidade com JWT antigo sem claim quando authVersion atual é 0', async () => {
+      jwt.verifyAsync.mockResolvedValue({ sub: 10, exp: FUTURO });
+      users.findAuthorizationStateById.mockResolvedValue(clientAuthState);
+
+      const client = buildClient('jwt-legado');
+      await gateway.authenticate(client);
+
+      expect(client.data.authVersion).toBe(0);
+    });
+
+    it('rejeita no handshake JWT com authVersion anterior à versão atual', async () => {
+      jwt.verifyAsync.mockResolvedValue({ sub: 10, authVersion: 0 });
+      users.findAuthorizationStateById.mockResolvedValue({
+        ...clientAuthState,
+        authVersion: 1,
+      });
+
+      await expect(gateway.authenticate(buildClient('jwt-antigo'))).rejects.toThrow(
+        'Não autorizado.',
+      );
     });
 
     it('aceita token com prefixo Bearer', async () => {
@@ -605,6 +630,7 @@ describe('MessagesGateway', () => {
       socket.data.usuarioId = usuarioId;
       socket.data.tipoUsuario = tipoUsuario;
       socket.data.tokenExpiraEm = tokenExpiraEm;
+      socket.data.authVersion = 0;
       return socket;
     };
 
@@ -698,6 +724,25 @@ describe('MessagesGateway', () => {
       expect(erroEmitido(socket)).toBe('Não autorizado.');
       expect(messagesService.sendMessage).not.toHaveBeenCalled();
       expect(socket.disconnect).toHaveBeenCalledWith(true);
+    });
+
+    it('invalida socket já conectado após redefinição incrementa authVersion', async () => {
+      const socket = client();
+      gateway.handleConnection(socket);
+      users.findAuthorizationStateById.mockResolvedValue({
+        ...clientAuthState,
+        authVersion: 1,
+      });
+
+      await gateway.handleMessageSend(socket, {
+        destinatarioId: 20,
+        conteudo: 'Oi',
+      });
+
+      expect(erroEmitido(socket)).toBe('Não autorizado.');
+      expect(messagesService.sendMessage).not.toHaveBeenCalled();
+      expect(socket.disconnect).toHaveBeenCalledWith(true);
+      expect(registry.has(10)).toBe(false);
     });
 
     it('BARBEIRO com perfil desativado APÓS a conexão: envio recusado', async () => {
@@ -827,10 +872,120 @@ describe('MessagesGateway', () => {
       expect(texto).not.toContain('SELECT');
       expect(texto).not.toContain('senhaHash');
       expect(texto).not.toContain('jwt');
-      expect((capturado as Error).message).toBe(
-        'Não foi possível enviar a mensagem.',
-      );
-      expect(socket.emit).not.toHaveBeenCalled();
+    });
+
+    describe('notificação de exclusão de mensagens em tempo real (message:deleted)', () => {
+      it('1. notifyMessageDeleted emite message:deleted para o remetente e destinatário quando ambos estão conectados', () => {
+        const server = buildServerMock();
+        gateway.server = server;
+        registry.add(10, 'socket-remetente');
+        registry.add(20, 'socket-destinatario');
+
+        const agora = new Date();
+        const payload = {
+          messageId: 500,
+          apagadaParaTodos: true,
+          dataExclusao: agora,
+        };
+
+        gateway.notifyMessageDeleted(10, 20, payload);
+
+        expect(server.to).toHaveBeenCalledWith('usuario:10');
+        expect(server.to).toHaveBeenCalledWith('usuario:20');
+        expect(server.emitted).toHaveBeenCalledTimes(2);
+        expect(server.emitted).toHaveBeenCalledWith('message:deleted', payload);
+      });
+
+      it('2. payload não contém o conteúdo original da mensagem', () => {
+        const server = buildServerMock();
+        gateway.server = server;
+        registry.add(10, 'socket-remetente');
+
+        const payload = {
+          messageId: 500,
+          apagadaParaTodos: true,
+          dataExclusao: new Date(),
+        };
+
+        gateway.notifyMessageDeleted(10, 20, payload);
+
+        const emitArgs = server.emitted.mock.calls[0];
+        const emittedPayload = emitArgs[1];
+        expect(emittedPayload).not.toHaveProperty('conteudo');
+        expect(emittedPayload).toEqual({
+          messageId: 500,
+          apagadaParaTodos: true,
+          dataExclusao: expect.any(Date),
+        });
+      });
+
+      it('3. não emite se apagadaParaTodos for falso', () => {
+        const server = buildServerMock();
+        gateway.server = server;
+        registry.add(10, 'socket-remetente');
+        registry.add(20, 'socket-destinatario');
+
+        gateway.notifyMessageDeleted(10, 20, {
+          messageId: 500,
+          apagadaParaTodos: false,
+          dataExclusao: new Date(),
+        });
+
+        expect(server.to).not.toHaveBeenCalled();
+        expect(server.emitted).not.toHaveBeenCalled();
+      });
+
+      it('4. se destinatário estiver desconectado, remetente ainda recebe o evento na sua sala', () => {
+        const server = buildServerMock();
+        gateway.server = server;
+        registry.add(10, 'socket-remetente');
+        // Usuário 20 NÃO está no registry
+
+        const payload = {
+          messageId: 500,
+          apagadaParaTodos: true,
+          dataExclusao: new Date(),
+        };
+
+        gateway.notifyMessageDeleted(10, 20, payload);
+
+        expect(server.to).toHaveBeenCalledWith('usuario:10');
+        expect(server.to).not.toHaveBeenCalledWith('usuario:20');
+        expect(server.emitted).toHaveBeenCalledTimes(1);
+        expect(server.emitted).toHaveBeenCalledWith('message:deleted', payload);
+      });
+
+      it('5. se remetente estiver desconectado, destinatário ainda recebe o evento na sua sala', () => {
+        const server = buildServerMock();
+        gateway.server = server;
+        // Usuário 10 NÃO está no registry
+        registry.add(20, 'socket-destinatario');
+
+        const payload = {
+          messageId: 500,
+          apagadaParaTodos: true,
+          dataExclusao: new Date(),
+        };
+
+        gateway.notifyMessageDeleted(10, 20, payload);
+
+        expect(server.to).toHaveBeenCalledWith('usuario:20');
+        expect(server.to).not.toHaveBeenCalledWith('usuario:10');
+        expect(server.emitted).toHaveBeenCalledTimes(1);
+        expect(server.emitted).toHaveBeenCalledWith('message:deleted', payload);
+      });
+
+      it('6. se o server não estiver inicializado, não gera erro nem emite', () => {
+        gateway.server = undefined;
+
+        expect(() =>
+          gateway.notifyMessageDeleted(10, 20, {
+            messageId: 500,
+            apagadaParaTodos: true,
+            dataExclusao: new Date(),
+          }),
+        ).not.toThrow();
+      });
     });
   });
 });

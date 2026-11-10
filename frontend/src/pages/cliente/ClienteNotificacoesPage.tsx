@@ -4,14 +4,17 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { EmptyState, ErrorState } from '../../components/ui/States'
 import { Loading } from '../../components/ui/Loading'
+import { Modal } from '../../components/ui/Modal'
 import { AlertIcon, BellIcon, CheckIcon } from '../../components/ui/icons/Icon'
 import { useApiResource } from '../../hooks/useApiResource'
 import { notificationsService } from '../../services/api/notificationsService'
+import { clearAndLoadNotificationSnapshot } from '../../services/api/notificationSync'
 import { waitlistService } from '../../services/api/waitlistService'
 import { useToast } from '../../contexts/useToast'
 import type { Notificacao } from '../../types/domain'
 import { formatDateFull, formatTime } from '../../utils/format'
 import { mensagemDoErro } from './booking'
+import { ApiError } from '../../services/api/ApiError'
 import styles from './cliente.module.css'
 
 /**
@@ -34,12 +37,14 @@ export function ClienteNotificacoesPage() {
   const [itens, setItens] = useState<Notificacao[]>([])
   const [lendoId, setLendoId] = useState<number | null>(null)
   const [marcandoTodas, setMarcandoTodas] = useState(false)
+  const [limpando, setLimpando] = useState(false)
+  const [modalLimparAberto, setModalLimparAberto] = useState(false)
 
   // Rastreamento de ações em andamento nos claims para prevenir cliques concorrentes
   const [processandoClaimId, setProcessandoClaimId] = useState<number | null>(null)
   const [claimAcao, setClaimAcao] = useState<'aceitar' | 'recusar' | null>(null)
-  // Desfecho de claims nesta sessão (claimId -> 'aceito' | 'recusado')
-  const [desfechosClaim, setDesfechosClaim] = useState<Record<number, 'aceito' | 'recusado'>>({})
+  // Desfecho de claims nesta sessão (claimId -> 'aceito' | 'recusado' | 'expirado')
+  const [desfechosClaim, setDesfechosClaim] = useState<Record<number, 'aceito' | 'recusado' | 'expirado'>>({})
 
   useEffect(() => {
     if (carregamento.data) setItens(carregamento.data)
@@ -69,7 +74,27 @@ export function ClienteNotificacoesPage() {
         }).catch(() => undefined)
       }
     } catch (error) {
-      toast.error(mensagemDoErro(error), 'Não foi possível aceitar a vaga')
+      const msg = mensagemDoErro(error)
+      // Se o erro for 409 (claim expirado, recusado ou já ocupado por outro cliente)
+      if (error instanceof ApiError && error.status === 409) {
+        setDesfechosClaim((prev) => ({ ...prev, [claimId]: 'expirado' }))
+        // Atualiza o item local para lida
+        setItens((atual) =>
+          atual.map((item) =>
+            item.id === notificacao.id ? { ...item, lida: true, claimStatus: 'EXPIRADO' } : item,
+          ),
+        )
+        // Marca como lida no backend também
+        if (!notificacao.lida) {
+          notificationsService.markAsRead(notificacao.id).catch(() => undefined)
+        }
+        toast.notify(msg, {
+          tone: 'info',
+          title: 'Oportunidade não mais disponível',
+        })
+      } else {
+        toast.error(msg, 'Não foi possível aceitar a vaga')
+      }
     } finally {
       setProcessandoClaimId(null)
       setClaimAcao(null)
@@ -138,21 +163,53 @@ export function ClienteNotificacoesPage() {
     }
   }
 
+  async function limparNotificacoes() {
+    if (limpando) return
+    setLimpando(true)
+    try {
+      const snapshot = await clearAndLoadNotificationSnapshot(
+        notificationsService,
+      )
+      setItens(snapshot.notifications)
+      setModalLimparAberto(false)
+      toast.success('Notificações atualizadas com sucesso.')
+    } catch (error) {
+      toast.error(
+        mensagemDoErro(error),
+        'Não foi possível atualizar as notificações',
+      )
+    } finally {
+      setLimpando(false)
+    }
+  }
+
   return (
     <div className={styles.page}>
       <PageHeader
         title="Notificações"
         description="Avisos sobre seus agendamentos e oportunidades."
         actions={
-          itens.length > 0 &&
-          naoLidas.length > 0 && (
-            <Button
-              variant="secondary"
-              loading={marcandoTodas}
-              onClick={marcarTodasComoLidas}
-            >
-              Marcar todas como lidas
-            </Button>
+          itens.length > 0 && (
+            <div className={styles.actions}>
+              {naoLidas.length > 0 && (
+                <Button
+                  variant="secondary"
+                  loading={marcandoTodas}
+                  disabled={limpando}
+                  onClick={marcarTodasComoLidas}
+                >
+                  Marcar todas como lidas
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                loading={limpando}
+                disabled={marcandoTodas || limpando}
+                onClick={() => setModalLimparAberto(true)}
+              >
+                Limpar notificações
+              </Button>
+            </div>
           )
         }
       />
@@ -214,7 +271,15 @@ export function ClienteNotificacoesPage() {
                     {notificacao.titulo}
                   </span>
                   {notificacao.tipo === 'WAITLIST_OPPORTUNITY' && notificacao.claimId && (
-                    <span className={styles.notificationBadge}>Vaga disponível</span>
+                    <span className={styles.notificationBadge}>
+                      {notificacao.claimStatus === 'EXPIRADO' || desfechosClaim[notificacao.claimId] === 'expirado'
+                        ? 'Oportunidade encerrada'
+                        : notificacao.claimStatus === 'RECUSADO' || desfechosClaim[notificacao.claimId] === 'recusado'
+                        ? 'Vaga recusada'
+                        : notificacao.claimStatus === 'ACEITO' || desfechosClaim[notificacao.claimId] === 'aceito'
+                        ? 'Vaga aceita'
+                        : 'Vaga disponível'}
+                    </span>
                   )}
                 </div>
                 <p className={styles.notificationMessage}>
@@ -232,7 +297,7 @@ export function ClienteNotificacoesPage() {
               <div className={styles.notificationSide}>
                 {notificacao.tipo === 'WAITLIST_OPPORTUNITY' && notificacao.claimId ? (
                   <div className={styles.notificationActions}>
-                    {desfechosClaim[notificacao.claimId] === 'aceito' && (
+                    {(desfechosClaim[notificacao.claimId] === 'aceito' || notificacao.claimStatus === 'ACEITO') && (
                       <span
                         className={`${styles.notificationOutcome} ${styles.notificationOutcomeSuccess}`}
                       >
@@ -240,7 +305,7 @@ export function ClienteNotificacoesPage() {
                       </span>
                     )}
 
-                    {desfechosClaim[notificacao.claimId] === 'recusado' && (
+                    {(desfechosClaim[notificacao.claimId] === 'recusado' || notificacao.claimStatus === 'RECUSADO') && (
                       <span
                         className={`${styles.notificationOutcome} ${styles.notificationOutcomeNeutral}`}
                       >
@@ -248,46 +313,57 @@ export function ClienteNotificacoesPage() {
                       </span>
                     )}
 
-                    {!desfechosClaim[notificacao.claimId] && (
-                      <>
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          loading={
-                            processandoClaimId === notificacao.claimId &&
-                            claimAcao === 'aceitar'
-                          }
-                          disabled={processandoClaimId !== null}
-                          onClick={() => aceitarOportunidade(notificacao)}
-                        >
-                          Aceitar vaga
-                        </Button>
+                    {(desfechosClaim[notificacao.claimId] === 'expirado' || notificacao.claimStatus === 'EXPIRADO') && (
+                      <span
+                        className={`${styles.notificationOutcome} ${styles.notificationOutcomeNeutral}`}
+                      >
+                        Oportunidade encerrada
+                      </span>
+                    )}
+
+                    {!desfechosClaim[notificacao.claimId] &&
+                      (!notificacao.claimStatus || notificacao.claimStatus === 'ATIVO') && (
+                        <>
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            loading={
+                              processandoClaimId === notificacao.claimId &&
+                              claimAcao === 'aceitar'
+                            }
+                            disabled={processandoClaimId !== null}
+                            onClick={() => aceitarOportunidade(notificacao)}
+                          >
+                            Aceitar vaga
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            loading={
+                              processandoClaimId === notificacao.claimId &&
+                              claimAcao === 'recusar'
+                            }
+                            disabled={processandoClaimId !== null}
+                            onClick={() => recusarOportunidade(notificacao)}
+                          >
+                            Recusar
+                          </Button>
+                        </>
+                      )}
+
+                    {!notificacao.lida &&
+                      !desfechosClaim[notificacao.claimId] &&
+                      (!notificacao.claimStatus || notificacao.claimStatus === 'ATIVO') && (
                         <Button
                           variant="ghost"
                           size="sm"
-                          loading={
-                            processandoClaimId === notificacao.claimId &&
-                            claimAcao === 'recusar'
-                          }
-                          disabled={processandoClaimId !== null}
-                          onClick={() => recusarOportunidade(notificacao)}
+                          loading={lendoId === notificacao.id}
+                          disabled={lendoId !== null || processandoClaimId !== null}
+                          onClick={() => marcarComoLida(notificacao)}
                         >
-                          Recusar
+                          Marcar como lida
                         </Button>
-                      </>
-                    )}
-
-                    {!notificacao.lida && !desfechosClaim[notificacao.claimId] && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        loading={lendoId === notificacao.id}
-                        disabled={lendoId !== null || processandoClaimId !== null}
-                        onClick={() => marcarComoLida(notificacao)}
-                      >
-                        Marcar como lida
-                      </Button>
-                    )}
+                      )}
                   </div>
                 ) : (
                   !notificacao.lida && (
@@ -307,6 +383,40 @@ export function ClienteNotificacoesPage() {
           ))}
         </Card>
       )}
+
+      <Modal
+        open={modalLimparAberto}
+        onClose={() => {
+          if (!limpando) setModalLimparAberto(false)
+        }}
+        title="Limpar notificações"
+        description="Deseja limpar todas as notificações da sua caixa de entrada?"
+        footer={
+          <div className={styles.actionsEnd}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setModalLimparAberto(false)}
+              disabled={limpando}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={limpando}
+              disabled={limpando}
+              onClick={() => void limparNotificacoes()}
+            >
+              Confirmar
+            </Button>
+          </div>
+        }
+      >
+        <p style={{ margin: 0, color: 'var(--color-text)' }}>
+          Todas as notificações atuais serão removidas da sua visualização.
+        </p>
+      </Modal>
     </div>
   )
 }

@@ -7,6 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '../generated/prisma/client';
 import { TipoUsuario } from '../generated/prisma/enums';
+import { normalizeEmail } from '../common/utils/email.util';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { BarberResponseDto } from '../barbers/dto/barber-response.dto';
@@ -53,6 +54,7 @@ export class UsersService {
   async findAuthorizationStateById(userId: number): Promise<{
     id: number;
     ativo: boolean;
+    authVersion: number;
     tipoUsuario: TipoUsuario;
     barbeiro: { ativo: boolean } | null;
   } | null> {
@@ -61,6 +63,7 @@ export class UsersService {
       select: {
         id: true,
         ativo: true,
+        authVersion: true,
         tipoUsuario: true,
         barbeiro: {
           select: {
@@ -68,6 +71,16 @@ export class UsersService {
           },
         },
       },
+    });
+  }
+
+  async findAuthVersionById(userId: number): Promise<{
+    id: number;
+    authVersion: number;
+  } | null> {
+    return this.prisma.usuario.findUnique({
+      where: { id: userId },
+      select: { id: true, authVersion: true },
     });
   }
 
@@ -84,6 +97,51 @@ export class UsersService {
     }
 
     return this.sanitizeUser(usuario);
+  }
+
+  async findByEmail(email: string): Promise<{ id: number } | null> {
+    return this.prisma.usuario.findFirst({
+      where: { email: { equals: email, mode: 'insensitive' } },
+      select: { id: true },
+    });
+  }
+
+  async findByVerifiedEmail(email: string): Promise<UserResponseDto | null> {
+    const usuario = await this.prisma.usuario.findFirst({
+      where: {
+        email,
+        emailVerificadoEm: { not: null },
+        ativo: true,
+      },
+      select: this.publicUserSelect,
+    });
+
+    return this.sanitizeUser(usuario);
+  }
+
+  async findForPasswordRecovery(email: string): Promise<{
+    id: number;
+    email: string;
+    tipoUsuario: TipoUsuario;
+  } | null> {
+    const matches = await this.prisma.usuario.findMany({
+      where: {
+        email: { equals: email, mode: 'insensitive' },
+        emailVerificadoEm: { not: null },
+        ativo: true,
+      },
+      select: { id: true, email: true, tipoUsuario: true },
+      take: 2,
+    });
+
+    if (matches.length !== 1 || !matches[0].email) {
+      return null;
+    }
+    return matches[0] as {
+      id: number;
+      email: string;
+      tipoUsuario: TipoUsuario;
+    };
   }
 
   async findAllInternal(): Promise<UserResponseDto[]> {
@@ -229,7 +287,10 @@ export class UsersService {
       {};
     if (data.nome !== undefined) updates.nome = data.nome;
     if (data.telefone !== undefined) updates.telefone = data.telefone;
-    if (data.email !== undefined) updates.email = data.email; // null limpa o e-mail
+    if (data.email !== undefined) {
+      updates.email =
+        data.email === null ? null : normalizeEmail(data.email);
+    }
 
     if (Object.keys(updates).length === 0) {
       throw new BadRequestException(
@@ -250,20 +311,28 @@ export class UsersService {
       }
     }
 
-    const emailAlvo =
-      updates.email !== undefined ? updates.email : existingUser.email;
-    // O pre-check de e-mail só faz sentido para e-mail NÃO nulo:
-    // `email` é anulável e vários usuários podem tê-lo `null`.
-    // Buscar `null` com findFirst({ email: null }) encontraria QUALQUER
-    // usuário sem e-mail e geraria falso 409 (DEF-1).
-    if (emailAlvo !== null && emailAlvo !== existingUser.email) {
-      // `email` é único: findUnique exige string não nula, então a busca
-      // usa findFirst com filtro compatível.
+    const currentEmail =
+      existingUser.email === null ? null : normalizeEmail(existingUser.email);
+    const emailAlvo = updates.email;
+    const emailChanged =
+      updates.email !== undefined && updates.email !== currentEmail;
+    if (
+      !emailChanged &&
+      updates.email !== undefined &&
+      existingUser.email !== null
+    ) {
+      updates.email = existingUser.email;
+    }
+
+    if (emailAlvo !== undefined && emailAlvo !== null) {
       const pegouEmail = await this.prisma.usuario.findFirst({
-        where: { email: emailAlvo },
+        where: {
+          email: { equals: emailAlvo, mode: 'insensitive' },
+          id: { not: id },
+        },
+        select: { id: true },
       });
-      if (pegouEmail && pegouEmail.id !== id) {
-        // `emailAlvo !== null` garante que `updates.email` não é null aqui.
+      if (pegouEmail) {
         throw new ConflictException('E-mail já cadastrado em outra conta.');
       }
     }
@@ -272,11 +341,32 @@ export class UsersService {
     //    PrismaClientKnownRequestError P2002 (email/telefone único), converte
     //    em 409 com mensagem acessível.
     try {
-      const usuarioAtualizado = await this.prisma.usuario.update({
-        where: { id },
-        data: updates,
-        select: this.publicUserSelect,
-      });
+      const usuarioAtualizado = emailChanged
+        ? await this.prisma.$transaction(async (transaction) => {
+            const updatedUser = await transaction.usuario.update({
+              where: { id },
+              data: { ...updates, emailVerificadoEm: null },
+              select: this.publicUserSelect,
+            });
+            await transaction.emailVerificationToken.updateMany({
+              where: { usuarioId: id, usadoEm: null },
+              data: { usadoEm: new Date() },
+            });
+            await transaction.passwordResetToken.updateMany({
+              where: { usuarioId: id, usadoEm: null },
+              data: { usadoEm: new Date() },
+            });
+            await transaction.passwordResetToken.updateMany({
+              where: { usuarioId: id, usadoEm: null },
+              data: { usadoEm: new Date() },
+            });
+            return updatedUser;
+          })
+        : await this.prisma.usuario.update({
+            where: { id },
+            data: updates,
+            select: this.publicUserSelect,
+          });
 
       return this.sanitizeUser(usuarioAtualizado) as UserResponseDto;
     } catch (error) {
@@ -317,8 +407,28 @@ export class UsersService {
     tipoUsuario: 'CLIENTE' | 'BARBEIRO';
     email?: string | null;
   }) {
-    // Para clients, criar usuário + cliente atomicamente
-    if (data.tipoUsuario === 'CLIENTE') {
+    try {
+      // Para clients, criar usuário + cliente atomicamente
+      if (data.tipoUsuario === 'CLIENTE') {
+        const usuario = await this.prisma.usuario.create({
+          data: {
+            nome: data.nome,
+            telefone: data.telefone,
+            senhaHash: data.senhaHash,
+            tipoUsuario: data.tipoUsuario,
+            email: data.email || null,
+            ativo: true,
+            cliente: {
+              create: {},
+            },
+          },
+          select: this.publicUserSelect,
+        });
+
+        return this.sanitizeUser(usuario) as UserResponseDto;
+      }
+
+      // Para barbeiros ou outros tipos, criar apenas usuario
       const usuario = await this.prisma.usuario.create({
         data: {
           nome: data.nome,
@@ -327,29 +437,19 @@ export class UsersService {
           tipoUsuario: data.tipoUsuario,
           email: data.email || null,
           ativo: true,
-          cliente: {
-            create: {},
-          },
         },
         select: this.publicUserSelect,
       });
 
       return this.sanitizeUser(usuario) as UserResponseDto;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw this.buildUniqueConflictException(error);
+      }
+      throw error;
     }
-
-    // Para barbeiros ou outros tipos, criar apenas usuario
-    const usuario = await this.prisma.usuario.create({
-      data: {
-        nome: data.nome,
-        telefone: data.telefone,
-        senhaHash: data.senhaHash,
-        tipoUsuario: data.tipoUsuario,
-        email: data.email || null,
-        ativo: true,
-      },
-      select: this.publicUserSelect,
-    });
-
-    return this.sanitizeUser(usuario) as UserResponseDto;
   }
 }

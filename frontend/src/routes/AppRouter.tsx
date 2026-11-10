@@ -4,6 +4,9 @@ import { RedirectIfAuthenticated, RequireAuth } from './guards'
 import { ROUTES } from './routes'
 import { LoginPage } from '../pages/auth/LoginPage'
 import { RegisterPage } from '../pages/auth/RegisterPage'
+import { RequestPasswordRecoveryPage } from '../pages/auth/RequestPasswordRecoveryPage'
+import { ResetPasswordPage } from '../pages/auth/ResetPasswordPage'
+import { EmailVerificationPage } from '../pages/auth/EmailVerificationPage'
 import {
   ClienteMensagensPage,
 } from '../pages/cliente/ClientePages'
@@ -54,6 +57,12 @@ export function AppRouter() {
           </RedirectIfAuthenticated>
         }
       />
+      <Route
+        path={ROUTES.recoverPassword}
+        element={<RequestPasswordRecoveryPage />}
+      />
+      <Route path={ROUTES.resetPassword} element={<ResetPasswordPage />} />
+      <Route path={ROUTES.confirmEmail} element={<EmailVerificationPage />} />
 
       {/* Área do cliente */}
       <Route

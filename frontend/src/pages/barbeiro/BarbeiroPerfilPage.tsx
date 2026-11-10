@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '../../components/layout/PagePlaceholder'
 import { Avatar } from '../../components/ui/Avatar'
 import { Badge } from '../../components/ui/Badge'
@@ -12,6 +13,7 @@ import { useApiResource } from '../../hooks/useApiResource'
 import { useAsyncAction } from '../../hooks/useAsyncAction'
 import { authService } from '../../services/api/authService'
 import { useToast } from '../../contexts/useToast'
+import { ROUTES } from '../../routes/routes'
 import type { Usuario, UpdateUserInput } from '../../types/domain'
 import { formatDateFull, formatPhone } from '../../utils/format'
 import styles from './barbeiro.module.css'
@@ -34,6 +36,7 @@ function papelLabel(tipoUsuario: Usuario['tipoUsuario']): string {
  */
 export function BarbeiroPerfilPage() {
   const toast = useToast()
+  const navigate = useNavigate()
   const perfil = useApiResource('auth:me:perfil:barbeiro', (signal) =>
     authService.me(signal),
   )
@@ -170,6 +173,12 @@ export function BarbeiroPerfilPage() {
                     disabled={update.loading}
                   >
                     Editar dados
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => navigate(ROUTES.confirmEmail)}
+                  >
+                    Confirmar e-mail
                   </Button>
                 </div>
               </section>

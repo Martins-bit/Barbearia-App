@@ -1,13 +1,17 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { PageHeader } from '../../components/layout/PagePlaceholder'
 import { Button } from '../../components/ui/Button'
 import { EmptyState, ErrorState } from '../../components/ui/States'
 import { Loading } from '../../components/ui/Loading'
 import { Avatar } from '../../components/ui/Avatar'
+import { Modal } from '../../components/ui/Modal'
 import { useAuth } from '../../contexts/useAuth'
 import { useToast } from '../../contexts/useToast'
 import { useMensagens } from '../../hooks/useMensagens'
 import { formatTime } from '../../utils/format'
+import type { Mensagem, ModoExclusaoMensagem } from '../../types/domain'
+import { podeApagarParaTodos } from '../cliente/mensagemRegras'
 import styles from './mensagens.module.css'
 
 /** Rótulo curto do item da lista (horário se hoje, "Ontem", ou dd/mm). */
@@ -50,6 +54,43 @@ export function BarbeiroMensagensPage() {
     },
     contatoNavegacao,
   )
+
+  // ---- Estados de Exclusão de Mensagem (Etapa 4) ----
+  const [menuAbertoId, setMenuAbertoId] = useState<number | null>(null)
+  const [modalExclusao, setModalExclusao] = useState<{
+    mensagem: Mensagem
+    modo: ModoExclusaoMensagem
+  } | null>(null)
+  const menuContainerRef = useRef<HTMLDivElement | null>(null)
+
+  // Fecha o menu de opções ao clicar fora
+  useEffect(() => {
+    function handleClickFora(event: MouseEvent) {
+      if (
+        menuContainerRef.current &&
+        !menuContainerRef.current.contains(event.target as Node)
+      ) {
+        setMenuAbertoId(null)
+      }
+    }
+    if (menuAbertoId !== null) {
+      document.addEventListener('mousedown', handleClickFora)
+      return () => document.removeEventListener('mousedown', handleClickFora)
+    }
+  }, [menuAbertoId])
+
+  const confirmarExclusao = useCallback(async () => {
+    if (!modalExclusao) return
+    const { mensagem, modo } = modalExclusao
+    const sucesso = await msg.excluirMensagem(mensagem.id, modo)
+    if (sucesso) {
+      toast.notify('Mensagem apagada com sucesso.', {
+        tone: 'success',
+        title: 'Mensagens',
+      })
+      setModalExclusao(null)
+    }
+  }, [modalExclusao, msg, toast])
 
   const semConversas =
     !msg.carregandoConversas && !msg.erroConversas && msg.conversas.length === 0
@@ -185,24 +226,145 @@ export function BarbeiroMensagensPage() {
                     ) : (
                       msg.historico.map((mensagem) => {
                         const minha = mensagem.remetenteUsuarioId === usuarioId
+                        const apagada = Boolean(mensagem.apagadaParaTodos)
+                        const menuAberto = menuAbertoId === mensagem.id
+                        const podeTodos = podeApagarParaTodos(mensagem, usuarioId)
+
                         return (
                           <div
                             key={mensagem.id}
                             className={[
-                              styles.bolha,
-                              minha ? styles.bolhaMinha : styles.bolhaDele,
+                              styles.bolhaContainer,
+                              minha ? styles.bolhaContainerMinha : styles.bolhaContainerDele,
                             ]
                               .filter(Boolean)
                               .join(' ')}
                           >
-                            <p className={styles.bolhaTexto}>{mensagem.conteudo}</p>
-                            <time
-                              className={styles.bolhaHora}
-                              dateTime={mensagem.dataCriacao}
+                            <div
+                              className={[
+                                styles.bolhaWrapper,
+                                minha ? styles.bolhaWrapperMinha : styles.bolhaWrapperDele,
+                              ]
+                                .filter(Boolean)
+                                .join(' ')}
+                              ref={menuAberto ? menuContainerRef : undefined}
                             >
-                              {formatTime(mensagem.dataCriacao)}
-                              {!minha && !mensagem.lida ? ' · não lida' : ''}
-                            </time>
+                              <div
+                                className={[
+                                  styles.bolha,
+                                  minha ? styles.bolhaMinha : styles.bolhaDele,
+                                  apagada ? styles.bolhaApagada : '',
+                                ]
+                                  .filter(Boolean)
+                                  .join(' ')}
+                              >
+                                <p
+                                  className={[
+                                    styles.bolhaTexto,
+                                    apagada ? styles.bolhaTextoApagada : '',
+                                  ]
+                                    .filter(Boolean)
+                                    .join(' ')}
+                                >
+                                  {mensagem.conteudo}
+                                </p>
+                                <time
+                                  className={styles.bolhaHora}
+                                  dateTime={mensagem.dataCriacao}
+                                >
+                                  {formatTime(mensagem.dataCriacao)}
+                                  {!minha && !mensagem.lida && !apagada ? ' · não lida' : ''}
+                                </time>
+                              </div>
+
+                              {/* Menu de opções (não exibe se já apagada globalmente) */}
+                              {!apagada && (
+                                <div style={{ position: 'relative' }}>
+                                  <button
+                                    type="button"
+                                    className={[
+                                      styles.botaoMenu,
+                                      menuAberto ? styles.botaoMenuVisivel : '',
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' ')}
+                                    aria-label="Opções da mensagem"
+                                    aria-haspopup="true"
+                                    aria-expanded={menuAberto}
+                                    onClick={() =>
+                                      setMenuAbertoId(menuAberto ? null : mensagem.id)
+                                    }
+                                  >
+                                    <svg
+                                      width="16"
+                                      height="16"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      aria-hidden="true"
+                                    >
+                                      <circle cx="12" cy="12" r="1" />
+                                      <circle cx="12" cy="5" r="1" />
+                                      <circle cx="12" cy="19" r="1" />
+                                    </svg>
+                                  </button>
+
+                                  {menuAberto && (
+                                    <div
+                                      className={[
+                                        styles.menuDropdown,
+                                        minha
+                                          ? styles.menuDropdownDireita
+                                          : styles.menuDropdownEsquerda,
+                                      ]
+                                        .filter(Boolean)
+                                        .join(' ')}
+                                      role="menu"
+                                    >
+                                      <button
+                                        type="button"
+                                        role="menuitem"
+                                        className={styles.menuItem}
+                                        onClick={() => {
+                                          setMenuAbertoId(null)
+                                          setModalExclusao({
+                                            mensagem,
+                                            modo: 'PARA_MIM',
+                                          })
+                                        }}
+                                      >
+                                        Apagar para mim
+                                      </button>
+
+                                      {podeTodos && (
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className={[
+                                            styles.menuItem,
+                                            styles.menuItemPerigo,
+                                          ]
+                                            .filter(Boolean)
+                                            .join(' ')}
+                                          onClick={() => {
+                                            setMenuAbertoId(null)
+                                            setModalExclusao({
+                                              mensagem,
+                                              modo: 'PARA_TODOS',
+                                            })
+                                          }}
+                                        >
+                                          Apagar para todos
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )
                       })
@@ -247,6 +409,46 @@ export function BarbeiroMensagensPage() {
           </div>
         )}
       </section>
+
+      {/* Modal de Confirmação de Exclusão */}
+      <Modal
+        open={modalExclusao !== null}
+        onClose={() => {
+          if (msg.excluindoId === null) setModalExclusao(null)
+        }}
+        title={
+          modalExclusao?.modo === 'PARA_TODOS'
+            ? 'Apagar mensagem para todos?'
+            : 'Apagar mensagem para você?'
+        }
+        footer={
+          <div className={styles.modalConfirmacaoAcoes}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setModalExclusao(null)}
+              disabled={msg.excluindoId !== null}
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              loading={msg.excluindoId !== null}
+              disabled={msg.excluindoId !== null}
+              onClick={() => void confirmarExclusao()}
+            >
+              Confirmar exclusão
+            </Button>
+          </div>
+        }
+      >
+        <p className={styles.modalConfirmacaoTexto}>
+          {modalExclusao?.modo === 'PARA_TODOS'
+            ? 'Esta mensagem será apagada para você e para o outro participante. Essa ação não poderá ser desfeita.'
+            : 'Esta mensagem será apagada somente para você. O outro participante continuará vendo a mensagem.'}
+        </p>
+      </Modal>
     </div>
   )
 }

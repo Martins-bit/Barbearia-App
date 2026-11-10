@@ -7,7 +7,12 @@ import { buildCorsOptions, resolveAllowedOrigins } from './cors.config';
 describe('resolveAllowedOrigins', () => {
   it('em desenvolvimento, sem configuração, usa as origens locais padrão', () => {
     const origins = resolveAllowedOrigins({ NODE_ENV: 'development' });
-    expect(origins).toEqual(['http://localhost:5173', 'http://localhost:5174']);
+    expect(origins).toEqual([
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:5174',
+      'http://localhost:5175',
+    ]);
   });
 
   it('lê e normaliza CORS_ALLOWED_ORIGINS (vírgulas, espaços, vazios)', () => {

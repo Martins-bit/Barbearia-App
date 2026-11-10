@@ -5,26 +5,37 @@ import type { Notificacao } from '../../types/domain.ts'
 /**
  * Função de domínio que identifica se uma notificação é uma oportunidade de
  * lista de espera elegível para ações de aceite ou recusa.
+ * Ações só são elegíveis quando o claim associado estiver ATIVO (ou pendente de status inicial)
+ * e não estiver RECUSADO, EXPIRADO ou ACEITO.
  */
 export function isOportunidadeEsperaComClaim(
-  notificacao: Pick<Notificacao, 'tipo' | 'claimId'>,
+  notificacao: Pick<Notificacao, 'tipo' | 'claimId' | 'claimStatus'>,
 ): boolean {
-  return (
-    notificacao.tipo === 'WAITLIST_OPPORTUNITY' &&
-    typeof notificacao.claimId === 'number' &&
-    Number.isInteger(notificacao.claimId) &&
-    notificacao.claimId > 0
-  )
+  if (
+    notificacao.tipo !== 'WAITLIST_OPPORTUNITY' ||
+    typeof notificacao.claimId !== 'number' ||
+    !Number.isInteger(notificacao.claimId) ||
+    notificacao.claimId <= 0
+  ) {
+    return false
+  }
+
+  // Se o backend informou o status do claim, só é acionável quando ATIVO
+  if (notificacao.claimStatus && notificacao.claimStatus !== 'ATIVO') {
+    return false
+  }
+
+  return true
 }
 
 /**
  * Redutor determinístico do estado de desfecho do claim (espelha as transições da página).
  */
 export function aplicarDesfechoClaim(
-  desfechosAtuais: Record<number, 'aceito' | 'recusado'>,
+  desfechosAtuais: Record<number, 'aceito' | 'recusado' | 'expirado'>,
   claimId: number,
-  desfecho: 'aceito' | 'recusado',
-): Record<number, 'aceito' | 'recusado'> {
+  desfecho: 'aceito' | 'recusado' | 'expirado',
+): Record<number, 'aceito' | 'recusado' | 'expirado'> {
   return {
     ...desfechosAtuais,
     [claimId]: desfecho,
@@ -33,15 +44,43 @@ export function aplicarDesfechoClaim(
 
 describe('Regras de Oportunidade em Notificações (ClienteNotificacoesPage)', () => {
   it('identifica notificação WAITLIST_OPPORTUNITY com claimId válido como elegível para ações', () => {
-    const notificacaoValida: Pick<Notificacao, 'tipo' | 'claimId'> = {
+    const notificacaoValida: Pick<Notificacao, 'tipo' | 'claimId' | 'claimStatus'> = {
       tipo: 'WAITLIST_OPPORTUNITY',
       claimId: 42,
+      claimStatus: 'ATIVO',
     }
     assert.equal(isOportunidadeEsperaComClaim(notificacaoValida), true)
   })
 
+  it('não exibe ações quando a notificação possui claim com status EXPIRADO', () => {
+    const notificacaoExpirada: Pick<Notificacao, 'tipo' | 'claimId' | 'claimStatus'> = {
+      tipo: 'WAITLIST_OPPORTUNITY',
+      claimId: 42,
+      claimStatus: 'EXPIRADO',
+    }
+    assert.equal(isOportunidadeEsperaComClaim(notificacaoExpirada), false)
+  })
+
+  it('não exibe ações quando a notificação possui claim com status RECUSADO', () => {
+    const notificacaoRecusada: Pick<Notificacao, 'tipo' | 'claimId' | 'claimStatus'> = {
+      tipo: 'WAITLIST_OPPORTUNITY',
+      claimId: 42,
+      claimStatus: 'RECUSADO',
+    }
+    assert.equal(isOportunidadeEsperaComClaim(notificacaoRecusada), false)
+  })
+
+  it('não exibe ações quando a notificação possui claim com status ACEITO', () => {
+    const notificacaoAceita: Pick<Notificacao, 'tipo' | 'claimId' | 'claimStatus'> = {
+      tipo: 'WAITLIST_OPPORTUNITY',
+      claimId: 42,
+      claimStatus: 'ACEITO',
+    }
+    assert.equal(isOportunidadeEsperaComClaim(notificacaoAceita), false)
+  })
+
   it('não apresenta ações para notificação WAITLIST_OPPORTUNITY legada sem claimId', () => {
-    const notificacaoSemClaim: Pick<Notificacao, 'tipo' | 'claimId'> = {
+    const notificacaoSemClaim: Pick<Notificacao, 'tipo' | 'claimId' | 'claimStatus'> = {
       tipo: 'WAITLIST_OPPORTUNITY',
       claimId: undefined,
     }
@@ -67,8 +106,8 @@ describe('Regras de Oportunidade em Notificações (ClienteNotificacoesPage)', (
     assert.equal(isOportunidadeEsperaComClaim(lembrete), false)
   })
 
-  it('registra desfecho "aceito" e "recusado" de forma isolada por claimId', () => {
-    let desfechos: Record<number, 'aceito' | 'recusado'> = {}
+  it('registra desfecho "aceito", "recusado" e "expirado" de forma isolada por claimId', () => {
+    let desfechos: Record<number, 'aceito' | 'recusado' | 'expirado'> = {}
 
     desfechos = aplicarDesfechoClaim(desfechos, 10, 'aceito')
     assert.equal(desfechos[10], 'aceito')
@@ -77,6 +116,9 @@ describe('Regras de Oportunidade em Notificações (ClienteNotificacoesPage)', (
     desfechos = aplicarDesfechoClaim(desfechos, 20, 'recusado')
     assert.equal(desfechos[10], 'aceito')
     assert.equal(desfechos[20], 'recusado')
+
+    desfechos = aplicarDesfechoClaim(desfechos, 30, 'expirado')
+    assert.equal(desfechos[30], 'expirado')
   })
 })
 

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -20,6 +21,7 @@ import {
   UnreadCountDto,
 } from './dto/message-response.dto';
 import { SendMessageDto } from './dto/send-message.dto';
+import { DeleteMessageDto } from './dto/delete-message.dto';
 import { MessagesService } from './messages.service';
 
 /**
@@ -82,5 +84,14 @@ export class MessagesController {
     @Param('id', ParseIntPipe) messageId: number,
   ): Promise<MessageResponseDto> {
     return this.messagesService.markAsRead(usuarioId, messageId);
+  }
+
+  @Delete(':id')
+  async deleteMessage(
+    @CurrentUser() usuarioId: number,
+    @Param('id', ParseIntPipe) messageId: number,
+    @Body() dto: DeleteMessageDto,
+  ): Promise<MessageResponseDto> {
+    return this.messagesService.deleteMessage(usuarioId, messageId, dto);
   }
 }

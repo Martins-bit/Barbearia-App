@@ -1,6 +1,6 @@
-import { ApiError, parseApiErrorMessage } from './ApiError'
+import { ApiError, parseApiErrorMessage } from './ApiError.ts'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
+const API_BASE_URL = import.meta.env?.VITE_API_URL ?? 'http://localhost:3000'
 
 const TOKEN_STORAGE_KEY = 'bb.auth.token'
 
@@ -99,6 +99,6 @@ export const http = {
     request<T>(path, { ...options, method: 'PATCH', body }),
   put: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'method' | 'body'>) =>
     request<T>(path, { ...options, method: 'PUT', body }),
-  delete: <T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>) =>
-    request<T>(path, { ...options, method: 'DELETE' }),
+  delete: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'method' | 'body'>) =>
+    request<T>(path, { ...options, method: 'DELETE', body }),
 }

@@ -8,6 +8,7 @@ export interface MessageResponseDto {
   lida: boolean;
   dataCriacao: Date;
   dataLeitura: Date | null;
+  apagadaParaTodos?: boolean;
 }
 
 /**

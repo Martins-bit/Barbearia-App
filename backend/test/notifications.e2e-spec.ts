@@ -22,6 +22,7 @@ describe('Notifications (e2e)', () => {
   let notificationsService: NotificationsService;
   let clientAToken: string;
   let clientBToken: string;
+  let barberToken: string;
   let clientAId: number;
   let clientBId: number;
   let clientAUserId: number;
@@ -134,6 +135,7 @@ describe('Notifications (e2e)', () => {
 
     clientAToken = await login(clientA.phone);
     clientBToken = await login(clientB.phone);
+    barberToken = await login(barber.telefone);
   });
 
   afterAll(async () => {
@@ -708,5 +710,235 @@ describe('Notifications (e2e)', () => {
     );
     expect(items).toHaveLength(2);
     expect(items.every((item: any) => item.usuarioId === undefined)).toBe(true);
+  });
+
+  describe('limpeza segura de notificações (DELETE /notifications)', () => {
+    it('notificação comum é limpa normalmente via HTTP direto', async () => {
+      const notif = await prisma.notificacao.create({
+        data: {
+          usuarioId: clientAUserId,
+          tipo: TipoNotificacao.AVISO,
+          titulo: 'Aviso comum',
+          mensagem: 'Pode ser limpo',
+        },
+      });
+      notificationIds.push(notif.id);
+
+      const res = await request(app.getHttpServer())
+        .delete('/notifications')
+        .set('Authorization', `Bearer ${clientAToken}`)
+        .expect(200);
+
+      expect(res.body.cleared).toBeGreaterThanOrEqual(1);
+
+      const check = await prisma.notificacao.findUnique({
+        where: { id: notif.id },
+      });
+      expect(check?.limpa).toBe(true);
+      expect(check?.lida).toBe(true);
+    });
+
+    it('oportunidade ATIVA é preservada contra DELETE /notifications direto', async () => {
+      const { claim } = await createClaimFixture('2099-06-01', clientAId);
+      const notif = await prisma.notificacao.create({
+        data: {
+          usuarioId: clientAUserId,
+          claimId: claim.id,
+          tipo: TipoNotificacao.WAITLIST_OPPORTUNITY,
+          titulo: 'Oportunidade Ativa',
+          mensagem: 'Aguardando aceite',
+          lida: false,
+        },
+      });
+      notificationIds.push(notif.id);
+
+      await request(app.getHttpServer())
+        .delete('/notifications')
+        .set('Authorization', `Bearer ${clientAToken}`)
+        .expect(200);
+
+      const check = await prisma.notificacao.findUnique({
+        where: { id: notif.id },
+      });
+      expect(check?.limpa).toBe(false);
+    });
+
+    it('oportunidade ACEITA e lista ATENDIDA é limpa normalmente via HTTP direto', async () => {
+      const { entry, claim } = await createClaimFixture('2099-06-02', clientAId);
+      await prisma.waitlistClaim.update({
+        where: { id: claim.id },
+        data: { status: StatusWaitlistClaim.ACEITO },
+      });
+      await prisma.listaEspera.update({
+        where: { id: entry.id },
+        data: { status: StatusListaEspera.ATENDIDA },
+      });
+
+      const notif = await prisma.notificacao.create({
+        data: {
+          usuarioId: clientAUserId,
+          claimId: claim.id,
+          tipo: TipoNotificacao.WAITLIST_OPPORTUNITY,
+          titulo: 'Oportunidade Aceita',
+          mensagem: 'Já virou agendamento atendido',
+        },
+      });
+      notificationIds.push(notif.id);
+
+      const res = await request(app.getHttpServer())
+        .delete('/notifications')
+        .set('Authorization', `Bearer ${clientAToken}`)
+        .expect(200);
+
+      expect(res.body.cleared).toBeGreaterThanOrEqual(1);
+
+      const check = await prisma.notificacao.findUnique({
+        where: { id: notif.id },
+      });
+      expect(check?.limpa).toBe(true);
+      expect(check?.lida).toBe(true);
+    });
+
+    it('oportunidade RECUSADA é preservada contra DELETE /notifications direto', async () => {
+      const { claim } = await createClaimFixture('2099-06-03', clientAId);
+      await prisma.waitlistClaim.update({
+        where: { id: claim.id },
+        data: { status: StatusWaitlistClaim.RECUSADO },
+      });
+
+      const notif = await prisma.notificacao.create({
+        data: {
+          usuarioId: clientAUserId,
+          claimId: claim.id,
+          tipo: TipoNotificacao.WAITLIST_OPPORTUNITY,
+          titulo: 'Oportunidade Recusada',
+          mensagem: 'Recusada pelo cliente',
+        },
+      });
+      notificationIds.push(notif.id);
+
+      await request(app.getHttpServer())
+        .delete('/notifications')
+        .set('Authorization', `Bearer ${clientAToken}`)
+        .expect(200);
+
+      const check = await prisma.notificacao.findUnique({
+        where: { id: notif.id },
+      });
+      expect(check?.limpa).toBe(false);
+    });
+
+    it('oportunidade EXPIRADA é preservada contra DELETE /notifications direto', async () => {
+      const { claim } = await createClaimFixture('2099-06-04', clientAId);
+      await prisma.waitlistClaim.update({
+        where: { id: claim.id },
+        data: { status: StatusWaitlistClaim.EXPIRADO },
+      });
+
+      const notif = await prisma.notificacao.create({
+        data: {
+          usuarioId: clientAUserId,
+          claimId: claim.id,
+          tipo: TipoNotificacao.WAITLIST_OPPORTUNITY,
+          titulo: 'Oportunidade Expirada',
+          mensagem: 'Prazo estourou',
+        },
+      });
+      notificationIds.push(notif.id);
+
+      await request(app.getHttpServer())
+        .delete('/notifications')
+        .set('Authorization', `Bearer ${clientAToken}`)
+        .expect(200);
+
+      const check = await prisma.notificacao.findUnique({
+        where: { id: notif.id },
+      });
+      expect(check?.limpa).toBe(false);
+    });
+
+    it('notificação WAITLIST_OPPORTUNITY sem claimId é preservada', async () => {
+      const notif = await prisma.notificacao.create({
+        data: {
+          usuarioId: clientAUserId,
+          tipo: TipoNotificacao.WAITLIST_OPPORTUNITY,
+          titulo: 'Oportunidade Sem Claim',
+          mensagem: 'Sem claimId vinculado',
+        },
+      });
+      notificationIds.push(notif.id);
+
+      await request(app.getHttpServer())
+        .delete('/notifications')
+        .set('Authorization', `Bearer ${clientAToken}`)
+        .expect(200);
+
+      const check = await prisma.notificacao.findUnique({
+        where: { id: notif.id },
+      });
+      expect(check?.limpa).toBe(false);
+    });
+
+    it('não confunde lida com atendida (notificação lida com claim ATIVO permanece)', async () => {
+      const { claim } = await createClaimFixture('2099-06-05', clientAId);
+      const notif = await prisma.notificacao.create({
+        data: {
+          usuarioId: clientAUserId,
+          claimId: claim.id,
+          tipo: TipoNotificacao.WAITLIST_OPPORTUNITY,
+          titulo: 'Oportunidade Lida Mas Pendente',
+          mensagem: 'Lida no app, mas ainda não atendida',
+          lida: true,
+          dataLeitura: new Date(),
+        },
+      });
+      notificationIds.push(notif.id);
+
+      await request(app.getHttpServer())
+        .delete('/notifications')
+        .set('Authorization', `Bearer ${clientAToken}`)
+        .expect(200);
+
+      const check = await prisma.notificacao.findUnique({
+        where: { id: notif.id },
+      });
+      expect(check?.limpa).toBe(false);
+      expect(check?.lida).toBe(true);
+    });
+
+    it('isolamento entre usuários na chamada DELETE /notifications', async () => {
+      const notifA = await prisma.notificacao.create({
+        data: {
+          usuarioId: clientAUserId,
+          tipo: TipoNotificacao.AVISO,
+          titulo: 'Aviso Cliente A',
+          mensagem: 'Aviso A',
+        },
+      });
+      const notifB = await prisma.notificacao.create({
+        data: {
+          usuarioId: clientBUserId,
+          tipo: TipoNotificacao.AVISO,
+          titulo: 'Aviso Cliente B',
+          mensagem: 'Aviso B',
+        },
+      });
+      notificationIds.push(notifA.id, notifB.id);
+
+      await request(app.getHttpServer())
+        .delete('/notifications')
+        .set('Authorization', `Bearer ${clientAToken}`)
+        .expect(200);
+
+      const checkA = await prisma.notificacao.findUnique({
+        where: { id: notifA.id },
+      });
+      const checkB = await prisma.notificacao.findUnique({
+        where: { id: notifB.id },
+      });
+
+      expect(checkA?.limpa).toBe(true);
+      expect(checkB?.limpa).toBe(false);
+    });
   });
 });

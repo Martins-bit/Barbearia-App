@@ -77,6 +77,10 @@ nas operações sensíveis. Leituras e demais rotas legítimas **não** são lim
 |---|---|---|---|
 | `POST /auth/login` | 10 | 60 s | IP do cliente |
 | `POST /auth/register` | 5 | 60 s | IP do cliente |
+| `POST /auth/email/verification/request` | 3 | 60 s | IP do cliente; também 3 por usuário/hora |
+| `POST /auth/email/verification/confirm` | 5 | 60 s | IP do cliente |
+| `POST /auth/password-recovery` | 5 | 60 s | IP do cliente; também 3 tentativas por identificador normalizado/hora |
+| `POST /auth/password-reset` | 10 | 60 s | IP do cliente |
 | `POST /messages` (REST) | 30 | 60 s | **usuário autenticado** (`sub` do JWT) |
 | Socket.IO `message:send` | 30 | 60 s | usuário autenticado (`sub`) |
 
@@ -85,6 +89,16 @@ nas operações sensíveis. Leituras e demais rotas legítimas **não** são lim
   usuários.
 - O excesso retorna **`429`** (REST) ou um erro de limitação equivalente no
   socket, respeitando o formato de erro já usado no projeto.
+- A solicitação de confirmação exige sessão e usa somente o e-mail do usuário
+  autenticado; os limites por IP são complementados por uma cota persistida por
+  usuário. A confirmação não exige sessão e responde genericamente para tokens
+  inválidos, expirados ou reutilizados.
+- Tokens de confirmação são aleatórios, armazenados como hash e consumidos na
+  mesma transação que marca o endereço verificado. Mudança de e-mail invalida
+  tokens pendentes e remove a confirmação anterior.
+- O provedor de envio ainda não está configurado. A solicitação retorna `503`
+  sem criar token nem afirmar que o e-mail foi enviado; nenhuma credencial de
+  e-mail está configurada nesta etapa.
 - A janela de tempo do socket usa o utilitário
   `common/utils/sliding-window-rate-limiter.ts` (janela deslizante, em memória,
   por processo).
@@ -112,7 +126,52 @@ A API poderá rodar atrás do **Cloudflare**. Pontos obrigatórios:
 > Enquanto o domínio e a topologia finais não estiverem definidos, mantenha
 > `TRUST_PROXY` desligado (comportamento conservador atual).
 
-## 6. Arquivos relacionados
+## 6. Isolamento dos testes E2E
+
+Os E2E do backend podem criar e remover registros. A configuração de testes é
+`backend/test/.env.e2e`; a configuração de migrations é
+`backend/test/.env.e2e.migrate`. Ambas são arquivos locais ignorados pelo Git e
+não podem reutilizar as credenciais de `backend/.env`.
+
+O destino permitido é `barbearia_app_e2e` em `127.0.0.1` ou `::1`, porta
+explícita `5432`, com somente `schema=public`. URLs remotas, hosts como
+`localhost`, parâmetros repetidos/de destino, usuários não esperados e
+configuração ausente são rejeitados. A role de execução
+`barbearia_e2e_test` e a role de migration `barbearia_e2e_migrator` são
+separadas e não podem ser superusuárias. A primeira recebe apenas privilégios
+de conexão, CRUD e sequência no schema de teste; a segunda recebe somente
+privilégios de DDL necessários nesse banco. A criação e concessão dessas roles
+é uma tarefa administrativa separada.
+
+`npm run test:e2e` valida antes do Jest; o setup do Jest repete a validação.
+O runner remove variáveis herdadas `DATABASE_URL`, `DIRECT_URL`, URLs Prisma e
+variáveis `PG*` antes de iniciar processos filhos, e fornece a URL já
+validada. O teste não cria nem limpa bancos. `npm run test:e2e:guard` cobre
+essas regras com processos simulados, sem conectar ao PostgreSQL.
+
+O caminho oficial para migrations E2E é `npm run db:e2e:migrate`, que fixa
+`prisma.e2e.config.ts`, `test/.env.e2e.migrate` e a role específica de
+migration. O wrapper rejeita uma tentativa de substituir o config com
+`--config`; o config dedicado também valida destino e credenciais antes de o
+Prisma abrir conexão. `E2E_MIGRATION_RUNNER_AUTH=1` é uma confirmação explícita
+de execução, não uma autenticação nem prova de que o wrapper foi usado: o valor
+pode ser definido manualmente.
+
+A configuração Prisma padrão valida `migrate` e `db push` somente quando ela
+própria é selecionada: exige `PRISMA_MIGRATION_TARGET=development` e uma URL
+para `barbearia_app` local na porta 5432. Esses controles locais não impedem
+universalmente o uso direto do Prisma com um arquivo `--config` arbitrário,
+que pode não carregar os guards do projeto. Portanto, os caminhos oficiais são
+protegidos, mas a proteção definitiva contra outros destinos depende de roles
+PostgreSQL com privilégio mínimo e credenciais de produção indisponíveis aos
+processos de teste/desenvolvimento.
+
+O bloqueio não cria, remove ou valida o conteúdo dos bancos. Confirme
+administrativamente a finalidade do banco isolado e os privilégios das roles
+antes de executar o runner. Arquivos `_diag-*` são excluídos da seleção normal
+e qualquer execução manual também exige validação E2E.
+
+## 7. Arquivos relacionados
 
 - `backend/src/main.ts` — Helmet, `trust proxy` (opt-in), CORS REST.
 - `backend/src/common/config/cors.config.ts` — resolução/validação das origens.

@@ -18,8 +18,8 @@ const REMINDER_INTERVAL_MS = 5 * 60 * 1000;
  *   idempotente (transação + advisory lock transacional namespace 5), então
  *   nenhum lembrete é duplicado. Nenhum novo advisory lock é criado aqui.
  * - Não envia comunicação externa (e-mail/SMS/push); apenas cria notificações
- *   internas. O motor compara instantes, por isso recebe o instante real
- *   (`new Date()`) — sem timezone fake.
+ *   internas. O motor obtém o instante de referência diretamente do
+ *   PostgreSQL, evitando divergência entre relógios da aplicação e do banco.
  */
 @Injectable()
 export class ReminderSchedulerService {
@@ -31,7 +31,7 @@ export class ReminderSchedulerService {
   async handleReminders(): Promise<void> {
     try {
       const result =
-        await this.notificationsService.processAppointmentReminders(new Date());
+        await this.notificationsService.processAppointmentReminders();
       if (result.created > 0) {
         this.logger.log(
           `Motor de lembretes criou ${result.created} notificação(ões) LEMBRETE.`,

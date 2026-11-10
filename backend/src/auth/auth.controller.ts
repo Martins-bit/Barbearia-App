@@ -14,10 +14,22 @@ import { AuthResponseDto } from './dto/auth-response.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
 import { JwtGuard } from './guards/jwt.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
+import { Roles } from './decorators/roles.decorator';
+import { RolesGuard } from './guards/roles.guard';
+import { TipoUsuario } from '../generated/prisma/enums';
+import { ConfirmEmailDto } from './dto/confirm-email.dto';
+import { EmailVerificationService } from './email-verification.service';
+import { PasswordRecoveryService } from './password-recovery.service';
+import { PasswordRecoveryDto } from './dto/password-recovery.dto';
+import { PasswordResetDto } from './dto/password-reset.dto';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly emailVerificationService: EmailVerificationService,
+    private readonly passwordRecoveryService: PasswordRecoveryService,
+  ) {}
 
   /**
    * POST /auth/register
@@ -41,6 +53,47 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async login(@Body() loginDto: LoginDto): Promise<LoginResponseDto> {
     return this.authService.login(loginDto);
+  }
+
+  @Post('email/verification/request')
+  @HttpCode(202)
+  @UseGuards(JwtGuard, RolesGuard, ThrottlerGuard)
+  @Roles(TipoUsuario.CLIENTE, TipoUsuario.BARBEIRO)
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  async requestEmailVerification(
+    @CurrentUser() userId: number,
+  ): Promise<{ message: string }> {
+    return this.emailVerificationService.requestConfirmation(userId);
+  }
+
+  @Post('email/verification/confirm')
+  @HttpCode(200)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async confirmEmail(
+    @Body() dto: ConfirmEmailDto,
+  ): Promise<{ message: string }> {
+    return this.emailVerificationService.confirm(dto.token);
+  }
+
+  @Post('password-recovery')
+  @HttpCode(202)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async requestPasswordRecovery(
+    @Body() dto: PasswordRecoveryDto,
+  ): Promise<{ message: string }> {
+    return this.passwordRecoveryService.requestRecovery(dto.email);
+  }
+
+  @Post('password-reset')
+  @HttpCode(200)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async resetPassword(
+    @Body() dto: PasswordResetDto,
+  ): Promise<{ message: string }> {
+    return this.passwordRecoveryService.resetPassword(dto.token, dto.senha);
   }
 
   /**

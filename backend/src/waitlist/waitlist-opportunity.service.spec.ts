@@ -6,7 +6,6 @@ import { WaitlistOpportunityService } from './waitlist-opportunity.service';
 function buildPrismaMock() {
   return {
     listaEspera: { findMany: jest.fn() },
-    waitlistClaim: { findFirst: jest.fn() },
   };
 }
 
@@ -26,6 +25,7 @@ describe('WaitlistOpportunityService', () => {
     prisma = buildPrismaMock();
     waitlistService = {
       findEligibleEntriesForSlot: jest.fn().mockResolvedValue([{ id: 1 }]),
+      hasUnexpiredActiveClaimForEntry: jest.fn().mockResolvedValue(false),
       claimNextEligibleEntryForSlot: jest.fn().mockResolvedValue({
         id: 50,
         listaEsperaId: 1,
@@ -43,7 +43,6 @@ describe('WaitlistOpportunityService', () => {
         servico: { ativo: true, duracaoMinutos: 30 },
       },
     ]);
-    prisma.waitlistClaim.findFirst.mockResolvedValue(null);
   });
 
   it('escolhe FIFO e o primeiro horário cronológico válido', async () => {
@@ -63,6 +62,20 @@ describe('WaitlistOpportunityService', () => {
       '2099-01-12',
       '10:00',
       '10:30',
+    );
+  });
+
+  it('propaga a identidade da tentativa OUTBOX ao comando definitivo do claim', async () => {
+    await service.tryCreateForReleasedWindow(releasedWindow, 321, 4);
+
+    expect(waitlistService.claimNextEligibleEntryForSlot).toHaveBeenCalledWith(
+      10,
+      20,
+      '2099-01-12',
+      '10:00',
+      '10:30',
+      321,
+      4,
     );
   });
 
@@ -125,7 +138,7 @@ describe('WaitlistOpportunityService', () => {
   });
 
   it('não tenta nova oportunidade para entrada com claim ativo', async () => {
-    prisma.waitlistClaim.findFirst.mockResolvedValue({ id: 40 });
+    waitlistService.hasUnexpiredActiveClaimForEntry.mockResolvedValue(true);
 
     await expect(
       service.tryCreateForReleasedWindow(releasedWindow),
@@ -134,6 +147,18 @@ describe('WaitlistOpportunityService', () => {
     expect(
       waitlistService.claimNextEligibleEntryForSlot,
     ).not.toHaveBeenCalled();
+    expect(
+      waitlistService.hasUnexpiredActiveClaimForEntry,
+    ).toHaveBeenCalledWith(1);
+  });
+
+  it('volta a avaliar a entrada quando o banco considera o claim expirado', async () => {
+    waitlistService.hasUnexpiredActiveClaimForEntry.mockResolvedValue(false);
+
+    await service.tryCreateForReleasedWindow(releasedWindow);
+
+    expect(waitlistService.findEligibleEntriesForSlot).toHaveBeenCalled();
+    expect(waitlistService.claimNextEligibleEntryForSlot).toHaveBeenCalled();
   });
 
   it('trata ausência de candidato e slot ocupado como resultado normal', async () => {

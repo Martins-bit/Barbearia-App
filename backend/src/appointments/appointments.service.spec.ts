@@ -4,12 +4,14 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { StatusAgendamento } from '../generated/prisma/enums';
+import {
+  OrigemWaitlistReoffer,
+  StatusAgendamento,
+} from '../generated/prisma/enums';
 import { ScheduleService } from '../schedule/schedule.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { AppointmentsService } from './appointments.service';
 import {
-  getZonedParts,
   prismaDateFilter,
   zonedWallTimeToUtc,
 } from '../schedule/tz.util';
@@ -19,16 +21,45 @@ const CLIENT_ID = 31;
 const SERVICE_ID = 41;
 const DAY_MON = '2099-01-12'; // segunda-feira
 const WINDOW_9_18 = [{ ini: 540, fim: 1080 }]; // 09:00–18:00
+type TestSnapshot = {
+  windows: Array<{ ini: number; fim: number }>;
+  busy: Array<{ ini: number; fim: number; origem: string }>;
+};
+type ClientFindUniqueArgs = {
+  where: { usuarioId: number };
+  select?: unknown;
+};
+
+const clientFindUniqueMock = jest.fn<
+  Promise<{ id: number } | null>,
+  [ClientFindUniqueArgs]
+>();
+const appointmentCreateMock = jest.fn<
+  Promise<Record<string, unknown>>,
+  [{ data: Record<string, unknown> }]
+>();
+const scheduleGetDateSnapshotMock = jest
+  .fn<Promise<TestSnapshot>, [unknown, number, string]>()
+  .mockResolvedValue({ windows: [], busy: [] });
 
 function buildPrismaMock(): any {
   const prismaMock: any = {
-    cliente: { findUnique: jest.fn() },
+    cliente: { findUnique: clientFindUniqueMock },
     barbeiro: { findFirst: jest.fn(), findUnique: jest.fn() },
     servico: { findFirst: jest.fn() },
-    waitlistClaim: { findMany: jest.fn().mockResolvedValue([]) },
+    $queryRaw: jest.fn().mockImplementation((query: TemplateStringsArray) => {
+      const sql = query.join('');
+      if (sql.includes('AS "isFuture"')) {
+        return Promise.resolve([{ isFuture: true }]);
+      }
+      if (sql.includes('AS "allowed"')) {
+        return Promise.resolve([{ allowed: true }]);
+      }
+      return Promise.resolve([]);
+    }),
     agendamento: {
       findMany: jest.fn().mockResolvedValue([]),
-      create: jest.fn(),
+      create: appointmentCreateMock,
       findUnique: jest.fn(),
       updateMany: jest.fn(),
     },
@@ -42,7 +73,7 @@ function buildPrismaMock(): any {
 
 function buildScheduleMock(): any {
   return {
-    getDateSnapshot: jest.fn().mockResolvedValue({ windows: [], busy: [] }),
+    getDateSnapshot: scheduleGetDateSnapshotMock,
   };
 }
 
@@ -68,6 +99,7 @@ describe('AppointmentsService', () => {
   let prisma: any;
   let schedule: any;
   let notifications: any;
+  let reofferOutbox: any;
   let service: AppointmentsService;
 
   const validDto = {
@@ -99,7 +131,7 @@ describe('AppointmentsService', () => {
     schedule.getDateSnapshot.mockResolvedValue({ windows, busy });
     prisma.agendamento.findMany.mockResolvedValue(clientAppointments);
     let createdData: Record<string, unknown> | null = null;
-    prisma.agendamento.create.mockImplementation(({ data }: any) => {
+    appointmentCreateMock.mockImplementation(({ data }) => {
       createdData = data;
       return Promise.resolve({ id: 77, ...data });
     });
@@ -110,6 +142,11 @@ describe('AppointmentsService', () => {
   }
 
   beforeEach(() => {
+    clientFindUniqueMock.mockReset();
+    appointmentCreateMock.mockReset();
+    scheduleGetDateSnapshotMock
+      .mockReset()
+      .mockResolvedValue({ windows: [], busy: [] });
     prisma = buildPrismaMock();
     schedule = buildScheduleMock();
     notifications = {
@@ -122,7 +159,21 @@ describe('AppointmentsService', () => {
         .fn()
         .mockResolvedValue({ id: 4 }),
     };
-    service = new AppointmentsService(prisma, schedule, notifications);
+    reofferOutbox = {
+      enqueue: jest.fn().mockResolvedValue(undefined),
+      processPendingReoffers: jest.fn().mockResolvedValue({
+        claimedCount: 0,
+        completedCount: 0,
+        retryCount: 0,
+        permanentFailureCount: 0,
+      }),
+    };
+    const moduleRef = {
+      get: jest.fn((token: string) =>
+        token === 'WAITLIST_REOFFER_OUTBOX_SERVICE' ? reofferOutbox : null,
+      ),
+    };
+    service = new AppointmentsService(prisma, schedule, notifications, moduleRef as any);
   });
 
   describe('criação', () => {
@@ -243,6 +294,7 @@ describe('AppointmentsService', () => {
 
     it('rejeita horário no passado', async () => {
       arrangeSuccess();
+      prisma.$queryRaw.mockResolvedValue([{ isFuture: false }]);
 
       await expect(
         service.create(1, { ...validDto, data: '2020-01-06' }),
@@ -251,6 +303,38 @@ describe('AppointmentsService', () => {
           'Não é possível agendar um horário que já passou.',
         ),
       );
+    });
+
+    it('usa o relógio do PostgreSQL quando o relógio da aplicação está adiantado', async () => {
+      arrangeSuccess();
+      jest.useFakeTimers().setSystemTime(new Date('2100-01-01T00:00:00.000Z'));
+
+      try {
+        await expect(service.create(1, validDto)).resolves.toEqual(
+          expect.objectContaining({ status: StatusAgendamento.CONFIRMADO }),
+        );
+        expect(prisma.$queryRaw.mock.calls.map((call: TemplateStringsArray[]) =>
+          call[0].join(' '),
+        ).join(' ')).toContain('clock_timestamp()');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('rejeita horário pelo relógio do PostgreSQL quando o relógio da aplicação está atrasado', async () => {
+      arrangeSuccess();
+      prisma.$queryRaw.mockResolvedValue([{ isFuture: false }]);
+      jest.useFakeTimers().setSystemTime(new Date('2000-01-01T00:00:00.000Z'));
+
+      try {
+        await expect(service.create(1, validDto)).rejects.toThrow(
+          new BadRequestException(
+            'Não é possível agendar um horário que já passou.',
+          ),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('rejeita fora do horário de funcionamento', async () => {
@@ -292,6 +376,47 @@ describe('AppointmentsService', () => {
       await expect(service.create(1, validDto)).rejects.toThrow(
         new ConflictException('Horário não está mais disponível.'),
       );
+    });
+
+    it('claim ativo conflitante impede criar agendamento', async () => {
+      arrangeSuccess();
+      prisma.$queryRaw.mockImplementation((query: TemplateStringsArray) =>
+        Promise.resolve(
+          query.join('').includes('AS "isFuture"')
+            ? [{ isFuture: true }]
+            : [{ horaInicio: '10:00', horaFim: '10:30' }],
+        ),
+      );
+
+      await expect(service.create(1, validDto)).rejects.toThrow(
+        new ConflictException('Horário possui uma oportunidade ativa.'),
+      );
+      expect(appointmentCreateMock).not.toHaveBeenCalled();
+      const query = prisma.$queryRaw.mock.calls
+        .map((call: unknown[]) => (call[0] as TemplateStringsArray).join(' '))
+        .find((sql: string) => sql.includes('"expiraEm"'));
+      expect(query).toContain('"expiraEm" > (clock_timestamp()');
+    });
+
+    it('dois clientes não confirmam slots conflitantes', async () => {
+      arrangeSuccess();
+      clientFindUniqueMock
+        .mockResolvedValueOnce({ id: CLIENT_ID })
+        .mockResolvedValueOnce({ id: CLIENT_ID + 1 });
+
+      await service.create(1, validDto);
+
+      scheduleGetDateSnapshotMock.mockResolvedValue({
+        windows: [{ ini: 540, fim: 1080 }],
+        busy: [{ ini: 600, fim: 630, origem: 'AGENDAMENTO' }],
+      });
+
+      await expect(
+        service.create(2, { ...validDto, horaInicio: '10:15' }),
+      ).rejects.toThrow(
+        new ConflictException('Horário não está mais disponível.'),
+      );
+      expect(appointmentCreateMock).toHaveBeenCalledTimes(1);
     });
 
     it('borda permitida: 09:00–09:30 existente e novo às 09:30', async () => {
@@ -524,7 +649,11 @@ describe('AppointmentsService', () => {
       prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
       prisma.agendamento.findMany.mockResolvedValue([
         buildFullRow(1, {
-          cliente: { id: CLIENT_ID, usuarioId: 777, usuario: { nome: 'Cliente Especial' } },
+          cliente: {
+            id: CLIENT_ID,
+            usuarioId: 777,
+            usuario: { nome: 'Cliente Especial' },
+          },
         }),
       ]);
 
@@ -551,27 +680,25 @@ describe('AppointmentsService', () => {
       prisma.agendamento.findUnique
         .mockResolvedValueOnce(row)
         .mockResolvedValueOnce({ ...row, status: StatusAgendamento.CANCELADO });
-      prisma.agendamento.updateMany.mockResolvedValue({ count: 1 });
+      prisma.$executeRaw.mockResolvedValue(1);
 
       const result = await service.cancelAppointment(1, 51);
 
       expect(result.status).toBe(StatusAgendamento.CANCELADO);
-      expect(prisma.agendamento.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: {
-            id: 51,
-            clienteId: CLIENT_ID,
-            status: StatusAgendamento.CONFIRMADO,
-          },
-          data: { status: StatusAgendamento.CANCELADO },
-        }),
+      const cancelUpdate = prisma.$executeRaw.mock.calls.find(
+        (call: unknown[]) =>
+          (call[0] as TemplateStringsArray)
+            .join('')
+            .includes('UPDATE "Agendamento"'),
       );
+      expect(cancelUpdate?.[0].join(' ')).toContain(
+        '"horaInicio" AT TIME ZONE',
+      );
+      expect(cancelUpdate?.[0].join(' ')).toContain('clock_timestamp()');
     });
 
     it('CLIENTE tenta cancelar no mesmo dia -> 400', async () => {
-      const now = new Date();
-      const { year, month, day } = getZonedParts(now);
-      const todayKey = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const todayKey = '2099-01-12';
       const row = buildFullRow(52, {
         data: prismaDateFilter(todayKey),
         horaInicio: zonedWallTimeToUtc(todayKey, '10:00'),
@@ -580,6 +707,15 @@ describe('AppointmentsService', () => {
       });
       prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
       prisma.agendamento.findUnique.mockResolvedValue(row);
+      prisma.$executeRaw.mockResolvedValue(0);
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          hojeKey: todayKey,
+          dataAgendamentoKey: todayKey,
+          status: StatusAgendamento.CONFIRMADO,
+          clienteId: CLIENT_ID,
+        },
+      ]);
 
       await expect(service.cancelAppointment(1, 52)).rejects.toThrow(
         new BadRequestException(
@@ -666,7 +802,15 @@ describe('AppointmentsService', () => {
       });
       prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
       prisma.agendamento.findUnique.mockResolvedValue(row);
-      prisma.agendamento.updateMany.mockResolvedValue({ count: 0 });
+      prisma.$executeRaw.mockResolvedValue(0);
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          hojeKey: '2099-01-01',
+          dataAgendamentoKey: '2099-01-18',
+          status: StatusAgendamento.CANCELADO,
+          clienteId: CLIENT_ID,
+        },
+      ]);
 
       await expect(service.cancelAppointment(1, 57)).rejects.toThrow(
         new ConflictException('Agendamento não pode mais ser cancelado.'),
@@ -689,6 +833,9 @@ describe('AppointmentsService', () => {
       const result = await service.completeAppointment(1, 61);
 
       expect(result.status).toBe(StatusAgendamento.CONCLUIDO);
+      expect(prisma.$queryRaw.mock.calls[0][0].join(' ')).toContain(
+        'clock_timestamp()',
+      );
     });
 
     it('conclusão antes de horaFim -> 400', async () => {
@@ -699,6 +846,7 @@ describe('AppointmentsService', () => {
       });
       prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
       prisma.agendamento.findUnique.mockResolvedValue(row);
+      prisma.$queryRaw.mockResolvedValue([{ allowed: false }]);
 
       await expect(service.completeAppointment(1, 62)).rejects.toThrow(
         new BadRequestException(
@@ -766,6 +914,9 @@ describe('AppointmentsService', () => {
       const result = await service.noShowAppointment(1, 71);
 
       expect(result.status).toBe(StatusAgendamento.NAO_COMPARECEU);
+      expect(prisma.$queryRaw.mock.calls[0][0].join(' ')).toContain(
+        'clock_timestamp()',
+      );
     });
 
     it('falta antes de horaInicio -> 400', async () => {
@@ -776,6 +927,7 @@ describe('AppointmentsService', () => {
       });
       prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
       prisma.agendamento.findUnique.mockResolvedValue(row);
+      prisma.$queryRaw.mockResolvedValue([{ allowed: false }]);
 
       await expect(service.noShowAppointment(1, 72)).rejects.toThrow(
         new BadRequestException(
@@ -831,7 +983,9 @@ describe('AppointmentsService', () => {
 
       await service.create(1, validDto);
 
-      expect(notifications.createAppointmentConfirmed).toHaveBeenCalledTimes(1);
+      expect(notifications.createAppointmentConfirmed).toHaveBeenCalledTimes(
+        1,
+      );
       expect(notifications.createAppointmentConfirmed).toHaveBeenCalledWith(
         prisma,
         CLIENT_ID,
@@ -845,30 +999,75 @@ describe('AppointmentsService', () => {
       ).toHaveBeenCalledWith(prisma, BARBER_ID, 77);
     });
 
-    it('criação via claim (createConfirmedForClient) também gera notificações para cliente e barbeiro', async () => {
-      arrangeSuccess();
-
-      await service.createConfirmedForClient(prisma, {
-        clienteId: CLIENT_ID,
-        barbeiroId: BARBER_ID,
-        servicoId: SERVICE_ID,
-        data: DAY_MON,
-        horaInicio: '10:00',
-        claimId: 900,
+    it('criação via claim ignora o relógio adiantado da aplicação e mantém relógio do banco', async () => {
+      arrangeSuccess({
+        busy: [{ ini: 600, fim: 630, origem: 'CLAIM' }],
       });
 
-      expect(notifications.createAppointmentConfirmed).toHaveBeenCalledTimes(1);
-      expect(notifications.createAppointmentConfirmed).toHaveBeenCalledWith(
-        prisma,
-        CLIENT_ID,
-        77,
+      jest.useFakeTimers().setSystemTime(new Date('2090-01-01T00:00:00.000Z'));
+      try {
+        await service.createConfirmedForClient(prisma, {
+          clienteId: CLIENT_ID,
+          barbeiroId: BARBER_ID,
+          servicoId: SERVICE_ID,
+          data: DAY_MON,
+          horaInicio: '10:00',
+          claimId: 900,
+        });
+
+        const query = prisma.$queryRaw.mock.calls
+          .map((call: unknown[]) => (call[0] as TemplateStringsArray).join(' '))
+          .find((sql: string) => sql.includes('"expiraEm"'));
+        expect(query).toContain('"expiraEm" > (clock_timestamp()');
+        expect(query).toContain('"status" =');
+        expect(query).toContain('IS DISTINCT FROM');
+        const claimQueryCall = prisma.$queryRaw.mock.calls.find(
+          (call: unknown[]) =>
+            (call[0] as TemplateStringsArray).join(' ').includes('"expiraEm"'),
+        );
+        expect(claimQueryCall).toContain(900);
+        expect(notifications.createAppointmentConfirmed).toHaveBeenCalledTimes(
+          1,
+        );
+        expect(
+          notifications.createAppointmentConfirmedForBarber,
+        ).toHaveBeenCalledTimes(1);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('confirma agendamento quando claim expirado não aparece na consulta do banco apesar do relógio atrasado', async () => {
+      arrangeSuccess();
+      prisma.$queryRaw.mockImplementation((query: TemplateStringsArray) =>
+        Promise.resolve(
+          query.join('').includes('AS "isFuture"')
+            ? [{ isFuture: true }]
+            : [],
+        ),
       );
-      expect(
-        notifications.createAppointmentConfirmedForBarber,
-      ).toHaveBeenCalledTimes(1);
-      expect(
-        notifications.createAppointmentConfirmedForBarber,
-      ).toHaveBeenCalledWith(prisma, BARBER_ID, 77);
+
+      jest.useFakeTimers().setSystemTime(new Date('2000-01-01T00:00:00.000Z'));
+      try {
+        await expect(service.create(1, validDto)).resolves.toEqual(
+          expect.objectContaining({ id: 77 }),
+        );
+        const query = prisma.$queryRaw.mock.calls
+          .map((call: unknown[]) => (call[0] as TemplateStringsArray).join(' '))
+          .find((sql: string) => sql.includes('"expiraEm"'));
+        expect(query).toContain('"expiraEm" > (clock_timestamp()');
+        expect(query).toContain('"status" =');
+        const claimQueryHasDateParameter = prisma.$queryRaw.mock.calls
+          .filter((call: unknown[]) =>
+            (call[0] as TemplateStringsArray).join(' ').includes('"expiraEm"'),
+          )
+          .some((call: unknown[]) =>
+            call.some((value: unknown) => value instanceof Date),
+          );
+        expect(claimQueryHasDateParameter).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('falha na notificação propaga erro -> transação é revertida (sem órfãs)', async () => {
@@ -913,6 +1112,14 @@ describe('AppointmentsService', () => {
       expect(
         notifications.createAppointmentCancelledForBarber,
       ).toHaveBeenCalledWith(prisma, BARBER_ID, 58);
+      expect(reofferOutbox.enqueue).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          idempotencyKey: 'appointment-cancelled:58',
+          origin: OrigemWaitlistReoffer.AGENDAMENTO_CANCELADO,
+        }),
+      );
+      expect(reofferOutbox.processPendingReoffers).toHaveBeenCalledTimes(1);
     });
 
     it('cancelamento pelo barbeiro notifica o cliente dono do agendamento e não gera notificação para si mesmo', async () => {
@@ -940,6 +1147,12 @@ describe('AppointmentsService', () => {
       expect(
         notifications.createAppointmentCancelledForBarber,
       ).not.toHaveBeenCalled();
+      expect(reofferOutbox.enqueue).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          idempotencyKey: 'appointment-cancelled:59',
+        }),
+      );
     });
 
     it('garante que a notificação de cancelamento é enviada estritamente para o barbeiro daquele agendamento', async () => {
@@ -966,6 +1179,12 @@ describe('AppointmentsService', () => {
       expect(
         notifications.createAppointmentCancelledForBarber,
       ).not.toHaveBeenCalledWith(prisma, BARBER_ID, 61);
+      expect(reofferOutbox.enqueue).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          idempotencyKey: 'appointment-cancelled:61',
+        }),
+      );
     });
 
     it('corrida de cancelamento (count=0) não gera notificação para cliente nem para barbeiro', async () => {
@@ -978,7 +1197,8 @@ describe('AppointmentsService', () => {
       });
       prisma.cliente.findUnique.mockResolvedValue({ id: CLIENT_ID });
       prisma.agendamento.findUnique.mockResolvedValue(row);
-      prisma.agendamento.updateMany.mockResolvedValue({ count: 0 });
+      prisma.$executeRaw.mockResolvedValue(0);
+      prisma.$queryRaw.mockResolvedValue([{ hojeKey: '2099-01-01' }]);
 
       await expect(service.cancelAppointment(1, 60)).rejects.toThrow(
         new ConflictException('Agendamento não pode mais ser cancelado.'),
@@ -987,6 +1207,7 @@ describe('AppointmentsService', () => {
       expect(
         notifications.createAppointmentCancelledForBarber,
       ).not.toHaveBeenCalled();
+      expect(reofferOutbox.enqueue).not.toHaveBeenCalled();
     });
   });
 });

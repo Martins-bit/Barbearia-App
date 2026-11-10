@@ -1,4 +1,6 @@
-import { IsString, MinLength, MaxLength, Matches } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsEmail, IsString, MinLength, MaxLength, Matches } from 'class-validator';
+import { normalizeEmail } from '../../common/utils/email.util';
 
 export class RegisterDto {
   @IsString()
@@ -16,5 +18,15 @@ export class RegisterDto {
   @MinLength(8, {
     message: 'Senha deve ter no mínimo 8 caracteres',
   })
+  @MaxLength(72, {
+    message: 'Senha deve possuir no máximo 72 caracteres e 72 bytes UTF-8.',
+  })
   senha: string;
+
+  @Transform(({ value }) =>
+    typeof value === 'string' ? normalizeEmail(value) : value,
+  )
+  @IsEmail()
+  @MaxLength(254)
+  email: string;
 }

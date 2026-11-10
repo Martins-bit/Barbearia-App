@@ -5,20 +5,39 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { TipoUsuario } from '../generated/prisma/enums';
+import { OrigemWaitlistReoffer, TipoUsuario } from '../generated/prisma/enums';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { ScheduleService, SLOT_GRANULARITY_MINUTES } from './schedule.service';
-import { prismaDateFilter, zonedWallTimeToUtc } from './tz.util';
+import {
+  getZonedParts,
+  prismaDateFilter,
+  zonedWallTimeToUtc,
+} from './tz.util';
 
 const BARBER_ID = 101;
 const DAY_MON = '2099-01-12'; // segunda-feira
+
+function databaseClockRow(agora = new Date()) {
+  const { year, month, day } = getZonedParts(agora);
+  return {
+    agora,
+    hojeKey: `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`,
+  };
+}
 
 function buildPrismaMock(): any {
   const prismaMock: any = {
     barbeiro: { findUnique: jest.fn(), findFirst: jest.fn() },
     // Advisory lock do calendário (acquireCalendarLock usa $executeRaw).
     $executeRaw: jest.fn().mockResolvedValue(1),
+    $queryRaw: jest.fn().mockImplementation((query: TemplateStringsArray) => {
+      const sql = query.join('');
+      if (!sql.includes('AS "agora"')) {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve([databaseClockRow()]);
+    }),
     horarioFuncionamento: {
       findMany: jest.fn().mockResolvedValue([]),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -44,16 +63,31 @@ function buildUsersMock(): any {
 describe('ScheduleService', () => {
   let prisma: any;
   let users: any;
+  let reofferOutbox: any;
   let service: ScheduleService;
 
   beforeEach(() => {
     prisma = buildPrismaMock();
     users = buildUsersMock();
+    reofferOutbox = {
+      enqueue: jest.fn().mockResolvedValue(undefined),
+      processPendingReoffers: jest.fn().mockResolvedValue({
+        claimedCount: 0,
+        completedCount: 0,
+        retryCount: 0,
+        permanentFailureCount: 0,
+      }),
+    };
+    const moduleRef = {
+      get: jest.fn((token: string) =>
+        token === 'WAITLIST_REOFFER_OUTBOX_SERVICE' ? reofferOutbox : null,
+      ),
+    };
     prisma.barbeiro.findUnique.mockResolvedValue({ id: BARBER_ID });
     // A-2: o barbeiro alvo informado pelo cliente precisa existir e estar
     // ativo (findFirst com { id, ativo: true }).
     prisma.barbeiro.findFirst.mockResolvedValue({ id: BARBER_ID });
-    service = new ScheduleService(prisma, users);
+    service = new ScheduleService(prisma, users, moduleRef as any);
   });
 
   describe('identidade Usuario -> Barbeiro', () => {
@@ -354,13 +388,29 @@ describe('ScheduleService', () => {
     });
 
     it('remove bloqueio proprio', async () => {
-      prisma.bloqueioAgenda.findFirst.mockResolvedValue({ id: 33 });
+      prisma.bloqueioAgenda.findFirst.mockResolvedValue({
+        id: 33,
+        barbeiroId: BARBER_ID,
+        data: prismaDateFilter(DAY_MON),
+        horaInicio: zonedWallTimeToUtc(DAY_MON, '10:00'),
+        horaFim: zonedWallTimeToUtc(DAY_MON, '11:00'),
+        motivo: null,
+        ativo: true,
+      });
 
       await expect(service.deleteOwnBlock(7, 33)).resolves.toBeUndefined();
 
       expect(prisma.bloqueioAgenda.delete).toHaveBeenCalledWith({
         where: { id: 33 },
       });
+      expect(reofferOutbox.enqueue).toHaveBeenCalledWith(
+        prisma,
+        expect.objectContaining({
+          idempotencyKey: 'block-removed:33',
+          origin: OrigemWaitlistReoffer.BLOQUEIO_REMOVIDO,
+        }),
+      );
+      expect(reofferOutbox.processPendingReoffers).toHaveBeenCalledTimes(1);
     });
 
     it('DELETE de bloqueio de outro barbeiro retorna 404 generico', async () => {
@@ -386,6 +436,7 @@ describe('ScheduleService', () => {
       }>;
       blocks?: Array<{ horaInicio: string; horaFim: string }>;
       appointments?: Array<{ horaInicio: string; horaFim: string }>;
+      claims?: Array<{ horaInicio: string; horaFim: string }>;
     }) {
       const {
         role = 'CLIENTE',
@@ -395,6 +446,7 @@ describe('ScheduleService', () => {
         windows = [],
         blocks = [],
         appointments = [],
+        claims = [],
       } = options;
 
       users.findAuthorizationStateById.mockResolvedValue({
@@ -420,6 +472,13 @@ describe('ScheduleService', () => {
           horaInicio: zonedWallTimeToUtc(DAY_MON, appointment.horaInicio),
           horaFim: zonedWallTimeToUtc(DAY_MON, appointment.horaFim),
         })),
+      );
+      prisma.$queryRaw.mockImplementation((query: TemplateStringsArray) =>
+        Promise.resolve(
+          query.join('').includes('AS "agora"')
+            ? [databaseClockRow()]
+            : claims,
+        ),
       );
     }
 
@@ -594,6 +653,90 @@ describe('ScheduleService', () => {
       expect(result.horariosLivres).not.toContain('10:30');
     });
 
+    it('claim ativo bloqueia sobreposições e permite horários adjacentes', async () => {
+      arrangeAvailability({
+        role: 'CLIENTE',
+        windows: [{ diaSemana: 1, horaInicio: '09:00', horaFim: '12:00' }],
+        claims: [{ horaInicio: '10:00', horaFim: '10:30' }],
+      });
+
+      jest.useFakeTimers().setSystemTime(new Date('2090-01-01T00:00:00.000Z'));
+      try {
+        const result = await service.getAvailability(7, {
+          data: DAY_MON,
+          servicoId: 55,
+          barbeiroId: BARBER_ID,
+        });
+
+        expect(result.horariosLivres).toEqual([
+          '09:00',
+          '09:15',
+          '09:30',
+          '10:30',
+          '10:45',
+          '11:00',
+          '11:15',
+          '11:30',
+        ]);
+        const query = prisma.$queryRaw.mock.calls
+          .map((call: unknown[]) => (call[0] as TemplateStringsArray).join(' '))
+          .find((sql: string) => sql.includes('"expiraEm"'));
+        expect(query).toContain('"expiraEm" > (clock_timestamp()');
+        expect(query).toContain('"status" =');
+        expect(query).not.toContain('new Date');
+        expect(
+          prisma.$queryRaw.mock.calls.find((call: unknown[]) =>
+            (call[0] as TemplateStringsArray).join(' ').includes('"expiraEm"'),
+          ),
+        ).toContain(BARBER_ID);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('claim expirado libera disponibilidade mesmo com relógio da aplicação atrasado', async () => {
+      arrangeAvailability({
+        role: 'CLIENTE',
+        windows: [{ diaSemana: 1, horaInicio: '09:00', horaFim: '12:00' }],
+      });
+      prisma.$queryRaw.mockImplementation((query: TemplateStringsArray) =>
+        Promise.resolve(
+          query.join('').includes('AS "agora"')
+            ? [databaseClockRow()]
+            : [],
+        ),
+      );
+
+      jest.useFakeTimers().setSystemTime(new Date('2000-01-01T00:00:00.000Z'));
+      try {
+        const result = await service.getAvailability(7, {
+          data: DAY_MON,
+          servicoId: 55,
+          barbeiroId: BARBER_ID,
+        });
+
+        expect(result.horariosLivres).toContain('10:00');
+        expect(result.horariosLivres).toContain('10:15');
+        const claimsQuery = prisma.$queryRaw.mock.calls
+          .map((call: unknown[]) => (call[0] as TemplateStringsArray).join(' '))
+          .find((sql: string) => sql.includes('"expiraEm"'));
+        expect(claimsQuery).toContain('"expiraEm" > (clock_timestamp()');
+        const clockQuery = prisma.$queryRaw.mock.calls
+          .map((call: unknown[]) => (call[0] as TemplateStringsArray).join(' '))
+          .find((sql: string) => sql.includes('AS "agora"'));
+        expect(clockQuery).toContain('clock_timestamp()');
+        const clockCall = prisma.$queryRaw.mock.calls.find(
+          (call: unknown[]) =>
+            (call[0] as TemplateStringsArray).join(' ').includes('AS "agora"'),
+        );
+        expect(
+          clockCall?.some((value: unknown) => value instanceof Date),
+        ).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
     it('múltiplas janelas no mesmo dia respeitam intervalo de almoço', async () => {
       arrangeAvailability({
         role: 'CLIENTE',
@@ -736,6 +879,40 @@ describe('ScheduleService', () => {
         expect(result.horariosLivres).not.toContain('12:00');
         expect(result.horariosLivres).not.toContain('11:45');
         expect(result.horariosLivres).not.toContain('09:00');
+      });
+
+      it('usa o relógio do PostgreSQL quando o relógio da aplicação está adiantado ou atrasado', async () => {
+        arrangeAvailability({
+          role: 'CLIENTE',
+          windows: [{ diaSemana: 1, horaInicio: '09:00', horaFim: '15:00' }],
+        });
+        prisma.$queryRaw.mockImplementation((query: TemplateStringsArray) =>
+          Promise.resolve(
+            query.join('').includes('AS "agora"')
+              ? [{ agora: new Date(SYSTEM_NOW_ISO), hojeKey: TODAY_KEY }]
+              : [],
+          ),
+        );
+
+        for (const applicationTime of [
+          '2100-01-01T00:00:00.000Z',
+          '2000-01-01T00:00:00.000Z',
+        ]) {
+          jest.setSystemTime(new Date(applicationTime));
+          const result = await service.getAvailability(7, {
+            data: TODAY_KEY,
+            servicoId: 55,
+            barbeiroId: BARBER_ID,
+          });
+          expect(result.horariosLivres).toContain('12:15');
+          expect(result.horariosLivres).not.toContain('11:45');
+        }
+
+        expect(
+          prisma.$queryRaw.mock.calls
+            .map((call: TemplateStringsArray[]) => call[0].join(' '))
+            .join(' '),
+        ).toContain('clock_timestamp()');
       });
 
       it('slot EXATAMENTE no horário atual não é considerado disponível', async () => {

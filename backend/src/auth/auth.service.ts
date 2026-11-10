@@ -11,6 +11,7 @@ import { AuthResponseDto } from './dto/auth-response.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
 import { UsersService } from '../users/users.service';
 import { hashPassword, comparePasswords } from '../common/utils/password.util';
+import { normalizeEmail } from '../common/utils/email.util';
 import { JWT_CONFIG } from '../common/config/jwt.config';
 
 @Injectable()
@@ -25,9 +26,18 @@ export class AuthService {
    */
   async register(registerDto: RegisterDto): Promise<AuthResponseDto> {
     // Validações básicas
-    if (!registerDto.nome || !registerDto.telefone || !registerDto.senha) {
-      throw new BadRequestException('Nome, telefone e senha são obrigatórios');
+    if (
+      !registerDto.nome ||
+      !registerDto.telefone ||
+      !registerDto.senha ||
+      !registerDto.email
+    ) {
+      throw new BadRequestException(
+        'Nome, telefone, e-mail e senha são obrigatórios',
+      );
     }
+
+    const email = normalizeEmail(registerDto.email);
 
     // Verifica se o telefone já existe
     const usuarioExistente =
@@ -37,6 +47,11 @@ export class AuthService {
       throw new ConflictException('Telefone já cadastrado');
     }
 
+    const emailExistente = await this.usersService.findByEmail(email);
+    if (emailExistente) {
+      throw new ConflictException('Este e-mail já está em uso por outra conta.');
+    }
+
     // Hash da senha
     const senhaHash = await hashPassword(registerDto.senha);
 
@@ -44,6 +59,7 @@ export class AuthService {
     const usuario = await this.usersService.createUser({
       nome: registerDto.nome,
       telefone: registerDto.telefone,
+      email,
       senhaHash,
       tipoUsuario: 'CLIENTE',
     });
@@ -85,7 +101,11 @@ export class AuthService {
     const token = this.generateToken(usuario);
 
     // Retorna usuário sem senhaHash + token
-    const { senhaHash: _senhaHash, ...usuarioSemHash } = usuario;
+    const {
+      senhaHash: _senhaHash,
+      authVersion: _authVersion,
+      ...usuarioSemHash
+    } = usuario;
 
     return {
       user: usuarioSemHash,
@@ -120,6 +140,7 @@ export class AuthService {
       sub: usuario.id,
       telefone: usuario.telefone,
       tipoUsuario: usuario.tipoUsuario,
+      authVersion: usuario.authVersion ?? 0,
     };
 
     return this.jwtService.sign(payload);

@@ -2,6 +2,9 @@ import { validate } from 'class-validator';
 import { plainToClass } from 'class-transformer';
 import { RegisterDto } from './register.dto';
 import { LoginDto } from './login.dto';
+import { ConfirmEmailDto } from './confirm-email.dto';
+import { PasswordRecoveryDto } from './password-recovery.dto';
+import { PasswordResetDto } from './password-reset.dto';
 
 describe('Auth DTOs Validation', () => {
   describe('RegisterDto', () => {
@@ -28,6 +31,7 @@ describe('Auth DTOs Validation', () => {
         nome: 'João Silva',
         telefone: '11999999999',
         senha: 'senha12345',
+        email: 'joao@example.com',
       };
 
       const dto = plainToClass(RegisterDto, validData);
@@ -63,6 +67,31 @@ describe('Auth DTOs Validation', () => {
       expect(errors.length).toBeGreaterThan(0);
       expect(errors[0].property).toBe('telefone');
     });
+
+    it('should normalize and validate e-mail', async () => {
+      const dto = plainToClass(RegisterDto, {
+        nome: 'João Silva',
+        telefone: '11999999999',
+        senha: 'senha12345',
+        email: '  JOAO@EXAMPLE.COM  ',
+      });
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+      expect(dto.email).toBe('joao@example.com');
+    });
+
+    it('should reject invalid e-mail', async () => {
+      const dto = plainToClass(RegisterDto, {
+        nome: 'João Silva',
+        telefone: '11999999999',
+        senha: 'senha12345',
+        email: 'invalid-email',
+      });
+
+      expect(await validate(dto)).toEqual(
+        expect.arrayContaining([expect.objectContaining({ property: 'email' })]),
+      );
+    });
   });
 
   describe('LoginDto', () => {
@@ -89,6 +118,62 @@ describe('Auth DTOs Validation', () => {
 
       expect(errors.length).toBeGreaterThan(0);
       expect(errors[0].property).toBe('telefone');
+    });
+  });
+
+  describe('ConfirmEmailDto', () => {
+    it('should accept a 32-byte base64url token', async () => {
+      const dto = plainToClass(ConfirmEmailDto, { token: 'A'.repeat(43) });
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+    });
+
+    it('should reject malformed confirmation tokens', async () => {
+      const dto = plainToClass(ConfirmEmailDto, { token: 'not-a-token' });
+
+      const errors = await validate(dto);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0].property).toBe('token');
+    });
+  });
+
+  describe('PasswordRecoveryDto', () => {
+    it('validates e-mail and normalizes surrounding whitespace', async () => {
+      const dto = plainToClass(PasswordRecoveryDto, {
+        email: '  person@example.com  ',
+      });
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+      expect(dto.email).toBe('person@example.com');
+    });
+
+    it('rejects invalid e-mail input', async () => {
+      const dto = plainToClass(PasswordRecoveryDto, { email: 'not-an-email' });
+
+      expect(await validate(dto)).toHaveLength(1);
+    });
+  });
+
+  describe('PasswordResetDto', () => {
+    it('accepts a valid token and password', async () => {
+      const dto = plainToClass(PasswordResetDto, {
+        token: 'A'.repeat(43),
+        senha: 'senha-segura-123',
+      });
+
+      expect(await validate(dto)).toHaveLength(0);
+    });
+
+    it('rejects short passwords and malformed tokens', async () => {
+      const dto = plainToClass(PasswordResetDto, {
+        token: 'invalid',
+        senha: 'curta',
+      });
+
+      expect((await validate(dto)).map((error) => error.property)).toEqual(
+        expect.arrayContaining(['token', 'senha']),
+      );
     });
   });
 });

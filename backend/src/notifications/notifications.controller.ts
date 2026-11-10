@@ -1,5 +1,6 @@
 import {
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -37,5 +38,10 @@ export class NotificationsController {
   @Patch('read-all')
   async markAllAsRead(@CurrentUser() userId: number) {
     return this.notificationsService.markAllAsRead(userId);
+  }
+
+  @Delete()
+  async clearAll(@CurrentUser() userId: number) {
+    return this.notificationsService.clearAll(userId);
   }
 }

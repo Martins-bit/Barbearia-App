@@ -50,12 +50,73 @@ $ npm run start:prod
 # unit tests
 $ npm run test
 
-# e2e tests
+# E2E safety checks (do not connect to a database)
+$ npm run test:e2e:guard
+
+# E2E tests (requires the isolated database configuration below)
 $ npm run test:e2e
 
 # test coverage
 $ npm run test:cov
 ```
+
+### E2E database isolation
+
+Before running E2E tests, create `test/.env.e2e` from
+`test/.env.e2e.example` and configure its `DATABASE_URL` for the isolated
+PostgreSQL database named exactly `barbearia_app_e2e` on loopback
+(`127.0.0.1` or `::1`) with explicit port `5432`, using the dedicated
+`barbearia_e2e_test` role. Set a test-only
+`JWT_SECRET` there as well. This configuration is separate from `.env` and is
+ignored by Git. The role must not own the schema or have database/role
+administration privileges; it needs only connection, schema usage, CRUD on test
+tables, and sequence usage/update.
+
+Migrations use a separate `test/.env.e2e.migrate`, copied from
+`test/.env.e2e.migrate.example`, with the non-superuser
+`barbearia_e2e_migrator` role. That role receives only privileges needed to
+apply migrations in the isolated database. Neither role is created by the
+application, and neither may reuse the backend `.env` credentials.
+
+The `test:e2e` command validates that file before starting Jest. The Jest E2E
+setup repeats the validation before loading test suites, including when Jest is
+invoked directly with `test/jest-e2e.json`. Missing configuration or an
+invalid protocol, host, port, database, role, or URL parameter blocks
+execution; there is no fallback to `.env`. Child processes receive a
+sanitized database environment with inherited `DATABASE_URL`, `DIRECT_URL`,
+Prisma URL, and `PG*` variables removed. The guard does not create or clean
+the database.
+
+For the official E2E migration workflow, use `npm run db:e2e:migrate`. It
+validates the migration-specific environment file and invokes only
+`prisma migrate deploy` with `prisma.e2e.config.ts` explicitly selected. That config requires the
+explicit marker `E2E_MIGRATION_RUNNER_AUTH=1` as confirmation to apply E2E
+migrations. The marker is reproducible and does not prove that the runner was
+used. The official runner fixes the config path and rejects a `--config`
+override. This is a local safeguard for the official path, not a universal
+block against arbitrary Prisma configs supplied directly to the CLI; such a
+config can bypass local guards. The definitive boundary must be least-privilege
+PostgreSQL roles.
+
+When the default `prisma.config.ts` is selected, it blocks `migrate` and
+`db push` unless
+`PRISMA_MIGRATION_TARGET=development` is explicitly set and the connection
+targets local `barbearia_app` on port 5432. For normal local development, from
+`backend`, use:
+
+```powershell
+$env:PRISMA_MIGRATION_TARGET = 'development'
+npx prisma migrate dev
+Remove-Item Env:PRISMA_MIGRATION_TARGET
+```
+
+The default config never authorizes `barbearia_app_e2e` or remote hosts. This
+validation applies only when that config is selected; it cannot prevent use of
+an arbitrary external `--config` file.
+
+Diagnostic `_diag-*` E2E files are excluded from the normal E2E selection and
+are not run automatically. Any manual diagnostic execution must also pass the
+same database safety check.
 
 ## Deployment
 

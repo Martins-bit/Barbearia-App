@@ -23,6 +23,7 @@ import { useUnreadNotifications } from '../../contexts/unread-notifications'
 import { appointmentsService } from '../../services/api/appointmentsService'
 import { barberScheduleService } from '../../services/api/barberScheduleService'
 import { notificationsService } from '../../services/api/notificationsService'
+import { clearAndLoadNotificationSnapshot } from '../../services/api/notificationSync'
 import { scheduleBlocksService } from '../../services/api/scheduleBlocksService'
 import { waitlistService } from '../../services/api/waitlistService'
 import { servicesService } from '../../services/api/catalogService'
@@ -1813,6 +1814,8 @@ export function BarbeiroNotificacoesPage() {
   const [itens, setItens] = useState<Notificacao[]>([])
   const [lendoId, setLendoId] = useState<number | null>(null)
   const [marcandoTodas, setMarcandoTodas] = useState(false)
+  const [limpando, setLimpando] = useState(false)
+  const [modalLimparAberto, setModalLimparAberto] = useState(false)
 
   useEffect(() => {
     if (carregamento.data) setItens(carregamento.data)
@@ -1859,6 +1862,27 @@ export function BarbeiroNotificacoesPage() {
     }
   }
 
+  async function limparNotificacoes() {
+    if (limpando) return
+    setLimpando(true)
+    try {
+      const snapshot = await clearAndLoadNotificationSnapshot(
+        notificationsService,
+      )
+      setItens(snapshot.notifications)
+      contador.setCount(snapshot.unreadCount)
+      setModalLimparAberto(false)
+      toast.success('Notificações atualizadas com sucesso.')
+    } catch (error) {
+      toast.error(
+        mensagemDeErro(error, 'Não foi possível atualizar as notificações.'),
+        'Falha ao atualizar',
+      )
+    } finally {
+      setLimpando(false)
+    }
+  }
+
   const unauthorized =
     carregamento.error?.status === 401 || carregamento.error?.status === 403
   const errorMessage = unauthorized
@@ -1874,14 +1898,27 @@ export function BarbeiroNotificacoesPage() {
         actions={
           !carregamento.loading &&
           !carregamento.error &&
-          naoLidas.length > 0 ? (
-            <Button
-              variant="secondary"
-              loading={marcandoTodas}
-              onClick={marcarTodasComoLidas}
-            >
-              Marcar todas como lidas
-            </Button>
+          itens.length > 0 ? (
+            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+              {naoLidas.length > 0 && (
+                <Button
+                  variant="secondary"
+                  loading={marcandoTodas}
+                  disabled={limpando}
+                  onClick={marcarTodasComoLidas}
+                >
+                  Marcar todas como lidas
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                loading={limpando}
+                disabled={marcandoTodas || limpando}
+                onClick={() => setModalLimparAberto(true)}
+              >
+                Limpar notificações
+              </Button>
+            </div>
           ) : null
         }
       />
@@ -1997,6 +2034,40 @@ export function BarbeiroNotificacoesPage() {
           </Card>
         )}
       </section>
+
+      <Modal
+        open={modalLimparAberto}
+        onClose={() => {
+          if (!limpando) setModalLimparAberto(false)
+        }}
+        title="Limpar notificações"
+        description="Deseja limpar todas as notificações da sua caixa de entrada?"
+        footer={
+          <div className={styles.blockModalActions}>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setModalLimparAberto(false)}
+              disabled={limpando}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              loading={limpando}
+              disabled={limpando}
+              onClick={() => void limparNotificacoes()}
+            >
+              Confirmar
+            </Button>
+          </div>
+        }
+      >
+        <p style={{ margin: 0, color: 'var(--color-text)' }}>
+          Todas as notificações atuais serão removidas da sua visualização.
+        </p>
+      </Modal>
     </div>
   )
 }

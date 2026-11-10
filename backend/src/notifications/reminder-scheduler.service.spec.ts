@@ -19,13 +19,11 @@ describe('ReminderSchedulerService', () => {
     loggerLog = jest.spyOn(Logger.prototype, 'log').mockImplementation();
   });
 
-  it('chama o motor da 6H exatamente uma vez por execução com um Date válido', async () => {
+  it('chama o motor da 6H exatamente uma vez por execução sem fornecer relógio local', async () => {
     await service.handleReminders();
 
     expect(notifications.processAppointmentReminders).toHaveBeenCalledTimes(1);
-    const argument = notifications.processAppointmentReminders.mock.calls[0][0];
-    expect(argument).toBeInstanceOf(Date);
-    expect(Number.isNaN(argument.getTime())).toBe(false);
+    expect(notifications.processAppointmentReminders).toHaveBeenCalledWith();
   });
 
   it('erro do motor é capturado, logado e não relançado; execução futura segue normal', async () => {
@@ -53,8 +51,6 @@ describe('ReminderSchedulerService', () => {
     expect(loggerLog).toHaveBeenCalledWith(
       'Motor de lembretes criou 3 notificação(ões) LEMBRETE.',
     );
-    expect(notifications.processAppointmentReminders).toHaveBeenCalledWith(
-      expect.any(Date),
-    );
+    expect(notifications.processAppointmentReminders).toHaveBeenCalledWith();
   });
 });

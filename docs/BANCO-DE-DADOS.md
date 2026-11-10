@@ -233,6 +233,10 @@ A entidade de lista de espera armazenará solicitações de clientes interessado
 A prioridade deverá considerar a ordem de entrada.
 
 A informação `data_entrada` poderá ser utilizada para determinar essa ordem.
+Ela permanece como `TIMESTAMP(3)` sem fuso e é gerada pelo PostgreSQL no
+momento da inserção, com `clock_timestamp()` convertido explicitamente para
+UTC. O ID crescente desempata timestamps iguais de forma determinística, mas
+não representa, por si só, a ordem cronológica de commit das transações.
 
 ### Claims temporários de vaga
 
@@ -244,6 +248,36 @@ Os claims não são agendamentos e não alteram o status da entrada da lista. A
 validade de um claim `ATIVO` é determinada por `expira_em`; claims expirados
 permanecem no histórico e não bloqueiam novos claims. Não existe unicidade
 permanente por slot, pois o histórico pode conter claims expirados.
+
+### OUTBOX de reofertas
+
+`WaitlistReofferOutbox` persiste cada evento que libera uma janela e precisa
+ser avaliado pela lista de espera. A origem e uma chave idempotente identificam
+a transição que gerou o evento; os campos do barbeiro, data e intervalo
+preservam a janela a reprocessar.
+
+O estado é `PENDENTE`, `PROCESSANDO`, `CONCLUIDA` ou `FALHA_FINAL`. A tabela
+mantém quantidade de tentativas, próxima tentativa, prazo de lease, último
+erro, resultado e timestamps. Os índices por estado/data de tentativa e
+estado/lease permitem localizar trabalho pronto e recuperar processamento
+abandonado. `chaveIdempotencia` é única. Erros permanentes vão diretamente para
+`FALHA_FINAL`; falhas transitórias são tentadas no máximo 10 vezes. Se a décima
+execução for abandonada, o registro só é encerrado depois do vencimento do
+lease, preservando o último erro (ou registrando que o lease expirou no limite).
+A investigação operacional deve consultar o registro e os logs do worker por
+ID/origem; após corrigir a causa, qualquer reabertura para `PENDENTE` exige uma
+operação administrativa controlada. Não existe endpoint ou tela de retry nesta
+fase. A consulta inicial pode filtrar `status = 'FALHA_FINAL'` e inspecionar
+`id`, `chaveIdempotencia`, `origem`, `origemId`, `tentativas` e `ultimoErro`;
+nenhuma alteração manual de estado deve ser feita sem revisar a causa e a
+idempotência do evento.
+
+Um `WaitlistClaim` criado pelo processamento possui uma referência opcional e
+única ao registro OUTBOX. A referência é gravada na mesma transação do claim e
+da notificação, permitindo reconhecer um claim criado antes de uma interrupção
+e concluir a pendência sem criar outro. Registros OUTBOX concluídos são
+mantidos como histórico e não devem ser removidos enquanto claims referenciados
+existirem.
 
 ---
 

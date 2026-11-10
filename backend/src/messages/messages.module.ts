@@ -9,7 +9,15 @@ import { MessagesSocketRegistry } from './messages.socket-registry';
 @Module({
   imports: [AuthModule, UsersModule],
   controllers: [MessagesController],
-  providers: [MessagesService, MessagesSocketRegistry, MessagesGateway],
-  exports: [MessagesService, MessagesSocketRegistry],
+  providers: [
+    MessagesService,
+    MessagesSocketRegistry,
+    MessagesGateway,
+    {
+      provide: 'MESSAGES_GATEWAY',
+      useExisting: MessagesGateway,
+    },
+  ],
+  exports: [MessagesService, MessagesSocketRegistry, MessagesGateway],
 })
 export class MessagesModule {}

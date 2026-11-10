@@ -4,18 +4,28 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
 import {
+  OrigemWaitlistReoffer,
+  ResultadoWaitlistReoffer,
   StatusListaEspera,
+  StatusWaitlistReoffer,
   StatusWaitlistClaim,
+  TipoNotificacao,
   TipoUsuario,
 } from '../src/generated/prisma/enums';
 import { hashPassword } from '../src/common/utils/password.util';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { AppointmentsService } from '../src/appointments/appointments.service';
+import { NotificationsService } from '../src/notifications/notifications.service';
 import { WaitlistService } from '../src/waitlist/waitlist.service';
+import { WaitlistOpportunityService } from '../src/waitlist/waitlist-opportunity.service';
+import { WaitlistReofferOutboxService } from '../src/waitlist/waitlist-reoffer-outbox.service';
 
 describe('Waitlist (e2e)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
   let waitlistService: WaitlistService;
+  let opportunityService: WaitlistOpportunityService;
+  let outboxService: WaitlistReofferOutboxService;
 
   let clientAToken: string;
   let clientBToken: string;
@@ -35,6 +45,7 @@ describe('Waitlist (e2e)', () => {
   const waitlistIds: number[] = [];
   const claimIds: number[] = [];
   const serviceIds: number[] = [];
+  const outboxIds: number[] = [];
 
   const password = 'waitlist-e2e-password';
   const prefix = `waitlist-e2e-${Date.now()}`;
@@ -58,6 +69,8 @@ describe('Waitlist (e2e)', () => {
 
     prisma = app.get(PrismaService);
     waitlistService = app.get(WaitlistService);
+    opportunityService = app.get(WaitlistOpportunityService);
+    outboxService = app.get(WaitlistReofferOutboxService);
     const senhaHash = await hashPassword(password);
 
     const createClient = async (nome: string, telefone: string) => {
@@ -138,11 +151,45 @@ describe('Waitlist (e2e)', () => {
 
   afterAll(async () => {
     if (prisma) {
+      const outboxCleanupWhere = {
+        OR: [
+          { id: { in: outboxIds } },
+          { chaveIdempotencia: { startsWith: `e2e:${prefix}:` } },
+          {
+            origem: OrigemWaitlistReoffer.ENTRADA_CANCELADA,
+            origemId: { in: waitlistIds },
+          },
+          {
+            origem: OrigemWaitlistReoffer.CLAIM_RECUSADO,
+            origemId: { in: claimIds },
+          },
+          {
+            origem: OrigemWaitlistReoffer.CLAIM_EXPIRADO,
+            origemId: { in: claimIds },
+          },
+        ],
+      };
+      const outboxRows = await prisma.waitlistReofferOutbox.findMany({
+        where: outboxCleanupWhere,
+        select: { id: true },
+      });
+      const outboxCleanupIds = [
+        ...new Set([...outboxIds, ...outboxRows.map(({ id }) => id)]),
+      ];
+
       await prisma.notificacao.deleteMany({
         where: { usuarioId: { in: userIds } },
       });
       await prisma.waitlistClaim.deleteMany({
-        where: { id: { in: claimIds } },
+        where: {
+          OR: [
+            { id: { in: claimIds } },
+            { reofertaOutboxId: { in: outboxCleanupIds } },
+          ],
+        },
+      });
+      await prisma.waitlistReofferOutbox.deleteMany({
+        where: { id: { in: outboxCleanupIds } },
       });
       await prisma.listaEspera.deleteMany({
         where: {
@@ -230,6 +277,48 @@ describe('Waitlist (e2e)', () => {
     return { entry, claim };
   };
 
+  const createOutboxFixture = async (
+    dateKey: string,
+    withEligibleEntry = true,
+  ) => {
+    await ensureBusinessHours(dateKey);
+    if (withEligibleEntry) {
+      const entry = await prisma.listaEspera.create({
+        data: {
+          clienteId: clientAId,
+          barbeiroId: barberAId,
+          servicoId: serviceAId,
+          dataDesejada: new Date(`${dateKey}T00:00:00.000Z`),
+          horaInicio: '10:00',
+          horaFim: '10:30',
+        },
+      });
+      waitlistIds.push(entry.id);
+    }
+
+    const idempotencyKey = `e2e:${prefix}:${dateKey}`;
+    await prisma.$transaction((tx) =>
+      outboxService.enqueue(tx, {
+        idempotencyKey,
+        origin: OrigemWaitlistReoffer.BLOQUEIO_REMOVIDO,
+        window: {
+          barbeiroId: barberAId,
+          dateKey,
+          horaInicio: '10:00',
+          horaFim: '10:30',
+        },
+      }),
+    );
+    const outbox = await prisma.waitlistReofferOutbox.findUnique({
+      where: { chaveIdempotencia: idempotencyKey },
+    });
+    if (!outbox) {
+      throw new Error('Fixture OUTBOX não foi persistida.');
+    }
+    outboxIds.push(outbox.id);
+    return outbox;
+  };
+
   it('requer autenticação para entrar na lista', async () => {
     await request(app.getHttpServer())
       .post('/waitlist')
@@ -260,6 +349,35 @@ describe('Waitlist (e2e)', () => {
 
     expect(response.body.status).toBe(StatusListaEspera.ATIVA);
     waitlistIds.push(response.body.id);
+  });
+
+  it('determina a vigência de claim com o relógio do PostgreSQL', async () => {
+    await createClaimFixture('2099-04-09');
+    const entryId = waitlistIds.at(-1);
+    const claimId = claimIds.at(-1);
+    if (entryId === undefined || claimId === undefined) {
+      throw new Error('Fixture de claim não foi persistida.');
+    }
+
+    await prisma.$executeRaw`
+      UPDATE "WaitlistClaim"
+      SET "expiraEm" = (clock_timestamp() AT TIME ZONE 'UTC')
+        + INTERVAL '1 minute'
+      WHERE "id" = ${claimId}
+    `;
+    await expect(
+      waitlistService.hasUnexpiredActiveClaimForEntry(entryId),
+    ).resolves.toBe(true);
+
+    await prisma.$executeRaw`
+      UPDATE "WaitlistClaim"
+      SET "expiraEm" = (clock_timestamp() AT TIME ZONE 'UTC')
+        - INTERVAL '1 minute'
+      WHERE "id" = ${claimId}
+    `;
+    await expect(
+      waitlistService.hasUnexpiredActiveClaimForEntry(entryId),
+    ).resolves.toBe(false);
   });
 
   it('rejeita data inválida', async () => {
@@ -344,6 +462,316 @@ describe('Waitlist (e2e)', () => {
     expect(appointments).toBe(0);
   });
 
+  it('cancela entrada e marca claim ativo válido como RECUSADO', async () => {
+    const { entry, claim } = await createClaimFixture('2099-04-09');
+
+    await request(app.getHttpServer())
+      .patch(`/waitlist/${entry.id}/cancel`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(200);
+
+    const storedClaim = await prisma.waitlistClaim.findUnique({
+      where: { id: claim.id },
+    });
+    expect(storedClaim?.status).toBe(StatusWaitlistClaim.RECUSADO);
+  });
+
+  it('cancela entrada e marca claim expirado pelo relógio do PostgreSQL como EXPIRADO', async () => {
+    const { entry, claim } = await createClaimFixture('2099-04-10');
+    await prisma.$executeRaw`
+      UPDATE "WaitlistClaim"
+      SET "expiraEm" = clock_timestamp() AT TIME ZONE 'UTC'
+      WHERE "id" = ${claim.id}
+    `;
+
+    await request(app.getHttpServer())
+      .patch(`/waitlist/${entry.id}/cancel`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(200);
+
+    const storedClaim = await prisma.waitlistClaim.findUnique({
+      where: { id: claim.id },
+    });
+    expect(storedClaim?.status).toBe(StatusWaitlistClaim.EXPIRADO);
+  });
+
+  it('repetir cancelamento não sobrescreve o estado final do claim', async () => {
+    const { entry, claim } = await createClaimFixture('2099-04-11');
+
+    await request(app.getHttpServer())
+      .patch(`/waitlist/${entry.id}/cancel`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(200);
+    await request(app.getHttpServer())
+      .patch(`/waitlist/${entry.id}/cancel`)
+      .set('Authorization', `Bearer ${clientAToken}`)
+      .expect(404);
+
+    const storedClaim = await prisma.waitlistClaim.findUnique({
+      where: { id: claim.id },
+    });
+    expect(storedClaim?.status).toBe(StatusWaitlistClaim.RECUSADO);
+  });
+
+  it('persiste e processa uma reoferta sem criar claims duplicados em retries', async () => {
+    const outbox = await createOutboxFixture('2099-05-01');
+
+    await outboxService.processPendingReoffers();
+    await outboxService.processPendingReoffers();
+
+    const [storedOutbox, claimCount] = await Promise.all([
+      prisma.waitlistReofferOutbox.findUnique({ where: { id: outbox.id } }),
+      prisma.waitlistClaim.count({
+        where: { reofertaOutboxId: outbox.id },
+      }),
+    ]);
+    expect(storedOutbox?.status).toBe(StatusWaitlistReoffer.CONCLUIDA);
+    expect(storedOutbox?.resultado).toBe(ResultadoWaitlistReoffer.CLAIM_CRIADO);
+    expect(claimCount).toBe(1);
+  });
+
+  it('retoma uma pendência persistida por uma nova instância após falha transitória', async () => {
+    const outbox = await createOutboxFixture('2099-05-02');
+    const original =
+      opportunityService.tryCreateForReleasedWindow.bind(opportunityService);
+    const failOnce = jest
+      .spyOn(opportunityService, 'tryCreateForReleasedWindow')
+      .mockRejectedValueOnce(new Error('falha temporária simulada'))
+      .mockImplementation(original);
+
+    const firstAttempt = await outboxService.processPendingReoffers();
+    expect(firstAttempt.retryCount).toBe(1);
+
+    const pending = await prisma.waitlistReofferOutbox.findUnique({
+      where: { id: outbox.id },
+    });
+    expect(pending?.status).toBe(StatusWaitlistReoffer.PENDENTE);
+    expect(pending?.ultimoErro).toContain('falha temporária simulada');
+
+    await prisma.waitlistReofferOutbox.update({
+      where: { id: outbox.id },
+      data: { proximaTentativaEm: new Date(Date.now() - 1000) },
+    });
+    const restartedWorker = new WaitlistReofferOutboxService(
+      prisma,
+      opportunityService,
+    );
+    await restartedWorker.processPendingReoffers();
+    failOnce.mockRestore();
+
+    const [completed, claimCount] = await Promise.all([
+      prisma.waitlistReofferOutbox.findUnique({ where: { id: outbox.id } }),
+      prisma.waitlistClaim.count({
+        where: { reofertaOutboxId: outbox.id },
+      }),
+    ]);
+    expect(completed?.status).toBe(StatusWaitlistReoffer.CONCLUIDA);
+    expect(claimCount).toBe(1);
+  });
+
+  it('recupera lease abandonado depois de interrupção do worker', async () => {
+    const outbox = await createOutboxFixture('2099-05-03');
+    await prisma.waitlistReofferOutbox.update({
+      where: { id: outbox.id },
+      data: {
+        status: StatusWaitlistReoffer.PROCESSANDO,
+        tentativas: 1,
+        leaseAte: new Date(Date.now() - 1000),
+      },
+    });
+
+    const restartedWorker = new WaitlistReofferOutboxService(
+      prisma,
+      opportunityService,
+    );
+    await restartedWorker.processPendingReoffers();
+
+    const recovered = await prisma.waitlistReofferOutbox.findUnique({
+      where: { id: outbox.id },
+    });
+    expect(recovered?.status).toBe(StatusWaitlistReoffer.CONCLUIDA);
+    expect(recovered?.tentativas).toBe(2);
+  });
+
+  it('duas instâncias concorrentes não reservam nem criam duas claims para a mesma pendência', async () => {
+    const outbox = await createOutboxFixture('2099-05-04');
+    const original =
+      opportunityService.tryCreateForReleasedWindow.bind(opportunityService);
+    let signalStarted!: () => void;
+    let releaseProcessing!: () => void;
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseProcessing = resolve;
+    });
+    const processingSpy = jest
+      .spyOn(opportunityService, 'tryCreateForReleasedWindow')
+      .mockImplementation(async (...args) => {
+        signalStarted();
+        await gate;
+        return original(...args);
+      });
+
+    const firstWorker = outboxService.processPendingReoffers();
+    await started;
+    const secondWorker = new WaitlistReofferOutboxService(
+      prisma,
+      opportunityService,
+    );
+    const secondResult = await secondWorker.processPendingReoffers();
+    releaseProcessing();
+    await firstWorker;
+    processingSpy.mockRestore();
+
+    const claimCount = await prisma.waitlistClaim.count({
+      where: { reofertaOutboxId: outbox.id },
+    });
+    expect(secondResult.claimedCount).toBe(0);
+    expect(claimCount).toBe(1);
+  });
+
+  it('fenceia worker antigo e reverte claim/notificação quando o lease vence durante a criação', async () => {
+    const outbox = await createOutboxFixture('2099-05-06');
+    const notificationsService = app.get(NotificationsService);
+    const createNotification =
+      notificationsService.createWaitlistOpportunity.bind(notificationsService);
+    const createOpportunity =
+      opportunityService.tryCreateForReleasedWindow.bind(opportunityService);
+
+    let signalFirstNotification!: () => void;
+    let releaseFirstNotification!: () => void;
+    let signalSecondOpportunity!: () => void;
+    const firstNotificationStarted = new Promise<void>((resolve) => {
+      signalFirstNotification = resolve;
+    });
+    const firstNotificationGate = new Promise<void>((resolve) => {
+      releaseFirstNotification = resolve;
+    });
+    const secondOpportunityStarted = new Promise<void>((resolve) => {
+      signalSecondOpportunity = resolve;
+    });
+
+    let notificationPaused = false;
+    let opportunityCalls = 0;
+    const notificationSpy = jest
+      .spyOn(notificationsService, 'createWaitlistOpportunity')
+      .mockImplementation(async (tx, clienteId, claimId) => {
+        if (!notificationPaused) {
+          notificationPaused = true;
+          signalFirstNotification();
+          await firstNotificationGate;
+        }
+        return createNotification(tx, clienteId, claimId);
+      });
+    const opportunitySpy = jest
+      .spyOn(opportunityService, 'tryCreateForReleasedWindow')
+      .mockImplementation(async (...args) => {
+        opportunityCalls += 1;
+        if (opportunityCalls === 2) {
+          signalSecondOpportunity();
+        }
+        await createOpportunity(...args);
+        return null;
+      });
+
+    let firstWorker: Promise<unknown> | undefined;
+    let secondWorker: Promise<unknown> | undefined;
+    let leaseUpdateTimeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      firstWorker = outboxService.processPendingReoffers();
+      await firstNotificationStarted;
+
+      expect(
+        await prisma.waitlistClaim.count({
+          where: { reofertaOutboxId: outbox.id },
+        }),
+      ).toBe(0);
+
+      const expireLease = prisma.$executeRaw`
+        UPDATE "WaitlistReofferOutbox"
+        SET "leaseAte" = (clock_timestamp() AT TIME ZONE 'UTC')
+          + INTERVAL '1 second'
+        WHERE "id" = ${outbox.id}
+      `;
+      await Promise.race([
+        expireLease,
+        new Promise<never>((_resolve, reject) => {
+          leaseUpdateTimeout = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  'A transação de claim manteve o lock da linha OUTBOX durante a criação.',
+                ),
+              ),
+            3000,
+          );
+        }),
+      ]);
+      if (leaseUpdateTimeout) {
+        clearTimeout(leaseUpdateTimeout);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      secondWorker = new WaitlistReofferOutboxService(
+        prisma,
+        opportunityService,
+      ).processPendingReoffers();
+      await secondOpportunityStarted;
+
+      expect(
+        (
+          await prisma.waitlistReofferOutbox.findUnique({
+            where: { id: outbox.id },
+          })
+        )?.tentativas,
+      ).toBe(2);
+
+      releaseFirstNotification();
+      await Promise.all([firstWorker, secondWorker]);
+
+      const [storedOutbox, claims, opportunityNotifications] =
+        await Promise.all([
+          prisma.waitlistReofferOutbox.findUnique({ where: { id: outbox.id } }),
+          prisma.waitlistClaim.findMany({
+            where: { reofertaOutboxId: outbox.id },
+          }),
+          prisma.notificacao.findMany({
+            where: { claim: { reofertaOutboxId: outbox.id } },
+          }),
+        ]);
+      expect(storedOutbox?.status).toBe(StatusWaitlistReoffer.CONCLUIDA);
+      expect(storedOutbox?.tentativas).toBe(2);
+      expect(claims).toHaveLength(1);
+      expect(opportunityNotifications).toHaveLength(1);
+      expect(opportunityNotifications[0].claimId).toBe(claims[0].id);
+    } finally {
+      if (leaseUpdateTimeout) {
+        clearTimeout(leaseUpdateTimeout);
+      }
+      releaseFirstNotification();
+      notificationSpy.mockRestore();
+      opportunitySpy.mockRestore();
+      await Promise.all(
+        [firstWorker, secondWorker].filter((worker) => worker !== undefined),
+      );
+    }
+  });
+
+  it('conclui sem retry infinito quando não existem candidatos elegíveis', async () => {
+    const outbox = await createOutboxFixture('2099-05-05', false);
+
+    const result = await outboxService.processPendingReoffers();
+    const stored = await prisma.waitlistReofferOutbox.findUnique({
+      where: { id: outbox.id },
+    });
+
+    expect(result.completedCount).toBe(1);
+    expect(stored?.status).toBe(StatusWaitlistReoffer.CONCLUIDA);
+    expect(stored?.resultado).toBe(ResultadoWaitlistReoffer.SEM_CANDIDATO);
+    expect(stored?.tentativas).toBe(1);
+  });
+
   it('rejeita aceite de claim expirado sem alterações indevidas', async () => {
     const { entry, claim } = await createClaimFixture('2099-04-03');
     await prisma.waitlistClaim.update({
@@ -364,6 +792,75 @@ describe('Waitlist (e2e)', () => {
     });
     expect(storedClaim?.status).toBe(StatusWaitlistClaim.ATIVO);
     expect(storedEntry?.status).toBe(StatusListaEspera.ATIVA);
+  });
+
+  it('reverte agendamento e notificações se o claim expirar antes da transição definitiva', async () => {
+    const dateKey = '2099-04-08';
+    const { entry, claim } = await createClaimFixture(dateKey);
+    const client = await prisma.cliente.findUnique({
+      where: { id: clientAId },
+      select: { usuarioId: true },
+    });
+    const barber = await prisma.barbeiro.findUnique({
+      where: { id: barberAId },
+      select: { usuarioId: true },
+    });
+    const appointmentService = app.get(AppointmentsService);
+    const createConfirmedForClient =
+      appointmentService.createConfirmedForClient.bind(appointmentService);
+    const confirmationCounts = async () => ({
+      client: await prisma.notificacao.count({
+        where: {
+          usuarioId: client!.usuarioId,
+          tipo: TipoNotificacao.AGENDAMENTO,
+        },
+      }),
+      barber: await prisma.notificacao.count({
+        where: {
+          usuarioId: barber!.usuarioId,
+          tipo: TipoNotificacao.AGENDAMENTO,
+        },
+      }),
+    });
+    const notificationsBefore = await confirmationCounts();
+    const createConfirmedSpy = jest
+      .spyOn(appointmentService, 'createConfirmedForClient')
+      .mockImplementation(async (tx, input) => {
+        await prisma.waitlistClaim.update({
+          where: { id: claim.id },
+          data: { expiraEm: new Date(Date.now() - 60_000) },
+        });
+        return createConfirmedForClient(tx, input);
+      });
+
+    try {
+      await request(app.getHttpServer())
+        .post(`/waitlist/claims/${claim.id}/accept`)
+        .set('Authorization', `Bearer ${clientAToken}`)
+        .expect(409);
+    } finally {
+      createConfirmedSpy.mockRestore();
+    }
+
+    const [storedClaim, storedEntry, appointments, notificationsAfter] =
+      await Promise.all([
+        prisma.waitlistClaim.findUnique({ where: { id: claim.id } }),
+        prisma.listaEspera.findUnique({ where: { id: entry.id } }),
+        prisma.agendamento.count({
+          where: {
+            clienteId: clientAId,
+            barbeiroId: barberAId,
+            data: new Date(`${dateKey}T00:00:00.000Z`),
+          },
+        }),
+        confirmationCounts(),
+      ]);
+
+    expect(createConfirmedSpy).toHaveBeenCalledTimes(1);
+    expect(storedClaim?.status).toBe(StatusWaitlistClaim.ATIVO);
+    expect(storedEntry?.status).toBe(StatusListaEspera.ATIVA);
+    expect(appointments).toBe(0);
+    expect(notificationsAfter).toEqual(notificationsBefore);
   });
 
   it('não permite que outro cliente aceite ou recuse o claim', async () => {

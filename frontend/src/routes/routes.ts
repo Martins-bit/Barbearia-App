@@ -7,6 +7,9 @@ export const ROUTES = {
   // Público
   login: '/login',
   register: '/cadastro',
+  recoverPassword: '/recuperar-senha',
+  resetPassword: '/redefinir-senha',
+  confirmEmail: '/confirmar-email',
 
   // Área do cliente (protegida)
   cliente: {

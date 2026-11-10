@@ -8,7 +8,7 @@ import { SLOT_GRANULARITY_MINUTES } from '../schedule/schedule.service';
 import { StatusListaEspera } from '../generated/prisma/enums';
 import { WaitlistService } from './waitlist.service';
 
-interface ReleasedWindow {
+export interface ReleasedWindow {
   barbeiroId: number;
   dateKey: string;
   horaInicio: string;
@@ -34,6 +34,8 @@ export class WaitlistOpportunityService {
 
   async tryCreateForReleasedWindow(
     window: ReleasedWindow,
+    reofertaOutboxId?: number,
+    reofertaAttempt?: number,
   ): Promise<any | null> {
     const releasedStart = this.parseHHmm(window.horaInicio);
     const releasedEnd = this.parseHHmm(window.horaFim);
@@ -81,14 +83,8 @@ export class WaitlistOpportunityService {
         desiredEnd - entry.servico.duracaoMinutos,
       );
 
-      const activeClaim = await this.prisma.waitlistClaim.findFirst({
-        where: {
-          listaEsperaId: entry.id,
-          status: 'ATIVO',
-          expiraEm: { gt: new Date() },
-        },
-        select: { id: true },
-      });
+      const activeClaim =
+        await this.waitlistService.hasUnexpiredActiveClaimForEntry(entry.id);
       if (activeClaim) {
         continue;
       }
@@ -124,14 +120,26 @@ export class WaitlistOpportunityService {
 
         try {
           const claim =
-            await this.waitlistService.claimNextEligibleEntryForSlot(
-              window.barbeiroId,
-              entry.servicoId,
-              window.dateKey,
-              horaInicio,
-              horaFim,
-            );
-          return claim;
+            reofertaOutboxId === undefined
+              ? await this.waitlistService.claimNextEligibleEntryForSlot(
+                  window.barbeiroId,
+                  entry.servicoId,
+                  window.dateKey,
+                  horaInicio,
+                  horaFim,
+                )
+              : await this.waitlistService.claimNextEligibleEntryForSlot(
+                  window.barbeiroId,
+                  entry.servicoId,
+                  window.dateKey,
+                  horaInicio,
+                  horaFim,
+                  reofertaOutboxId,
+                  reofertaAttempt,
+                );
+          if (claim) {
+            return claim;
+          }
         } catch (error) {
           if (
             error instanceof NotFoundException ||

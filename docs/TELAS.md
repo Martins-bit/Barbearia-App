@@ -1117,7 +1117,7 @@ Deverão existir opções para:
 
 - Entrar;
 - Acessar cadastro;
-- Recuperar acesso, caso essa funcionalidade seja implementada.
+- Esqueci minha senha.
 
 ### Erros
 
@@ -1140,6 +1140,7 @@ O cadastro deverá conter, no mínimo:
 
 - Nome;
 - Número de telefone;
+- E-mail;
 - Senha.
 
 ### Validação
@@ -1148,12 +1149,15 @@ O sistema deverá validar:
 
 - Campos obrigatórios;
 - Formato dos dados;
+- Formato e unicidade do e-mail;
 - Regras de senha;
 - Existência de conta associada ao telefone, quando aplicável.
 
 ### Sucesso
 
-Após o cadastro realizado com sucesso, o cliente deverá receber confirmação e poderá ser direcionado para a área principal do aplicativo.
+Após o cadastro realizado com sucesso, o cliente deverá receber uma confirmação
+visual e ser direcionado para o login. O e-mail permanecerá pendente até que o
+usuário solicite e conclua a confirmação após entrar na conta.
 
 
 ## 3.3. Tela de Recuperação de Acesso
@@ -1166,7 +1170,24 @@ Permitir que o usuário recupere o acesso à conta caso esqueça suas credenciai
 
 O processo deverá utilizar um mecanismo seguro de recuperação.
 
-Os detalhes técnicos serão definidos posteriormente na documentação do backend.
+O usuário deverá informar o e-mail cadastrado. Após a solicitação, a interface
+deverá apresentar uma mensagem genérica que não confirme se existe uma conta
+para o endereço informado. O formulário de redefinição deverá solicitar o
+token recebido, a nova senha e sua confirmação; as duas senhas serão comparadas
+localmente e somente token e nova senha serão enviados ao backend. A senha
+deverá ter pelo menos 8 caracteres e respeitar o limite de 72 bytes UTF-8.
+Após a redefinição, o usuário poderá retornar ao login.
+
+## 3.4. Tela de Confirmação de E-mail
+
+O usuário autenticado deverá poder solicitar a confirmação do próprio endereço
+de e-mail. A interface deverá usar a sessão atual e não aceitar um endereço
+arbitrário para o envio.
+
+A confirmação deverá aceitar o token recebido por e-mail sem exigir login. A
+interface não deverá exibir, registrar ou persistir o token além do necessário
+para enviá-lo uma vez ao backend. Erros de token inválido ou expirado deverão
+ser apresentados sem revelar dados de outra conta.
 
 ---
 

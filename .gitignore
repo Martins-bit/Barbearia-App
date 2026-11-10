@@ -44,6 +44,10 @@ test-results/
 # Prisma / banco local
 *.db
 *.db-journal
+*.dump
+backend/test/.env.e2e
+!backend/test/.env.e2e.example
+!backend/test/.env.e2e.migrate.example
 
 # Arquivos de agentes/skills gerados por ferramentas
 backend/.agents/

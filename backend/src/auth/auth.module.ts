@@ -8,6 +8,12 @@ import { JwtGuard } from './guards/jwt.guard';
 import { RolesGuard } from './guards/roles.guard';
 import { UsersModule } from '../users/users.module';
 import { JWT_CONFIG } from '../common/config/jwt.config';
+import { EmailVerificationService } from './email-verification.service';
+import {
+  EMAIL_VERIFICATION_MAILER,
+  UnconfiguredEmailVerificationMailer,
+} from './email-verification-mailer';
+import { PasswordRecoveryService } from './password-recovery.service';
 
 @Module({
   imports: [
@@ -19,7 +25,19 @@ import { JWT_CONFIG } from '../common/config/jwt.config';
     UsersModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtGuard, RolesGuard],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    JwtGuard,
+    RolesGuard,
+    EmailVerificationService,
+    PasswordRecoveryService,
+    UnconfiguredEmailVerificationMailer,
+    {
+      provide: EMAIL_VERIFICATION_MAILER,
+      useExisting: UnconfiguredEmailVerificationMailer,
+    },
+  ],
   // JwtModule é exportado para que outros módulos (ex.: MessagesGateway na
   // ETAPA 7C.1) validem o MESMO JWT/segredo do sistema, sem duplicar
   // configuração de autenticação.

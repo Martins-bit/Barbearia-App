@@ -31,6 +31,7 @@ describe('AuthService', () => {
 
     const mockUsersService = {
       findByPhoneWithPasswordHash: jest.fn(),
+      findByEmail: jest.fn().mockResolvedValue(null),
       createUser: jest.fn(),
       findById: jest.fn(),
     };
@@ -68,6 +69,7 @@ describe('AuthService', () => {
         nome: 'João Silva',
         telefone: '11999999999',
         senha: 'senha12345',
+        email: 'joao@example.com',
       };
 
       const usuarioRetornado = {
@@ -98,6 +100,7 @@ describe('AuthService', () => {
         expect.objectContaining({
           nome: registerDto.nome,
           telefone: registerDto.telefone,
+          email: registerDto.email,
           tipoUsuario: 'CLIENTE',
         }),
       );
@@ -108,6 +111,7 @@ describe('AuthService', () => {
         nome: 'João Silva',
         telefone: '11999999999',
         senha: 'senha12345',
+        email: 'joao@example.com',
       };
 
       const usuarioExistente = {
@@ -131,11 +135,32 @@ describe('AuthService', () => {
       );
     });
 
+    it('should throw ConflictException when e-mail already exists', async () => {
+      const registerDto: RegisterDto = {
+        nome: 'João Silva',
+        telefone: '11999999999',
+        senha: 'senha12345',
+        email: 'JOAO@example.com',
+      };
+
+      usersService.findByPhoneWithPasswordHash.mockResolvedValue(null);
+      usersService.findByEmail.mockResolvedValue({ id: 2 });
+
+      await expect(service.register(registerDto)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(usersService.findByEmail).toHaveBeenCalledWith(
+        'joao@example.com',
+      );
+      expect(usersService.createUser).not.toHaveBeenCalled();
+    });
+
     it('should throw BadRequestException when required fields are missing', async () => {
       const invalidDto = {
         nome: 'João',
         telefone: '',
         senha: 'senha12345',
+        email: 'joao@example.com',
       };
 
       await expect(service.register(invalidDto)).rejects.toThrow(
@@ -148,6 +173,7 @@ describe('AuthService', () => {
         nome: 'João Silva',
         telefone: '11999999999',
         senha: 'senha12345',
+        email: 'joao@example.com',
       };
 
       const usuarioRetornado = {
@@ -206,6 +232,47 @@ describe('AuthService', () => {
       expect(result).toHaveProperty('expiresIn');
       expect(result.user).not.toHaveProperty('senhaHash');
       expect(result.token).toBe('token123');
+        expect(jwtService.sign).toHaveBeenCalledWith(
+          expect.objectContaining({ authVersion: 0 }),
+        );
+        expect(result.user).not.toHaveProperty('authVersion');
+    });
+
+    it('should include user current authVersion in the JWT payload when non-zero', async () => {
+      const loginDto: LoginDto = {
+        telefone: '11888888888',
+        senha: 'senha12345',
+      };
+
+      const usuario = {
+        id: 2,
+        nome: 'Carlos Barbeiro',
+        telefone: '11888888888',
+        email: 'barbeiro@example.com',
+        senhaHash: '$2b$10$hashedpassword',
+        tipoUsuario: 'BARBEIRO',
+        ativo: true,
+        authVersion: 3,
+        dataCriacao: new Date(),
+        dataAtualizacao: new Date(),
+      };
+
+      (usersService.findByPhoneWithPasswordHash as jest.Mock).mockResolvedValue(
+        usuario,
+      );
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+      (jwtService.sign as jest.Mock).mockReturnValue('tokenWithVersion3');
+
+      const result = await service.login(loginDto);
+
+      expect(jwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sub: 2,
+          authVersion: 3,
+          tipoUsuario: 'BARBEIRO',
+        }),
+      );
+      expect(result.user).not.toHaveProperty('authVersion');
     });
 
     it('should throw UnauthorizedException when user does not exist', async () => {
