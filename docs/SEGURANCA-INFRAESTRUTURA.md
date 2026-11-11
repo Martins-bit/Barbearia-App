@@ -96,9 +96,16 @@ nas operações sensíveis. Leituras e demais rotas legítimas **não** são lim
 - Tokens de confirmação são aleatórios, armazenados como hash e consumidos na
   mesma transação que marca o endereço verificado. Mudança de e-mail invalida
   tokens pendentes e remove a confirmação anterior.
-- O provedor de envio ainda não está configurado. A solicitação retorna `503`
-  sem criar token nem afirmar que o e-mail foi enviado; nenhuma credencial de
-  e-mail está configurada nesta etapa.
+- O envio transacional é selecionado por `EMAIL_PROVIDER` e permanece
+  desabilitado por padrão. Com `disabled`, solicitações de confirmação e
+  recuperação retornam `503` antes de iniciar o envio e sem criar token.
+- Com `EMAIL_PROVIDER=brevo`, a API usa o endpoint transacional oficial. API key
+  e remetente são obrigatórios; chamadas possuem timeout explícito, não fazem
+  retries automáticos e não registram credenciais, tokens, endereços ou respostas
+  do provedor nos logs.
+- Se o envio de confirmação falhar, o token é invalidado e a rota retorna `503`.
+  Se uma tentativa de recuperação falhar após a criação do token, ele é
+  invalidado e a rota mantém a resposta `202` genérica para evitar enumeração.
 - A janela de tempo do socket usa o utilitário
   `common/utils/sliding-window-rate-limiter.ts` (janela deslizante, em memória,
   por processo).
@@ -180,9 +187,12 @@ e qualquer execução manual também exige validação E2E.
 - `backend/src/auth/auth.controller.ts` — `@Throttle` em login/register.
 - `backend/src/messages/messages.controller.ts` — `@Throttle` (por usuário) no envio REST.
 - `backend/src/messages/messages.gateway.ts` — CORS do handshake + limite do `message:send`.
+- `backend/src/auth/email-verification-mailer.ts` — contrato e implementação desabilitada.
+- `backend/src/auth/brevo-email-verification-mailer.ts` — adaptador HTTPS do Brevo e validação de configuração.
+- `backend/src/auth/auth.module.ts` — seleção explícita do provider de e-mail.
 - `backend/.env.example` — nomes de variáveis e exemplos seguros (sem segredos).
 - Testes: `cors.config.spec.ts`, `sliding-window-rate-limiter.spec.ts`,
-  `security-infra.spec.ts` (integração: headers, CORS autorizado/negado/preflight, `429`).
+  `security-infra.spec.ts` (integração: headers, CORS autorizado/negado/preflight, `429`) e `brevo-email-verification-mailer.spec.ts`.
 
 ## 7. Configuração de variáveis (resumo)
 
@@ -191,6 +201,11 @@ e qualquer execução manual também exige validação E2E.
 | `CORS_ALLOWED_ORIGINS` | opcional (padrão localhost 5173/5174) | **obrigatório**, domínio(s) real(is), sem `*` |
 | `TRUST_PROXY` | desligado | definir nº de hops do proxy/CDN (ex.: `1` p/ Cloudflare) |
 | `NODE_ENV` | `development` | `production` (ativa exigências de CORS) |
+| `EMAIL_PROVIDER` | `disabled` por padrão; `brevo` para ativar | selecionar explicitamente `brevo` |
+| `BREVO_API_KEY` | obrigatória somente com `EMAIL_PROVIDER=brevo` | segredo do painel Brevo; não versionar |
+| `BREVO_SENDER_EMAIL` | obrigatória somente com `EMAIL_PROVIDER=brevo` | remetente autorizado no Brevo |
+| `BREVO_SENDER_NAME` | opcional; usa `Barbearia do Bruno` por padrão | nome exibido do remetente |
+| `EMAIL_TIMEOUT_MS` | padrão `10000` ms | inteiro positivo; limita a chamada à API |
 
 Consulte `backend/.env.example` para os nomes exatos e o `.env` local para os
 valores do seu ambiente (o conteúdo do `.env` **não** é versionado).

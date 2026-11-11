@@ -200,8 +200,10 @@ autenticado, nunca um endereço arbitrário enviado no corpo.
 O endpoint é limitado por IP e por usuário. Quando o e-mail já está confirmado,
 retorna apenas esse estado. Para e-mail pendente, a resposta de sucesso só é
 retornada depois que o provedor aceitar o envio; nenhum endereço ou token é
-incluído na resposta. Até a configuração de um provedor, a rota retorna `503`
-sem criar token ou alegar que uma mensagem foi enviada.
+incluído na resposta. Com o provedor desabilitado, a rota retorna `503` sem
+criar token ou alegar que uma mensagem foi enviada. Se o provedor estiver
+configurado, mas a chamada de envio falhar, o token é invalidado e a rota
+retorna `503` sem expor detalhes do provedor.
 
 ### Confirmar endereço
 
@@ -215,7 +217,7 @@ Corpo:
 }
 ```
 
-Não exige sessão, pois o link é destinado a usuários que podem não conseguir
+Não exige sessão, pois o código é destinado a usuários que podem não conseguir
 entrar. O token aleatório tem 32 bytes, é armazenado somente como hash SHA-256,
 expira em 30 minutos e só pode ser consumido uma vez. Tokens inválidos,
 expirados, reutilizados ou associados a um endereço que mudou recebem a mesma
@@ -252,8 +254,10 @@ de contas, mesmo se o e-mail não existir, não estiver confirmado ou estiver in
 
 Tokens são gerados com `randomBytes(32)` codificados em base64url, armazenando
 exclusivamente o hash SHA-256 no banco com expiração de 15 minutos e uso único.
-Se o provedor de e-mail estiver indisponível, retorna `503` genérico sem criar
-tokens inúteis nem revelar dados internos.
+Com o provedor desabilitado, retorna `503` genérico antes de consultar a conta
+ou criar token. Se uma tentativa de envio falhar depois da criação do token, o
+token é invalidado e a resposta continua sendo o `202` genérico, preservando a
+proteção contra enumeração de contas.
 
 ### Redefinir senha
 

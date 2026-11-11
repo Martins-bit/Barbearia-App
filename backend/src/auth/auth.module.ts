@@ -11,8 +11,8 @@ import { JWT_CONFIG } from '../common/config/jwt.config';
 import { EmailVerificationService } from './email-verification.service';
 import {
   EMAIL_VERIFICATION_MAILER,
-  UnconfiguredEmailVerificationMailer,
 } from './email-verification-mailer';
+import { createEmailVerificationMailer } from './brevo-email-verification-mailer';
 import { PasswordRecoveryService } from './password-recovery.service';
 
 @Module({
@@ -32,10 +32,9 @@ import { PasswordRecoveryService } from './password-recovery.service';
     RolesGuard,
     EmailVerificationService,
     PasswordRecoveryService,
-    UnconfiguredEmailVerificationMailer,
     {
       provide: EMAIL_VERIFICATION_MAILER,
-      useExisting: UnconfiguredEmailVerificationMailer,
+      useFactory: () => createEmailVerificationMailer(process.env),
     },
   ],
   // JwtModule é exportado para que outros módulos (ex.: MessagesGateway na
