@@ -9,6 +9,7 @@ import {
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
+import { RegisterResponseDto } from './dto/register-response.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
@@ -22,6 +23,7 @@ import { EmailVerificationService } from './email-verification.service';
 import { PasswordRecoveryService } from './password-recovery.service';
 import { PasswordRecoveryDto } from './dto/password-recovery.dto';
 import { PasswordResetDto } from './dto/password-reset.dto';
+import { RequestEmailVerificationDto } from './dto/request-email-verification.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -39,7 +41,9 @@ export class AuthController {
   @HttpCode(201)
   @UseGuards(ThrottlerGuard)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  async register(@Body() registerDto: RegisterDto): Promise<AuthResponseDto> {
+  async register(
+    @Body() registerDto: RegisterDto,
+  ): Promise<RegisterResponseDto> {
     return this.authService.register(registerDto);
   }
 
@@ -64,6 +68,18 @@ export class AuthController {
     @CurrentUser() userId: number,
   ): Promise<{ message: string }> {
     return this.emailVerificationService.requestConfirmation(userId);
+  }
+
+  @Post('email/verification/resend')
+  @HttpCode(202)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  async resendEmailVerification(
+    @Body() dto: RequestEmailVerificationDto,
+  ): Promise<{ message: string }> {
+    return this.emailVerificationService.requestConfirmationByEmail(
+      dto.email,
+    );
   }
 
   @Post('email/verification/confirm')

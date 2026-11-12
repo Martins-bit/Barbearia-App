@@ -555,7 +555,12 @@ O perfil deverá apresentar:
 
 - Nome;
 - Número de telefone;
+- E-mail e estado de confirmação (pendente ou confirmado);
 - Outras informações de conta definidas posteriormente.
+
+Quando o e-mail estiver pendente, a tela deverá apresentar uma ação discreta
+para confirmar o endereço. Quando estiver confirmado, deverá exibir um
+indicador de sucesso sem oferecer uma ação de confirmação desnecessária.
 
 ### Ações
 
@@ -563,7 +568,13 @@ O cliente deverá poder:
 
 - Editar informações permitidas;
 - Salvar alterações;
+- Baixar uma cópia JSON dos dados da própria conta disponíveis ao usuário;
 - Sair da conta.
+
+O arquivo informa as categorias omitidas. Nesta versão, conteúdo de mensagens e
+observações livres, mensagens apagadas/ocultadas e textos livres de notificações
+não são exportados para reduzir exposição de dados de terceiros. O download
+não cria um arquivo persistente no servidor.
 
 ### Validação
 
@@ -619,6 +630,46 @@ A tela deverá funcionar corretamente em:
 - tablet;
 - computador.
 
+
+## 1.9. Área de Privacidade do Cliente
+
+### Objetivo
+
+Explicar em linguagem simples os direitos relacionados aos dados pessoais e
+oferecer acesso rápido aos recursos existentes.
+
+### Recursos disponíveis
+
+- Baixar a exportação JSON dos dados próprios atualmente disponíveis, deixando
+  claras suas limitações;
+- Acessar o Perfil para corrigir nome, telefone e e-mail conforme as regras
+  existentes;
+- Informar que pedidos de exclusão ou anonimização dependem de análise e não
+  são executados nesta tela.
+
+### Acompanhamento
+
+A tela apresenta estados previstos para um futuro processo:
+
+- Recebida;
+- Em análise;
+- Aguardando informações;
+- Atendida;
+- Encerrada.
+
+Enquanto não houver registro persistente, canal de atendimento e responsáveis
+definidos, esses estados deverão ser apresentados somente como etapas previstas,
+nunca como pedidos reais ou status da conta. A tela deverá informar claramente
+que não recebe nem registra solicitações e que o canal de atendimento está
+pendente de definição.
+
+### Segurança e responsividade
+
+A área deverá ser protegida pela autenticação de cliente. A exportação deverá
+reutilizar o endpoint autenticado existente, que identifica o titular pelo JWT.
+A página não deverá solicitar um ID de usuário nem criar formulários que deem a
+entender que uma solicitação foi enviada. A interface deverá funcionar em
+celular, tablet e computador.
 
 # 2. ÁREA DO BARBEIRO
 
@@ -891,6 +942,7 @@ Poderão ser apresentados:
 - Nome;
 - Telefone;
 - E-mail;
+- Estado de confirmação do e-mail, com ação somente quando estiver pendente;
 - Informações da barbearia;
 - Outras informações definidas posteriormente.
 
@@ -899,9 +951,16 @@ Poderão ser apresentados:
 O barbeiro deverá poder:
 
 - Editar informações permitidas;
+- Baixar uma cópia JSON dos dados da própria conta disponíveis ao usuário;
 - Salvar alterações;
 - Alterar configurações da conta;
 - Sair da conta.
+
+A cópia pode incluir horários, bloqueios e emergências do próprio barbeiro,
+além dos dados de conta e registros acessíveis. Conteúdo de mensagens e
+observações e motivos livres não são exportados; registros de mensagens
+apagadas/ocultadas e textos livres de notificações também ficam de fora. As
+limitações são informadas no próprio arquivo.
 
 
 ## 2.8. Tela de Lista de Espera do Barbeiro
@@ -1099,6 +1158,14 @@ Não deverão existir relatórios de:
 Os relatórios são exclusivamente operacionais.
 
 
+## 2.14. Área de Privacidade do Barbeiro
+
+A área de privacidade deverá oferecer as mesmas orientações e recursos
+disponíveis ao cliente, respeitando a autenticação de barbeiro. A exportação
+reutiliza a resposta já limitada ao próprio titular. Estados de solicitação
+continuam sendo apenas etapas previstas enquanto não existir acompanhamento
+persistente e processo operacional definido.
+
 # 3. TELAS DE AUTENTICAÇÃO
 
 ## 3.1. Tela de Login
@@ -1155,9 +1222,14 @@ O sistema deverá validar:
 
 ### Sucesso
 
-Após o cadastro realizado com sucesso, o cliente deverá receber uma confirmação
-visual e ser direcionado para o login. O e-mail permanecerá pendente até que o
-usuário solicite e conclua a confirmação após entrar na conta.
+Após o cadastro, a conta deverá ser criada com confirmação de e-mail
+obrigatória. O backend deverá tentar enviar um único e-mail transacional pelo
+Brevo e direcionar o usuário à tela pública de confirmação, sem iniciar uma
+sessão. O acesso normal somente será liberado depois da confirmação.
+
+Se o primeiro envio não puder ser confirmado, a tela deverá informar isso sem
+afirmar que a mensagem foi enviada e oferecer uma solicitação explícita de
+reenvio. Abrir a tela ou tentar entrar não deverá disparar e-mail.
 
 
 ## 3.3. Tela de Recuperação de Acesso
@@ -1180,9 +1252,18 @@ Após a redefinição, o usuário poderá retornar ao login.
 
 ## 3.4. Tela de Confirmação de E-mail
 
-O usuário autenticado deverá poder solicitar a confirmação do próprio endereço
-de e-mail. A interface deverá usar a sessão atual e não aceitar um endereço
-arbitrário para o envio.
+A tela deverá ser pública para que o usuário confirme a conta antes de entrar.
+Deverá permitir inserir o token recebido e solicitar explicitamente o reenvio
+informando o e-mail. A resposta do reenvio deverá ser genérica e não revelar se
+o endereço está cadastrado. A solicitação não será automática ao abrir a tela.
+
+O reenvio deverá respeitar intervalo mínimo de 60 segundos e limite de três
+envios por endereço/conta por hora, além da limitação por IP. O token aleatório
+existente deverá continuar expirando em 30 minutos, ser armazenado somente
+como hash e ser consumido uma única vez.
+
+A mesma tela continuará acessível pelo Perfil para casos de e-mail pendente ou
+alterado.
 
 A confirmação deverá aceitar o token recebido por e-mail sem exigir login. A
 interface não deverá exibir, registrar ou persistir o token além do necessário
@@ -1239,6 +1320,7 @@ O cliente deverá conseguir acessar facilmente:
 - Lista de espera;
 - Notificações;
 - Perfil;
+- Privacidade;
 - Configurações.
 
 ## 5.2. Área do barbeiro
@@ -1256,7 +1338,8 @@ O barbeiro deverá conseguir acessar facilmente:
 - Mensagens;
 - Relatórios;
 - Configurações;
-- Emergência.
+- Emergência;
+- Privacidade.
 
 A disposição final da navegação será definida durante a especificação visual da interface.
 

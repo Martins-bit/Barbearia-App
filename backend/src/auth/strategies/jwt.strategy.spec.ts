@@ -66,6 +66,25 @@ describe('JwtStrategy authVersion validation', () => {
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });
 
+  it('rejects an otherwise-current token while email confirmation is mandatory', async () => {
+    usersService.findAuthVersionById.mockResolvedValue({
+      id: 8,
+      authVersion: 0,
+      emailConfirmacaoObrigatoria: true,
+    });
+
+    await expect(
+      strategy.validate({
+        sub: 8,
+        telefone: '11999999999',
+        tipoUsuario: 'CLIENTE',
+        authVersion: 0,
+        iat: 1,
+        exp: 9999999999,
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   it('rejects malformed or negative authVersion values', async () => {
     await expect(
       strategy.validate({

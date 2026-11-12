@@ -83,6 +83,10 @@ describe('MessagesService', () => {
     prisma.mensagem.create.mockResolvedValue(messageRow);
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   const arrangeUsers = () =>
     prisma.usuario.findUnique.mockImplementation(({ where }: any) => {
       switch (where.id) {
@@ -908,11 +912,12 @@ describe('MessagesService', () => {
     });
 
     it('6. Mensagem exatamente no limite de 60 minutos é permitida (inclusivo)', async () => {
+      const agoraExato = new Date('2026-11-12T18:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(agoraExato);
       arrangeUsers();
-      const agoraExato = Date.now();
       const mensagemLimite = {
         ...mensagemRecente,
-        dataCriacao: new Date(agoraExato - 60 * 60 * 1000), // exatamente 60 min
+        dataCriacao: new Date(agoraExato.getTime() - 60 * 60 * 1000),
       };
       prisma.mensagem.findUnique
         .mockResolvedValueOnce(mensagemLimite)

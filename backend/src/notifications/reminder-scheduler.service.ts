@@ -37,10 +37,9 @@ export class ReminderSchedulerService {
           `Motor de lembretes criou ${result.created} notificação(ões) LEMBRETE.`,
         );
       }
-    } catch (error) {
+    } catch {
       this.logger.error(
         'Falha ao processar lembretes de agendamento; nova execução ocorrerá no próximo intervalo.',
-        error instanceof Error ? error.stack : String(error),
       );
     }
   }

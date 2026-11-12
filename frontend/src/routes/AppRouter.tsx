@@ -29,6 +29,7 @@ import {
   ServicosPage,
 } from '../pages/barbeiro/BarbeiroPages'
 import { NotFoundPage } from '../pages/NotFoundPage'
+import { PrivacidadePage } from '../pages/privacidade/PrivacidadePage'
 
 /**
  * Árvore de rotas do app. Conceitualmente separada em:
@@ -145,6 +146,16 @@ export function AppRouter() {
           </RequireAuth>
         }
       />
+      <Route
+        path={ROUTES.cliente.privacidade}
+        element={
+          <RequireAuth role="CLIENTE">
+            <ClientLayout>
+              <PrivacidadePage />
+            </ClientLayout>
+          </RequireAuth>
+        }
+      />
 
       {/* Área do barbeiro */}
       <Route
@@ -233,6 +244,16 @@ export function AppRouter() {
           <RequireAuth role="BARBEIRO">
             <BarberLayout>
               <BarbeiroPerfilPage />
+            </BarberLayout>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path={ROUTES.barbeiro.privacidade}
+        element={
+          <RequireAuth role="BARBEIRO">
+            <BarberLayout>
+              <PrivacidadePage />
             </BarberLayout>
           </RequireAuth>
         }

@@ -61,9 +61,13 @@ describe('Segurança de infraestrutura (Etapa 2)', () => {
     it('retorna cabeçalhos de segurança nas respostas HTTP', async () => {
       const res = await request(app.getHttpServer()).get('/probe').expect(200);
       expect(res.headers['x-content-type-options']).toBe('nosniff');
-      expect(res.headers['x-frame-options']).toBeDefined();
+      expect(res.headers['x-frame-options']).toBe('SAMEORIGIN');
+      expect(res.headers['referrer-policy']).toBe('no-referrer');
       // Helmet adiciona CSP por padrão.
       expect(res.headers['content-security-policy']).toBeDefined();
+      expect(res.headers['content-security-policy']).toContain(
+        "frame-ancestors 'self'",
+      );
     });
   });
 

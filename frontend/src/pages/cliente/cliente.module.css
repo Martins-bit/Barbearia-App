@@ -30,6 +30,22 @@
   color: var(--color-text-muted);
 }
 
+.profileActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.profileExportButton {
+  min-height: 44px;
+}
+
+@media (max-width: 640px) {
+  .profileExportButton {
+    width: 100%;
+  }
+}
+
 /* ---- Passos ---- */
 .steps {
   display: flex;
@@ -441,6 +457,10 @@
   .summaryValue {
     text-align: left;
   }
+
+  .emailVerification {
+    justify-content: flex-start;
+  }
 }
 
 /* ---- Acesso rápido (Início) ---- */
@@ -508,6 +528,18 @@
 /* E-mails e valores longos não podem estourar a linha do par rótulo/valor. */
 .profileDetails .summaryValue {
   overflow-wrap: anywhere;
+}
+
+.emailVerification {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.emailVerificationAction {
+  min-height: 32px;
 }
 
 /* ---- Notificações ---- */

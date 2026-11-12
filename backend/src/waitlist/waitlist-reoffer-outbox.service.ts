@@ -18,7 +18,6 @@ import {
 
 const RETRY_BASE_DELAY_MS = 60 * 1000;
 const RETRY_MAX_DELAY_MS = 15 * 60 * 1000;
-const MAX_ERROR_LENGTH = 2000;
 export { MAX_WAITLIST_REOFFER_ATTEMPTS } from './waitlist-reoffer.constants';
 
 export interface EnqueueWaitlistReoffer {
@@ -89,10 +88,9 @@ export class WaitlistReofferOutboxService {
           `${exhaustedCount} pendência(s) da OUTBOX encerrada(s) após atingir ${MAX_WAITLIST_REOFFER_ATTEMPTS} tentativas.`,
         );
       }
-    } catch (error) {
+    } catch {
       this.logger.error(
-        `Falha ao encerrar pendências que esgotaram tentativas: ${this.errorMessage(error)}`,
-        error instanceof Error ? error.stack : undefined,
+        'Falha ao encerrar pendências que esgotaram tentativas.',
       );
       return result;
     }
@@ -101,10 +99,9 @@ export class WaitlistReofferOutboxService {
       let job: ClaimedReoffer | undefined;
       try {
         job = await this.claimNextPendingReoffer();
-      } catch (error) {
+      } catch {
         this.logger.error(
-          `Falha ao adquirir pendência da lista de espera: ${this.errorMessage(error)}`,
-          error instanceof Error ? error.stack : undefined,
+          'Falha ao adquirir pendência da lista de espera.',
         );
         break;
       }
@@ -147,10 +144,9 @@ export class WaitlistReofferOutboxService {
             );
           }
         })
-        .catch((error: unknown) => {
+        .catch(() => {
           this.logger.error(
-            `Falha ao renovar lease da reoferta ${job.id}: ${this.errorMessage(error)}`,
-            error instanceof Error ? error.stack : undefined,
+            `Falha ao renovar lease da reoferta ${job.id}.`,
           );
         })
         .finally(() => {
@@ -212,21 +208,18 @@ export class WaitlistReofferOutboxService {
 
         if (isPermanent) {
           this.logger.error(
-            `Reoferta ${job.id} encerrada na tentativa ${job.attempts}: ${this.errorMessage(error)}`,
-            error instanceof Error ? error.stack : undefined,
+            `Reoferta ${job.id} encerrada na tentativa ${job.attempts}.`,
           );
           return 'PERMANENT_FAILURE';
         }
 
         this.logger.error(
-          `Falha ao processar reoferta ${job.id}; nova tentativa será feita após backoff: ${this.errorMessage(error)}`,
-          error instanceof Error ? error.stack : undefined,
+          `Falha ao processar reoferta ${job.id}; nova tentativa será feita após backoff.`,
         );
         return 'RETRY';
-      } catch (recoveryError) {
+      } catch {
         this.logger.error(
-          `Falha ao registrar recuperação da reoferta ${job.id}: ${this.errorMessage(recoveryError)}`,
-          recoveryError instanceof Error ? recoveryError.stack : undefined,
+          `Falha ao registrar recuperação da reoferta ${job.id}.`,
         );
         return 'LEASE_LOST';
       }
@@ -365,7 +358,7 @@ export class WaitlistReofferOutboxService {
         "proximaTentativaEm" = (clock_timestamp() AT TIME ZONE 'UTC')
           + (${delay} * INTERVAL '1 millisecond'),
         "leaseAte" = NULL,
-        "ultimoErro" = ${this.errorMessage(error).slice(0, MAX_ERROR_LENGTH)},
+        "ultimoErro" = ${this.errorCategory(error)},
         "dataAtualizacao" = (clock_timestamp() AT TIME ZONE 'UTC')
       WHERE "id" = ${job.id}
         AND "status" = ${StatusWaitlistReoffer.PROCESSANDO}::"StatusWaitlistReoffer"
@@ -384,7 +377,7 @@ export class WaitlistReofferOutboxService {
       SET
         "status" = ${StatusWaitlistReoffer.FALHA_FINAL}::"StatusWaitlistReoffer",
         "leaseAte" = NULL,
-        "ultimoErro" = ${this.errorMessage(error).slice(0, MAX_ERROR_LENGTH)},
+        "ultimoErro" = ${this.errorCategory(error)},
         "resultado" = ${ResultadoWaitlistReoffer.FALHA_PERMANENTE}::"ResultadoWaitlistReoffer",
         "concluidoEm" = (clock_timestamp() AT TIME ZONE 'UTC'),
         "dataAtualizacao" = (clock_timestamp() AT TIME ZONE 'UTC')
@@ -396,9 +389,13 @@ export class WaitlistReofferOutboxService {
     return updated === 1;
   }
 
-  private errorMessage(error: unknown): string {
-    return error instanceof Error
-      ? `${error.name}: ${error.message}`
-      : String(error);
+  private errorCategory(error: unknown): string {
+    if (error instanceof HttpException) {
+      return `Falha de regra HTTP ${error.getStatus()}.`;
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      return `Falha de persistência Prisma ${error.code}.`;
+    }
+    return 'Falha inesperada de processamento.';
   }
 }

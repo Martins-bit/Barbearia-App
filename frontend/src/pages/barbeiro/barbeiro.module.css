@@ -1019,6 +1019,22 @@
   gap: var(--space-2);
 }
 
+.profileExportButton {
+  min-height: 44px;
+}
+
+.emailVerification {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.emailVerificationAction {
+  min-height: 32px;
+}
+
 .sectionHint {
   font-size: var(--text-sm);
   color: var(--color-text-muted);
@@ -1040,5 +1056,13 @@
 
   .summaryValue {
     text-align: left;
+  }
+
+  .emailVerification {
+    justify-content: flex-start;
+  }
+
+  .profileExportButton {
+    width: 100%;
   }
 }

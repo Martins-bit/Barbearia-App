@@ -2,12 +2,17 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react'
 import { authService } from '../services/api/authService'
-import { authTokenStorage } from '../services/api/http'
+import {
+  authTokenStorage,
+  subscribeToAuthSessionChanges,
+} from '../services/api/http'
 import { messagesSocket } from '../services/api/messagesSocket'
+import { messagesBadge } from '../services/api/messagesBadge'
 import type { LoginInput } from '../services/api/authService'
 import type { Usuario } from '../types/domain'
 import { AuthContext, type AuthContextValue, type AuthStatus } from './auth-context'
@@ -20,31 +25,47 @@ import { AuthContext, type AuthContextValue, type AuthStatus } from './auth-cont
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('loading')
   const [user, setUser] = useState<Usuario | null>(null)
+  const validationId = useRef(0)
 
   useEffect(() => {
     let active = true
 
-    async function restoreSession() {
+    async function validateSession() {
+      const currentValidationId = ++validationId.current
+      messagesSocket.disconnect()
+      messagesBadge.reset()
+      setUser(null)
+      setStatus('loading')
+
       if (!authTokenStorage.get()) {
-        if (active) setStatus('unauthenticated')
+        if (active && currentValidationId === validationId.current) {
+          setStatus('unauthenticated')
+        }
         return
       }
+
       try {
         const currentUser = await authService.me()
-        if (!active) return
+        if (!active || currentValidationId !== validationId.current) return
         setUser(currentUser)
         setStatus('authenticated')
       } catch {
-        if (!active) return
+        if (!active || currentValidationId !== validationId.current) return
         authTokenStorage.clear()
         setUser(null)
         setStatus('unauthenticated')
       }
     }
 
-    void restoreSession()
+    const unsubscribe = subscribeToAuthSessionChanges(() => {
+      void validateSession()
+    })
+    void validateSession()
+
     return () => {
       active = false
+      validationId.current++
+      unsubscribe()
     }
   }, [])
 
@@ -54,6 +75,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // identidade do socket vem do JWT do handshake — mantê-la causaria envios
     // atribuídos ao usuário anterior (Etapa 8.9).
     messagesSocket.disconnect()
+    messagesBadge.reset()
     setUser(response.user)
     setStatus('authenticated')
     return response.user
@@ -64,6 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Sem sessão não deve restar conexão autenticada: sem este teardown o
     // socket sobreviveria ao logout com o JWT/identidade do usuário que saiu.
     messagesSocket.disconnect()
+    messagesBadge.reset()
     setUser(null)
     setStatus('unauthenticated')
   }, [])

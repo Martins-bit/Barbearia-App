@@ -128,10 +128,12 @@ O backend deverá verificar:
 
 ### Resultado
 
-Em caso de sucesso, a conta deverá ser criada com o e-mail ainda não confirmado.
-O cadastro não deverá marcar automaticamente o endereço como verificado. O
-e-mail é normalizado para evitar duplicidades por diferenças de maiúsculas e
-minúsculas.
+Em caso de sucesso, a conta deverá ser criada com `emailConfirmacaoObrigatoria`
+ativo e sem sessão JWT. O backend tentará enviar exatamente um e-mail de
+confirmação pelo Brevo e responderá com `emailConfirmationSent`, permitindo ao
+frontend comunicar falha sem afirmar que a mensagem foi enviada. O e-mail é
+normalizado para evitar duplicidades por diferenças de maiúsculas e minúsculas.
+O usuário deverá seguir para a tela pública de confirmação.
 
 ---
 
@@ -153,6 +155,10 @@ Autenticar um usuário.
 ### Resultado
 
 Em caso de sucesso, o sistema deverá criar uma sessão ou fornecer o mecanismo de autenticação definido na implementação.
+Se as credenciais estiverem corretas, mas `emailConfirmacaoObrigatoria` estiver
+ativo, o login deverá ser recusado e nenhum JWT deverá ser emitido. A resposta
+deverá orientar a confirmar o endereço, sem disparar automaticamente outro
+e-mail.
 
 ---
 
@@ -177,6 +183,11 @@ Endpoint:
 ### Objetivo
 
 Retornar as informações básicas do usuário autenticado.
+
+Além dos dados básicos, a resposta inclui `emailVerificadoEm` (`null` quando o
+endereço ainda não foi confirmado), para que o próprio usuário acompanhe o
+estado de confirmação no Perfil. Esse campo não representa autorização; as
+validações de acesso continuam sendo aplicadas pelo backend.
 
 A resposta não deverá conter:
 
@@ -205,6 +216,26 @@ criar token ou alegar que uma mensagem foi enviada. Se o provedor estiver
 configurado, mas a chamada de envio falhar, o token é invalidado e a rota
 retorna `503` sem expor detalhes do provedor.
 
+### Reenvio público
+
+`POST /auth/email/verification/resend`
+
+Corpo:
+
+```json
+{
+  "email": "usuario@exemplo.com"
+}
+```
+
+Não exige sessão. A resposta é idêntica para endereços inexistentes,
+confirmados, limitados ou elegíveis e não afirma que um e-mail foi enviado.
+Somente uma solicitação explícita pode iniciar o reenvio. A rota aplica limite
+por IP; o backend aplica intervalo mínimo de 60 segundos e limite de três
+solicitações por endereço normalizado por hora, complementado pelo limite de
+três tokens/solicitações por usuário por hora. Endereços usados para
+limitação são armazenados como HMAC, não em texto claro.
+
 ### Confirmar endereço
 
 `POST /auth/email/verification/confirm`
@@ -224,8 +255,12 @@ expirados, reutilizados ou associados a um endereço que mudou recebem a mesma
 resposta genérica. A confirmação e o consumo são atômicos.
 
 Alterar ou remover o e-mail do perfil limpa a confirmação anterior e invalida
-tokens pendentes. Endereços só devem ser usados em fluxos de recuperação quando
-`emailVerificadoEm` estiver preenchido.
+tokens pendentes. Definir um novo endereço ativa
+`emailConfirmacaoObrigatoria`; remover o endereço não bloqueia a conta sem um
+e-mail que possa ser confirmado. A confirmação preenche `emailVerificadoEm` e
+desativa o marcador. Endereços só devem ser
+usados em fluxos de recuperação quando `emailVerificadoEm` estiver preenchido.
+O marcador tem padrão `false` para preservar usuários anteriores à implantação.
 
 ## 6.6. Recuperação e redefinição de senha
 
@@ -1017,6 +1052,7 @@ Retorna o perfil do próprio usuário autenticado:
   "nome": "João da Silva",
   "telefone": "11999999999",
   "email": "joao@email.com",
+  "emailVerificadoEm": "2026-01-01T12:00:00.000Z",
   "tipoUsuario": "CLIENTE",
   "ativo": true,
   "dataCriacao": "2026-01-01T12:00:00.000Z",
@@ -1031,6 +1067,8 @@ Regras:
 - A resposta **nunca** contém `senhaHash` nem qualquer campo administrativo
   interno.
 - `email` pode ser `null`: o e-mail é anulável e único quando presente.
+- `emailVerificadoEm` informa o estado de confirmação do e-mail do próprio
+  usuário e será `null` enquanto estiver pendente ou se não houver confirmação.
 
 ---
 
@@ -1084,6 +1122,52 @@ Observação sobre o `409`: a mensagem nomeia o campo em conflito apenas quando
 ele pode ser determinado com segurança a partir do erro de unicidade do
 banco. Caso contrário, é devolvida uma mensagem genérica
 (`"Os dados informados já estão em uso por outra conta."`).
+
+---
+
+## 13.3. Exportar dados próprios
+
+Endpoint:
+
+`GET /users/me/export`
+
+### Permissão
+
+Usuário autenticado (`CLIENTE` ou `BARBEIRO`). Não recebe ID de usuário no
+caminho, query string ou corpo: o backend deriva o titular exclusivamente do
+JWT e limita as consultas ao perfil e aos registros acessíveis por esse titular.
+
+### Resultado
+
+Retorna JSON estruturado, com cabeçalho `Content-Disposition` para download e
+`Cache-Control: no-store`, `Pragma: no-cache` e `X-Content-Type-Options:
+nosniff`. O nome de arquivo é fixo (`dados-pessoais.json`), sem identificadores
+ou dados pessoais. O endpoint limita a três solicitações por usuário autenticado
+por minuto, pelo mecanismo throttler já usado nas rotas sensíveis. Inclui dados
+de conta/perfil, confirmação do e-mail,
+agendamentos, lista de espera e claims relacionados, metadados visíveis de
+mensagens e notificações não limpas. Para barbeiros, inclui também suas
+configurações de horário, bloqueios e emergências.
+
+O documento identifica suas limitações. O conteúdo de mensagens e observações
+livres de agendamentos, bloqueios e emergências não é incluído. Mensagens
+visíveis são representadas apenas por direção, datas, leitura e estado de
+exclusão; mensagens apagadas para todos ou ocultadas para o titular não são
+incluídas. Notificações são representadas por tipo, leitura, datas e metadados
+de claim, sem títulos ou textos livres. Não são incluídos dados do outro
+participante, notificações já limpas, solicitações de titulares não persistidas,
+preferências não persistidas, tokens, hashes, credenciais ou dados internos de
+autenticação.
+
+Falhas inesperadas de geração retornam uma mensagem genérica; detalhes da
+exceção não são enviados na resposta nem incluídos no log específico da rota.
+
+O endpoint não cria arquivo persistente no servidor. A interface gera o arquivo
+JSON no navegador a partir da resposta. O arquivo baixado fica sob controle do
+dispositivo/navegador do usuário.
+
+Esta cópia é parcial e não substitui o processo de atendimento de solicitações
+de titulares. Não existe ainda canal ou registro de acompanhamento confirmado.
 
 ---
 

@@ -2,7 +2,14 @@ import { ApiError, parseApiErrorMessage } from './ApiError.ts'
 
 const API_BASE_URL = import.meta.env?.VITE_API_URL ?? 'http://localhost:3000'
 
-const TOKEN_STORAGE_KEY = 'bb.auth.token'
+export const TOKEN_STORAGE_KEY = 'bb.auth.token'
+export const AUTH_SESSION_CHANGED_EVENT = 'bb:auth:session-changed'
+
+function notifyAuthSessionChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(AUTH_SESSION_CHANGED_EVENT))
+  }
+}
 
 /** Armazenamento do token JWT (placeholder até a etapa de autenticação). */
 export const authTokenStorage = {
@@ -14,7 +21,22 @@ export const authTokenStorage = {
   },
   clear(): void {
     localStorage.removeItem(TOKEN_STORAGE_KEY)
+    notifyAuthSessionChanged()
   },
+}
+
+export function subscribeToAuthSessionChanges(handler: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === TOKEN_STORAGE_KEY || event.key === null) handler()
+  }
+
+  window.addEventListener('storage', onStorage)
+  window.addEventListener(AUTH_SESSION_CHANGED_EVENT, handler)
+
+  return () => {
+    window.removeEventListener('storage', onStorage)
+    window.removeEventListener(AUTH_SESSION_CHANGED_EVENT, handler)
+  }
 }
 
 interface RequestOptions {
@@ -81,6 +103,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const payload = isJson ? await response.json().catch(() => null) : null
 
   if (!response.ok) {
+    if (response.status === 401 && auth && !skipAuth && authTokenStorage.get()) {
+      authTokenStorage.clear()
+    }
     const message =
       parseApiErrorMessage(payload) ??
       'Ocorreu um erro ao processar a solicitação.'

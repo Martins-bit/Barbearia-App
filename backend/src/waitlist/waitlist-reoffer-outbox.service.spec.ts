@@ -120,7 +120,7 @@ describe('WaitlistReofferOutboxService', () => {
   });
 
   it('agenda retry com backoff e registra falha transitória', async () => {
-    const failure = new Error('conexão indisponível');
+    const failure = new Error('falha com dado pessoal cliente@example.com');
     opportunityService.tryCreateForReleasedWindow.mockRejectedValue(failure);
 
     const before = Date.now();
@@ -133,7 +133,8 @@ describe('WaitlistReofferOutboxService', () => {
     expect(result.retryCount).toBe(1);
     expect(retryUpdate?.[0].join(' ')).toContain('"status" = ');
     expect(retryUpdate?.[0].join(' ')).toContain('clock_timestamp()');
-    expect(retryUpdate).toContain('Error: conexão indisponível');
+    expect(retryUpdate).toContain('Falha inesperada de processamento.');
+    expect(retryUpdate).not.toContain('cliente@example.com');
     expect(Date.now()).toBeGreaterThanOrEqual(before);
   });
 
@@ -291,15 +292,16 @@ describe('WaitlistReofferOutboxService', () => {
 
     const result = await service.processPendingReoffers();
     const permanentFailure = prisma.$executeRaw.mock.calls.find(
-      (call: unknown[]) =>
-        call.some((value) => value === 'Error: falha persistente'),
+      (call: unknown[]) => call.some(
+        (value) => value === 'Falha inesperada de processamento.',
+      ),
     );
 
     expect(result).toMatchObject({
       retryCount: 0,
       permanentFailureCount: 1,
     });
-    expect(permanentFailure).toContain('Error: falha persistente');
+    expect(permanentFailure).toContain('Falha inesperada de processamento.');
   });
 
   it('não conta conclusão quando o fencing atualiza zero linhas', async () => {

@@ -34,7 +34,11 @@ export class RolesGuard implements CanActivate {
     const authorizationState =
       await this.usersService.findAuthorizationStateById(userId);
 
-    if (!authorizationState || !authorizationState.ativo) {
+    if (
+      !authorizationState ||
+      !authorizationState.ativo ||
+      authorizationState.emailConfirmacaoObrigatoria
+    ) {
       throw new UnauthorizedException();
     }
 

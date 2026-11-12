@@ -139,10 +139,9 @@ export class AppointmentsService {
 
     try {
       await outboxService.processPendingReoffers();
-    } catch (error) {
+    } catch {
       this.logger.error(
-        `Falha no processamento imediato do OUTBOX de reofertas: ${error instanceof Error ? error.message : String(error)}`,
-        error instanceof Error ? error.stack : undefined,
+        'Falha no processamento imediato do OUTBOX de reofertas.',
       );
     }
   }

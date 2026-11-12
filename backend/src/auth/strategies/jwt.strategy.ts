@@ -36,7 +36,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     const current = await this.usersService.findAuthVersionById(userId);
-    if (!current || current.authVersion !== tokenVersion) {
+    if (
+      !current ||
+      current.authVersion !== tokenVersion ||
+      current.emailConfirmacaoObrigatoria
+    ) {
       throw new UnauthorizedException();
     }
 

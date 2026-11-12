@@ -25,6 +25,7 @@ describe('AuthController — password recovery & reset endpoints', () => {
     };
     emailVerificationService = {
       requestConfirmation: jest.fn(),
+      requestConfirmationByEmail: jest.fn(),
       confirm: jest.fn(),
     };
     passwordRecoveryService = {
@@ -49,6 +50,23 @@ describe('AuthController — password recovery & reset endpoints', () => {
       .compile();
 
     controller = module.get<AuthController>(AuthController);
+  });
+
+  describe('POST /auth/email/verification/resend', () => {
+    it('delegates public resend using the normalized DTO email', async () => {
+      const email = 'cliente@example.com';
+      emailVerificationService.requestConfirmationByEmail.mockResolvedValue({
+        message:
+          'Solicitação recebida. Se o endereço pertencer a uma conta pendente e o envio estiver disponível, você receberá as instruções.',
+      });
+
+      const result = await controller.resendEmailVerification({ email });
+
+      expect(
+        emailVerificationService.requestConfirmationByEmail,
+      ).toHaveBeenCalledWith(email);
+      expect(result.message).toContain('Solicitação recebida');
+    });
   });
 
   describe('POST /auth/password-recovery', () => {

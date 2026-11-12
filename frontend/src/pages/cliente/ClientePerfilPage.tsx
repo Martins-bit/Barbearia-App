@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '../../components/layout/PagePlaceholder'
 import { Avatar } from '../../components/ui/Avatar'
@@ -8,10 +8,14 @@ import { Card } from '../../components/ui/Card'
 import { ErrorState } from '../../components/ui/States'
 import { Input } from '../../components/ui/Field'
 import { Loading } from '../../components/ui/Loading'
-import { AlertIcon, EditIcon } from '../../components/ui/icons/Icon'
+import { AlertIcon, CheckIcon, ClockIcon, EditIcon } from '../../components/ui/icons/Icon'
 import { useApiResource } from '../../hooks/useApiResource'
 import { useAsyncAction } from '../../hooks/useAsyncAction'
 import { authService } from '../../services/api/authService'
+import {
+  downloadJsonFile,
+  personalDataExportFilename,
+} from '../../utils/downloadJson'
 import { useToast } from '../../contexts/useToast'
 import { ROUTES } from '../../routes/routes'
 import type { Usuario, UpdateUserInput } from '../../types/domain'
@@ -46,10 +50,27 @@ export function ClientePerfilPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
 
   const update = useAsyncAction(async (input: UpdateUserInput) => {
-    const updated = await authService.updateProfile(input)
-    perfil.reload()
-    return updated
+    return authService.updateProfile(input)
   })
+  const dataExport = useAsyncAction(async () => authService.exportPersonalData())
+  const exportInProgress = useRef(false)
+
+  async function handleExportData() {
+    if (exportInProgress.current) return
+    exportInProgress.current = true
+    try {
+      const data = await dataExport.run()
+      downloadJsonFile(data, personalDataExportFilename())
+      toast.success('Sua cópia JSON foi baixada.', 'Dados exportados')
+    } catch {
+      toast.error(
+        'Não foi possível exportar seus dados. Tente novamente.',
+        'Falha ao exportar',
+      )
+    } finally {
+      exportInProgress.current = false
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -83,7 +104,19 @@ export function ClientePerfilPage() {
     }
 
     try {
-      await update.run({ nome, telefone, email: email === '' ? null : email })
+      const updated = await update.run({
+        nome,
+        telefone,
+        email: email === '' ? null : email,
+      })
+      if (updated.email && updated.email !== user?.email) {
+        navigate(ROUTES.confirmEmail, {
+          state: { email: updated.email },
+          replace: true,
+        })
+        return
+      }
+      perfil.reload()
       toast.success('Perfil atualizado com sucesso.', 'Alterações salvas')
       setEditing(false)
     } catch (err) {
@@ -162,6 +195,33 @@ export function ClientePerfilPage() {
                 <Card className={styles.profileDetails}>
                   <ContaRow label="Telefone">{formatPhone(user.telefone)}</ContaRow>
                   <ContaRow label="E-mail">{user.email ?? 'Não informado'}</ContaRow>
+                  <ContaRow label="Confirmação do e-mail">
+                    <span className={styles.emailVerification}>
+                      {!user.email ? (
+                        <Badge tone="neutral">Não informado</Badge>
+                      ) : user.emailVerificadoEm ? (
+                        <Badge tone="success">
+                          <CheckIcon size={14} />
+                          Confirmado
+                        </Badge>
+                      ) : (
+                        <>
+                          <Badge tone="warning">
+                            <ClockIcon size={14} />
+                            Pendente
+                          </Badge>
+                          <Button
+                            className={styles.emailVerificationAction}
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => navigate(ROUTES.confirmEmail)}
+                          >
+                            Confirmar e-mail
+                          </Button>
+                        </>
+                      )}
+                    </span>
+                  </ContaRow>
                 </Card>
                 <div className={styles.profileActions}>
                   <Button
@@ -171,12 +231,6 @@ export function ClientePerfilPage() {
                     disabled={update.loading}
                   >
                     Editar dados
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => navigate(ROUTES.confirmEmail)}
-                  >
-                    Confirmar e-mail
                   </Button>
                 </div>
               </section>
@@ -196,6 +250,33 @@ export function ClientePerfilPage() {
                   </ContaRow>
                   <ContaRow label="Cliente desde">{formatDateFull(user.dataCriacao)}</ContaRow>
                   <ContaRow label="Última atualização">{formatDateFull(user.dataAtualizacao)}</ContaRow>
+                </Card>
+              </section>
+
+              <section className={styles.section} aria-labelledby="perfil-dados">
+                <div className={styles.sectionHead}>
+                  <h2 id="perfil-dados" className={styles.sectionTitle}>
+                    Seus dados
+                  </h2>
+                </div>
+                <Card className={styles.profileDetails}>
+                  <p className={styles.sectionHint}>
+                    Baixe uma cópia JSON dos dados da sua conta que estão disponíveis
+                    para você. Conteúdo de mensagens e observações livres não é
+                    incluído nesta versão para reduzir a exposição de dados de outras
+                    pessoas.
+                  </p>
+                  <div className={styles.profileActions}>
+                    <Button
+                      variant="secondary"
+                      className={styles.profileExportButton}
+                      onClick={handleExportData}
+                      loading={dataExport.loading}
+                      disabled={dataExport.loading}
+                    >
+                      Baixar cópia dos dados
+                    </Button>
+                  </div>
                 </Card>
               </section>
             </>

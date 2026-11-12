@@ -35,16 +35,20 @@ export function RegisterPage() {
     }
     setSubmitting(true)
     try {
-      await authService.register({
+      const response = await authService.register({
         nome: nome.trim(),
         telefone: telefone.trim(),
         senha,
         email: normalizedEmail,
       })
-      toast.success(
-        'Cadastro criado. Entre na conta para solicitar a confirmação do e-mail.',
-      )
-      navigate(ROUTES.login, { replace: true })
+      toast.success('Cadastro criado. Confirme seu e-mail para entrar.')
+      navigate(ROUTES.confirmEmail, {
+        replace: true,
+        state: {
+          email: normalizedEmail,
+          emailConfirmationSent: response.emailConfirmationSent,
+        },
+      })
     } catch (err) {
       const message = authRequestErrorMessage(
         err,

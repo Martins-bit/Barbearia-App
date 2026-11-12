@@ -152,7 +152,10 @@ export const messagesSocket: MensajesSocketApi = (() => {
     instancia.on('disconnect', () => setEstado('desconectado'))
     // Log técnico seguro: motivo da falha do handshake (nunca o JWT).
     instancia.on('connect_error', (erro: Error) => {
-      console.warn('[mensagens] connect_error:', erro.message)
+      if (erro.message === 'Não autorizado.') {
+        authTokenStorage.clear()
+      }
+      console.warn('[mensagens] conexão indisponível.')
       setEstado('desconectado')
     })
 
@@ -228,6 +231,9 @@ export const messagesSocket: MensajesSocketApi = (() => {
         limpar()
         const mensagem =
           typeof erro === 'string' ? erro : erro?.message ?? 'Não foi possível enviar a mensagem.'
+        if (mensagem === 'Não autorizado.') {
+          authTokenStorage.clear()
+        }
         reject(new Error(mensagem))
       }
       function onDisconnect(): void {

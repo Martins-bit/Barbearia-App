@@ -31,6 +31,13 @@ exige token válido); passar do limite gera `429`, não `401/403`.
   (enviado no header `Authorization`).
 - Verificado por teste de integração em `security-infra.spec.ts`.
 
+O Helmet aplica também os defaults de CSP, proteção contra framing,
+`X-Content-Type-Options` e `Referrer-Policy` às respostas da API. Isso não
+configura cabeçalhos do servidor estático do frontend; o host/CDN que serve o
+frontend e sua CSP efetiva ainda precisam ser verificados operacionalmente.
+Não foi adicionada CSP via `<meta>`: a aplicação usa fontes do Google e uma
+origem de API configurável, e uma política estática poderia bloquear chamadas
+REST/WebSocket ou recursos legítimos.
 
 ## 3. CORS por ambiente
 
@@ -78,6 +85,7 @@ nas operações sensíveis. Leituras e demais rotas legítimas **não** são lim
 | `POST /auth/login` | 10 | 60 s | IP do cliente |
 | `POST /auth/register` | 5 | 60 s | IP do cliente |
 | `POST /auth/email/verification/request` | 3 | 60 s | IP do cliente; também 3 por usuário/hora |
+| `POST /auth/email/verification/resend` | 3 | 60 s | IP do cliente; além de intervalo de 60 s e 3 por endereço/hora |
 | `POST /auth/email/verification/confirm` | 5 | 60 s | IP do cliente |
 | `POST /auth/password-recovery` | 5 | 60 s | IP do cliente; também 3 tentativas por identificador normalizado/hora |
 | `POST /auth/password-reset` | 10 | 60 s | IP do cliente |
@@ -89,10 +97,11 @@ nas operações sensíveis. Leituras e demais rotas legítimas **não** são lim
   usuários.
 - O excesso retorna **`429`** (REST) ou um erro de limitação equivalente no
   socket, respeitando o formato de erro já usado no projeto.
-- A solicitação de confirmação exige sessão e usa somente o e-mail do usuário
-  autenticado; os limites por IP são complementados por uma cota persistida por
-  usuário. A confirmação não exige sessão e responde genericamente para tokens
-  inválidos, expirados ou reutilizados.
+- A solicitação de confirmação do Perfil exige sessão e usa somente o e-mail do
+  usuário autenticado. O reenvio público exige uma ação explícita, usa resposta
+  idêntica para endereços existentes e inexistentes e aplica cota persistida
+  por HMAC do endereço: no máximo três envios por hora e um por minuto. A cota
+  existente por usuário também continua aplicada.
 - Tokens de confirmação são aleatórios, armazenados como hash e consumidos na
   mesma transação que marca o endereço verificado. Mudança de e-mail invalida
   tokens pendentes e remove a confirmação anterior.
@@ -103,6 +112,12 @@ nas operações sensíveis. Leituras e demais rotas legítimas **não** são lim
   e remetente são obrigatórios; chamadas possuem timeout explícito, não fazem
   retries automáticos e não registram credenciais, tokens, endereços ou respostas
   do provedor nos logs.
+- O cadastro faz apenas uma tentativa automática de confirmação. Login e
+  abertura da tela nunca enviam e-mail; novos envios exigem ação explícita.
+  Confirmações e redefinições usam a mesma cota transacional da conta Brevo:
+  cada fluxo conserva sua proteção por IP/identificador e nenhum deles faz
+  retries automáticos. A cota global do plano deve ser monitorada no Brevo,
+  pois seu valor depende do plano contratado.
 - Se o envio de confirmação falhar, o token é invalidado e a rota retorna `503`.
   Se uma tentativa de recuperação falhar após a criação do token, ele é
   invalidado e a rota mantém a resposta `202` genérica para evitar enumeração.
@@ -209,3 +224,57 @@ e qualquer execução manual também exige validação E2E.
 
 Consulte `backend/.env.example` para os nomes exatos e o `.env` local para os
 valores do seu ambiente (o conteúdo do `.env` **não** é versionado).
+
+## 8. Exportação de dados próprios e minimização de logs
+
+- `GET /users/me/export` exige autenticação e obtém o identificador do titular
+  exclusivamente do JWT. As consultas de perfil, agendamentos, lista de espera,
+  mensagens e notificações são limitadas ao titular ou aos registros que ele
+  pode acessar; a rota não aceita um identificador de outra conta. Apenas
+  `CLIENTE` e `BARBEIRO` têm acesso, e o throttler limita a três solicitações
+  por usuário autenticado por minuto.
+- A resposta tem `Cache-Control: no-store`, `Pragma: no-cache` e
+  `X-Content-Type-Options: nosniff`, com nome de download fixo e sem dados
+  pessoais. A interface gera o arquivo localmente. Senhas, hashes, tokens,
+  credenciais e dados internos de autenticação não são incluídos. Conteúdo de
+  mensagens, registros apagados para todos/ocultados para o titular, dados do
+  outro participante, observações e outros textos livres também são omitidos.
+- Erros inesperados de geração são convertidos em resposta genérica; o log
+  específico da rota registra somente uma mensagem fixa, sem exceção ou dados
+  da exportação.
+- O processamento atual da outbox de reoferta não escreve a mensagem de
+  exceção nem a stack trace nos logs. O campo de erro persistido registra uma
+  categoria genérica ou código/status técnico. Valores históricos não foram
+  alterados. Isso não comprova a política de retenção nem a redação de logs de
+  todos os provedores de hospedagem e ambientes operacionais, que permanecem
+  pendentes de validação.
+
+## 9. Sessões no frontend e armazenamento de JWT
+
+- O frontend persiste somente o JWT na chave `bb.auth.token` do `localStorage`;
+  não persiste o objeto de perfil, telefone, e-mail ou outros dados de conta.
+  O perfil é mantido em memória e revalidado por `GET /auth/me` ao restaurar a
+  sessão.
+- O token é enviado à API no header `Authorization: Bearer ...`; o WebSocket o
+  envia no campo `auth.token` do handshake, nunca na URL. O cliente guarda o
+  token em memória para detectar troca de sessão e o servidor guarda apenas
+  identidade/expiração autorizadas, não o JWT.
+- Logout remove o token, desconecta o socket, limpa o usuário React e zera o
+  badge derivado. Remoção/troca do token em outra aba causa revalidação e
+  descarte do estado anterior. Respostas `401` autenticadas removem o token e
+  notificam a aplicação; respostas de requisições explicitamente públicas não
+  apagam uma sessão existente.
+- A autorização continua sendo aplicada pelo backend; o JWT expira conforme
+  sua configuração e `authVersion` permite invalidar tokens emitidos antes de
+  uma alteração de versão. Logout local, por si só, não revoga uma cópia
+  previamente furtada do token.
+- **Risco residual:** `localStorage` é acessível a JavaScript da mesma origem.
+  Uma vulnerabilidade XSS poderia permitir roubo do JWT até sua expiração ou
+  invalidação. Não foi encontrado uso de `dangerouslySetInnerHTML`, APIs de
+  injeção HTML (`innerHTML`, `document.write`) ou biblioteca de renderização de
+  HTML dinâmico no frontend revisado. React escapa texto renderizado. Isso não
+  substitui revisão contínua de dependências e de novas superfícies.
+- A migração para cookie `HttpOnly` não foi feita: exigiria desenho CSRF,
+  alteração de autenticação, CORS e handshake WebSocket, além de compatibilidade
+  entre ambientes. Deve ser avaliada como mudança arquitetural própria, não
+  improvisada nesta etapa.

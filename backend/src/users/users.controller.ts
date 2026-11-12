@@ -2,17 +2,22 @@ import {
   Body,
   Controller,
   Get,
+  Header,
+  HttpException,
+  InternalServerErrorException,
   HttpCode,
+  Logger,
   NotFoundException,
   Patch,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { TipoUsuario } from '../generated/prisma/enums';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { UsersService } from './users.service';
+import { PersonalDataExport, UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 
@@ -37,7 +42,45 @@ import { UserResponseDto } from './dto/user-response.dto';
 @UseGuards(JwtGuard, RolesGuard)
 @Roles(TipoUsuario.CLIENTE, TipoUsuario.BARBEIRO)
 export class UsersController {
+  private readonly logger = new Logger(UsersController.name);
+
   constructor(private readonly usersService: UsersService) {}
+
+  /**
+   * GET /users/me/export — gera uma cópia JSON síncrona dos dados acessíveis
+   * da própria conta. A identidade sempre vem do JWT e a resposta não é
+   * armazenável em cache.
+   */
+  @Get('me/export')
+  @Header('Content-Disposition', 'attachment; filename="dados-pessoais.json"')
+  @Header('Cache-Control', 'no-store')
+  @Header('Pragma', 'no-cache')
+  @Header('X-Content-Type-Options', 'nosniff')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    default: {
+      limit: 3,
+      ttl: 60_000,
+      getTracker: (req: { user?: { sub?: unknown } }) =>
+        `usuario:${String(req?.user?.sub ?? 'anon')}`,
+    },
+  })
+  async exportMe(
+    @CurrentUser() userId: number,
+  ): Promise<PersonalDataExport> {
+    try {
+      return await this.usersService.exportPersonalData(userId);
+    } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
+
+      this.logger.error('Falha ao gerar exportação de dados pessoais.');
+      throw new InternalServerErrorException(
+        'Não foi possível gerar a exportação de dados pessoais.',
+      );
+    }
+  }
 
   /**
    * GET /users/me — perfil do usuário autenticado.

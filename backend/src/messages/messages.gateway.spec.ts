@@ -45,6 +45,7 @@ const clientAuthState = {
   id: 10,
   ativo: true,
   authVersion: 0,
+  emailConfirmacaoObrigatoria: false,
   tipoUsuario: TipoUsuario.CLIENTE,
   barbeiro: null,
 };
@@ -53,6 +54,7 @@ const barberAuthState = {
   id: 20,
   ativo: true,
   authVersion: 0,
+  emailConfirmacaoObrigatoria: false,
   tipoUsuario: TipoUsuario.BARBEIRO,
   barbeiro: { ativo: true },
 };
@@ -120,6 +122,18 @@ describe('MessagesGateway', () => {
       await expect(gateway.authenticate(buildClient('jwt-antigo'))).rejects.toThrow(
         'Não autorizado.',
       );
+    });
+
+    it('rejeita no handshake uma conta com confirmação obrigatória pendente', async () => {
+      jwt.verifyAsync.mockResolvedValue({ sub: 10 });
+      users.findAuthorizationStateById.mockResolvedValue({
+        ...clientAuthState,
+        emailConfirmacaoObrigatoria: true,
+      });
+
+      await expect(
+        gateway.authenticate(buildClient('jwt-pendente')),
+      ).rejects.toThrow('Não autorizado.');
     });
 
     it('aceita token com prefixo Bearer', async () => {

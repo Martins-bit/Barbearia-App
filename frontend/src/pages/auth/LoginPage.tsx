@@ -89,6 +89,9 @@ export function LoginPage() {
         <Link className={styles.link} to={ROUTES.recoverPassword}>
           Esqueci minha senha
         </Link>
+        <Link className={styles.link} to={ROUTES.confirmEmail}>
+          Confirmar ou reenviar e-mail
+        </Link>
 
         {error && (
           <p className={styles.error} role="alert">

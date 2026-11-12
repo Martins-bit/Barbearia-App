@@ -63,6 +63,10 @@ describe('UsersService', () => {
     passwordResetToken: {
       updateMany: jest.Mock;
     };
+    agendamento: { findMany: jest.Mock };
+    listaEspera: { findMany: jest.Mock };
+    mensagem: { findMany: jest.Mock };
+    notificacao: { findMany: jest.Mock };
   };
 
   beforeEach(async () => {
@@ -81,6 +85,10 @@ describe('UsersService', () => {
       passwordResetToken: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      agendamento: { findMany: jest.fn().mockResolvedValue([]) },
+      listaEspera: { findMany: jest.fn().mockResolvedValue([]) },
+      mensagem: { findMany: jest.fn().mockResolvedValue([]) },
+      notificacao: { findMany: jest.fn().mockResolvedValue([]) },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -134,6 +142,7 @@ describe('UsersService', () => {
         nome: true,
         telefone: true,
         email: true,
+        emailVerificadoEm: true,
         tipoUsuario: true,
         ativo: true,
         dataCriacao: true,
@@ -149,6 +158,194 @@ describe('UsersService', () => {
       tipoUsuario: 'CLIENTE',
       ativo: true,
     });
+  });
+
+  it('should export only the authenticated user data and omit security and free-text content', async () => {
+    const createdAt = new Date('2026-01-02T03:04:05.000Z');
+    const emailVerifiedAt = new Date('2026-01-03T03:04:05.000Z');
+    prisma.usuario.findUnique.mockResolvedValue({
+      id: 21,
+      nome: 'Cliente',
+      telefone: '11999999999',
+      email: 'cliente@example.com',
+      emailVerificadoEm: emailVerifiedAt,
+      emailConfirmacaoObrigatoria: false,
+      senhaHash: 'secret-password-hash',
+      authVersion: 12,
+      tipoUsuario: 'CLIENTE',
+      ativo: true,
+      dataCriacao: createdAt,
+      dataAtualizacao: createdAt,
+      cliente: {
+        id: 31,
+        dataCriacao: createdAt,
+        dataAtualizacao: createdAt,
+      },
+      barbeiro: null,
+    });
+    prisma.agendamento.findMany.mockResolvedValue([
+      {
+        data: new Date('2026-02-01T00:00:00.000Z'),
+        horaInicio: new Date('2026-02-01T12:00:00.000Z'),
+        horaFim: new Date('2026-02-01T12:30:00.000Z'),
+        status: 'CONCLUIDO',
+        dataCriacao: createdAt,
+        dataAtualizacao: createdAt,
+        servico: { nome: 'Corte', duracaoMinutos: 30 },
+        observacoes: 'terceiro@example.com',
+      },
+    ]);
+    prisma.mensagem.findMany.mockResolvedValue([
+      {
+        remetenteId: 21,
+        lida: true,
+        dataCriacao: createdAt,
+        dataLeitura: createdAt,
+        apagadaParaTodos: false,
+        dataExclusao: null,
+        conteudo: 'texto que não deve ser exportado',
+        destinatarioId: 98,
+      },
+    ]);
+    prisma.notificacao.findMany.mockResolvedValue([
+      {
+        tipo: 'AGENDAMENTO',
+        titulo: 'Dados de terceiro: terceiro@example.com',
+        mensagem: 'Detalhe privado de terceiro',
+        lida: false,
+        dataCriacao: createdAt,
+        dataLeitura: null,
+        claim: null,
+      },
+    ]);
+
+    const result = await service.exportPersonalData(21);
+
+    expect(prisma.usuario.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 21 } }),
+    );
+    expect(prisma.agendamento.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { OR: [{ clienteId: 31 }] } }),
+    );
+    expect(prisma.agendamento.findMany.mock.calls[0][0].select).not.toHaveProperty(
+      'observacoes',
+    );
+    expect(prisma.listaEspera.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { OR: [{ clienteId: 31 }] } }),
+    );
+    expect(prisma.mensagem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          apagadaParaTodos: false,
+          OR: [
+            expect.objectContaining({
+              remetenteId: 21,
+              excluidaPeloRemetente: false,
+            }),
+            expect.objectContaining({
+              destinatarioId: 21,
+              excluidaPeloDestinatario: false,
+            }),
+          ],
+        },
+      }),
+    );
+    expect(prisma.notificacao.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { usuarioId: 21, limpa: false },
+      }),
+    );
+    expect(prisma.notificacao.findMany.mock.calls[0][0].select).not.toHaveProperty(
+      'mensagem',
+    );
+    expect(result.conta).toMatchObject({
+      nome: 'Cliente',
+      email: 'cliente@example.com',
+      confirmacaoEmail: {
+        confirmadoEm: emailVerifiedAt.toISOString(),
+        confirmacaoObrigatoria: false,
+      },
+    });
+    expect(result.agendamentos).toHaveLength(1);
+    expect(result.mensagens.conteudoIncluido).toBe(false);
+    expect(result.mensagens.registros).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain('texto que não deve ser exportado');
+    expect(JSON.stringify(result)).not.toContain('terceiro@example.com');
+    expect(JSON.stringify(result)).not.toContain('Detalhe privado de terceiro');
+    expect(JSON.stringify(result)).not.toContain('secret-password-hash');
+    expect(JSON.stringify(result)).not.toContain('authVersion');
+    expect(JSON.stringify(result)).not.toContain('senhaHash');
+    expect(JSON.stringify(result)).not.toContain('tokenHash');
+  });
+
+  it('should not export any data when the authenticated account no longer exists', async () => {
+    prisma.usuario.findUnique.mockResolvedValue(null);
+
+    await expect(service.exportPersonalData(404)).rejects.toThrow(
+      'Usuário não encontrado.',
+    );
+    expect(prisma.agendamento.findMany).not.toHaveBeenCalled();
+    expect(prisma.listaEspera.findMany).not.toHaveBeenCalled();
+  });
+
+  it('should scope a barber export to their own agenda and profile data', async () => {
+    const date = new Date('2026-03-04T00:00:00.000Z');
+    prisma.usuario.findUnique.mockResolvedValue({
+      id: 22,
+      nome: 'Barbeiro',
+      telefone: '11888888888',
+      email: null,
+      emailVerificadoEm: null,
+      emailConfirmacaoObrigatoria: false,
+      tipoUsuario: 'BARBEIRO',
+      ativo: true,
+      dataCriacao: date,
+      dataAtualizacao: date,
+      cliente: null,
+      barbeiro: {
+        id: 32,
+        ativo: true,
+        dataCriacao: date,
+        dataAtualizacao: date,
+        horarios: [],
+        bloqueios: [
+          {
+            data: date,
+            horaInicio: new Date('2026-03-04T10:00:00.000Z'),
+            horaFim: new Date('2026-03-04T11:00:00.000Z'),
+            motivo: 'Pessoa de terceiro - 11999999999',
+            ativo: true,
+            dataCriacao: date,
+          },
+        ],
+        emergencias: [
+          {
+            dataInicio: date,
+            dataFim: date,
+            motivo: 'Detalhe de terceiro',
+            status: 'ATIVA',
+            dataCriacao: date,
+          },
+        ],
+      },
+    });
+
+    const result = await service.exportPersonalData(22);
+
+    expect(prisma.agendamento.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { OR: [{ barbeiroId: 32 }] } }),
+    );
+    expect(prisma.listaEspera.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { OR: [{ barbeiroId: 32 }] } }),
+    );
+    expect(result.conta.perfil).toMatchObject({ ativo: true, horarios: [] });
+    expect(result.conta.perfil).not.toHaveProperty('usuarioId');
+    expect(JSON.stringify(result)).not.toContain('11999999999');
+    expect(JSON.stringify(result)).not.toContain('Detalhe de terceiro');
+    const barberSelect =
+      prisma.usuario.findUnique.mock.calls[0][0].select.barbeiro.select;
+    expect(barberSelect.bloqueios.select).not.toHaveProperty('motivo');
+    expect(barberSelect.emergencias.select).not.toHaveProperty('motivo');
   });
 
   it('should find a user by phone without exposing senhaHash', async () => {
@@ -310,6 +507,7 @@ describe('UsersService', () => {
         ...payload,
         email: 'joao.novo@email.com',
         emailVerificadoEm: null,
+        emailConfirmacaoObrigatoria: true,
       },
       select: expect.objectContaining({
         id: true,
@@ -404,7 +602,11 @@ describe('UsersService', () => {
       expect(prisma.usuario.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 10 },
-          data: { email: null, emailVerificadoEm: null },
+          data: {
+            email: null,
+            emailVerificadoEm: null,
+            emailConfirmacaoObrigatoria: false,
+          },
         }),
       );
       expect(result.email).toBeNull();

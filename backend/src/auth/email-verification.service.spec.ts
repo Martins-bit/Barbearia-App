@@ -2,6 +2,7 @@ import {
   BadRequestException,
   HttpException,
   HttpStatus,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { createHash } from 'node:crypto';
@@ -21,11 +22,29 @@ describe('EmailVerificationService', () => {
   let service: EmailVerificationService;
   let prisma: any;
   let mailer: jest.Mocked<EmailVerificationMailer>;
+  let rateLimitRecord: {
+    windowStartedAt: Date;
+    attemptCount: number;
+    lastRequestedAt: Date | null;
+  };
 
   beforeEach(() => {
+    process.env.JWT_SECRET ??=
+      'unit-test-jwt-secret-with-at-least-32-characters';
+    rateLimitRecord = {
+      windowStartedAt: new Date(Date.now() - 2 * 60 * 1000),
+      attemptCount: 0,
+      lastRequestedAt: null,
+    };
     prisma = {
       $transaction: jest.fn((callback) => callback(prisma)),
-      $queryRaw: jest.fn().mockResolvedValue([{ id: USER_ID }]),
+      $queryRaw: jest.fn((query) => {
+        const sql = Array.isArray(query) ? query.join('') : '';
+        return sql.includes('EmailVerificationRateLimit')
+          ? [rateLimitRecord]
+          : [{ id: USER_ID }];
+      }),
+      $executeRaw: jest.fn().mockResolvedValue(1),
       usuario: {
         findUnique: jest.fn().mockResolvedValue({
           id: USER_ID,
@@ -33,6 +52,7 @@ describe('EmailVerificationService', () => {
           emailVerificadoEm: null,
           ativo: true,
         }),
+        findFirst: jest.fn().mockResolvedValue({ id: USER_ID }),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       emailVerificationToken: {
@@ -42,23 +62,34 @@ describe('EmailVerificationService', () => {
         findUnique: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      emailVerificationRateLimit: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        update: jest.fn().mockImplementation(({ data }) => {
+          Object.assign(rateLimitRecord, {
+            windowStartedAt: data.windowStartedAt,
+            attemptCount: data.attemptCount,
+            lastRequestedAt: data.lastRequestedAt,
+          });
+          return Promise.resolve({});
+        }),
+      },
     };
     mailer = {
       isAvailable: jest.fn().mockReturnValue(true),
       sendVerificationEmail: jest.fn().mockResolvedValue(undefined),
       sendPasswordResetEmail: jest.fn().mockResolvedValue(undefined),
     };
-    service = new EmailVerificationService(
-      prisma as PrismaService,
-      mailer,
-    );
+    service = new EmailVerificationService(prisma as PrismaService, mailer);
   });
 
-  it('creates a random token and persists only its SHA-256 hash', async () => {
-    const response = await service.requestConfirmation(USER_ID);
+  it('sends exactly one automatic registration email and persists only its token hash', async () => {
+    await expect(
+      service.sendRegistrationConfirmation(USER_ID),
+    ).resolves.toBe(true);
+
+    expect(mailer.sendVerificationEmail).toHaveBeenCalledTimes(1);
     const createCall = prisma.emailVerificationToken.create.mock.calls[0][0];
     const sentToken = mailer.sendVerificationEmail.mock.calls[0][1];
-
     expect(sentToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(createCall.data.tokenHash).toBe(tokenHash(sentToken));
     expect(createCall.data).not.toHaveProperty('token');
@@ -67,11 +98,9 @@ describe('EmailVerificationService', () => {
     expect(createCall.data.expiraEm.getTime()).toBeLessThanOrEqual(
       Date.now() + 30 * 60 * 1000,
     );
-    expect(response).not.toHaveProperty('email');
-    expect(JSON.stringify(response)).not.toContain(sentToken);
   });
 
-  it('confirms the bound e-mail and atomically consumes the token', async () => {
+  it('confirms the bound e-mail, consumes the token, and clears the required marker', async () => {
     const now = new Date();
     const record = {
       id: 31,
@@ -108,7 +137,10 @@ describe('EmailVerificationService', () => {
           emailVerificadoEm: null,
           ativo: true,
         }),
-        data: { emailVerificadoEm: expect.any(Date) },
+        data: {
+          emailVerificadoEm: expect.any(Date),
+          emailConfirmacaoObrigatoria: false,
+        },
       }),
     );
   });
@@ -132,7 +164,12 @@ describe('EmailVerificationService', () => {
     expect(prisma.usuario.updateMany).not.toHaveBeenCalled();
   });
 
-  it('rejects already-used tokens with the same generic error', async () => {
+  it('rejects invalid and already-used tokens with a generic error', async () => {
+    prisma.emailVerificationToken.findUnique.mockResolvedValueOnce(null);
+    await expect(service.confirm(TOKEN)).rejects.toThrow(
+      new BadRequestException('Token de confirmação inválido ou expirado.'),
+    );
+
     const usedRecord = {
       id: 31,
       usuarioId: USER_ID,
@@ -144,9 +181,8 @@ describe('EmailVerificationService', () => {
     prisma.emailVerificationToken.findUnique
       .mockResolvedValueOnce({ id: usedRecord.id, usuarioId: USER_ID })
       .mockResolvedValueOnce(usedRecord);
-
     await expect(service.confirm(TOKEN)).rejects.toThrow(
-      new BadRequestException('Token de confirmação inválido ou expirado.'),
+      BadRequestException,
     );
     expect(prisma.usuario.updateMany).not.toHaveBeenCalled();
   });
@@ -163,12 +199,6 @@ describe('EmailVerificationService', () => {
     prisma.emailVerificationToken.findUnique
       .mockResolvedValueOnce({ id: record.id, usuarioId: USER_ID })
       .mockResolvedValueOnce(record);
-    prisma.usuario.findUnique.mockResolvedValue({
-      id: USER_ID,
-      email: USER_EMAIL,
-      emailVerificadoEm: null,
-      ativo: true,
-    });
 
     await expect(service.confirm(TOKEN)).rejects.toThrow(
       BadRequestException,
@@ -176,52 +206,206 @@ describe('EmailVerificationService', () => {
     expect(prisma.usuario.updateMany).not.toHaveBeenCalled();
   });
 
-  it('limits repeated confirmation requests for the same account', async () => {
-    prisma.emailVerificationToken.count.mockResolvedValue(
-      3,
-    );
-
+  it('enforces the 60-second minimum and the three-request hourly user limit', async () => {
+    rateLimitRecord.lastRequestedAt = new Date(Date.now() - 30_000);
+    rateLimitRecord.attemptCount = 1;
     await expect(service.requestConfirmation(USER_ID)).rejects.toMatchObject({
       status: HttpStatus.TOO_MANY_REQUESTS,
     } satisfies Partial<HttpException>);
-    expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
     expect(mailer.sendVerificationEmail).not.toHaveBeenCalled();
+    expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
+
+    rateLimitRecord.lastRequestedAt = new Date(Date.now() - 61_000);
+    prisma.emailVerificationToken.count.mockResolvedValue(3);
+    await expect(service.requestConfirmation(USER_ID)).rejects.toMatchObject({
+      status: HttpStatus.TOO_MANY_REQUESTS,
+    } satisfies Partial<HttpException>);
+    expect(mailer.sendVerificationEmail).not.toHaveBeenCalled();
+    expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
   });
 
-  it('does not create a token or report success while delivery is unconfigured', async () => {
-    mailer.isAvailable.mockReturnValue(false);
+  it('returns the same public response for unknown and pending addresses', async () => {
+    const pendingResponse = await service.requestConfirmationByEmail(
+      USER_EMAIL,
+    );
 
-    await expect(service.requestConfirmation(USER_ID)).rejects.toThrow(
-      ServiceUnavailableException,
+    prisma.usuario.findFirst.mockResolvedValue(null);
+    const unknownResponse = await service.requestConfirmationByEmail(
+      'missing@example.com',
+    );
+
+    expect(pendingResponse).toEqual(unknownResponse);
+    expect(JSON.stringify(unknownResponse)).not.toContain('missing@example.com');
+  });
+
+  it('reserves the normalized email limit for unknown addresses without creating a token', async () => {
+    prisma.usuario.findFirst.mockResolvedValue(null);
+
+    await service.requestConfirmationByEmail(' Missing@Example.com ');
+
+    expect(prisma.usuario.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          email: { equals: 'missing@example.com', mode: 'insensitive' },
+        },
+      }),
+    );
+    expect(prisma.emailVerificationRateLimit.update).toHaveBeenCalledTimes(1);
+    expect(prisma.emailVerificationRateLimit.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { emailHash: expect.any(String) },
+        data: expect.objectContaining({
+          attemptCount: 1,
+          lastRequestedAt: expect.any(Date),
+        }),
+      }),
     );
     expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
     expect(mailer.sendVerificationEmail).not.toHaveBeenCalled();
   });
 
-  it('invalidates an unsent token and returns a sanitized error when delivery fails', async () => {
+  it('limits public requests for unknown addresses by cooldown and hourly quota', async () => {
+    jest.useFakeTimers();
+    const start = new Date('2026-11-12T12:00:00.000Z');
+    jest.setSystemTime(start);
+    rateLimitRecord.windowStartedAt = start;
+    prisma.usuario.findFirst.mockResolvedValue(null);
+
+    try {
+      const responses = [];
+      responses.push(
+        await service.requestConfirmationByEmail('unknown@example.com'),
+      );
+      expect(rateLimitRecord.attemptCount).toBe(1);
+      expect(rateLimitRecord.lastRequestedAt).toEqual(start);
+
+      jest.advanceTimersByTime(59_999);
+      responses.push(
+        await service.requestConfirmationByEmail('unknown@example.com'),
+      );
+      expect(rateLimitRecord.attemptCount).toBe(1);
+
+      jest.advanceTimersByTime(1);
+      responses.push(
+        await service.requestConfirmationByEmail('unknown@example.com'),
+      );
+      expect(rateLimitRecord.attemptCount).toBe(2);
+      expect(rateLimitRecord.lastRequestedAt).toEqual(
+        new Date(start.getTime() + 60_000),
+      );
+
+      jest.advanceTimersByTime(60_000);
+      responses.push(
+        await service.requestConfirmationByEmail('unknown@example.com'),
+      );
+      expect(rateLimitRecord.attemptCount).toBe(3);
+
+      jest.advanceTimersByTime(60_000);
+      responses.push(
+        await service.requestConfirmationByEmail('unknown@example.com'),
+      );
+
+      expect(rateLimitRecord.attemptCount).toBe(3);
+      expect(prisma.emailVerificationRateLimit.update).toHaveBeenCalledTimes(3);
+      expect(responses).toHaveLength(5);
+      expect(
+        responses.every(
+          (response) => response.message === responses[0].message,
+        ),
+      ).toBe(true);
+      expect(responses[0].message).toContain('Solicitação recebida');
+      expect(JSON.stringify(responses)).not.toContain('unknown@example.com');
+      expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
+      expect(mailer.sendVerificationEmail).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('does not send a public resend before the email cooldown expires', async () => {
+    rateLimitRecord.lastRequestedAt = new Date(Date.now() - 30_000);
+    rateLimitRecord.attemptCount = 1;
+
+    await service.requestConfirmationByEmail(USER_EMAIL);
+
+    expect(mailer.sendVerificationEmail).not.toHaveBeenCalled();
+    expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
+  });
+
+  it('applies the hourly email limit to public resend without revealing it', async () => {
+    rateLimitRecord.attemptCount = 3;
+    rateLimitRecord.lastRequestedAt = new Date(Date.now() - 61_000);
+
+    await expect(
+      service.requestConfirmationByEmail(USER_EMAIL),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('Solicitação recebida'),
+      }),
+    );
+    expect(mailer.sendVerificationEmail).not.toHaveBeenCalled();
+    expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
+  });
+
+  it('does not reveal account existence when sending is unavailable', async () => {
+    mailer.isAvailable.mockReturnValue(false);
+
+    await expect(
+      service.requestConfirmationByEmail(USER_EMAIL),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        message: expect.stringContaining('Solicitação recebida'),
+      }),
+    );
+    expect(mailer.sendVerificationEmail).not.toHaveBeenCalled();
+    await expect(
+      service.sendRegistrationConfirmation(USER_ID),
+    ).resolves.toBe(false);
+  });
+
+  it('invalidates a token after Brevo failure and reports registration delivery as incomplete', async () => {
     mailer.sendVerificationEmail.mockRejectedValue(
       new Error('provider credentials must not escape'),
     );
+    const warning = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation();
 
-    await expect(service.requestConfirmation(USER_ID)).rejects.toThrow(
-      ServiceUnavailableException,
-    );
-    expect(prisma.emailVerificationToken.updateMany).toHaveBeenLastCalledWith({
+    await expect(
+      service.sendRegistrationConfirmation(USER_ID),
+    ).resolves.toBe(false);
+    expect(prisma.emailVerificationToken.updateMany).toHaveBeenCalledWith({
       where: { id: 31, usadoEm: null },
       data: { usadoEm: expect.any(Date) },
     });
-    expect(mailer.sendVerificationEmail.mock.calls[0][1]).not.toBe(
-      prisma.emailVerificationToken.create.mock.calls[0][0].data.tokenHash,
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(
+      'Email verification delivery failed; token invalidated.',
     );
+    warning.mockRestore();
   });
 
-  it('does not disclose the address or token in successful responses', async () => {
-    const response = await service.requestConfirmation(USER_ID);
-
-    expect(response).toEqual({ message: 'E-mail de confirmação enviado.' });
-    expect(JSON.stringify(response)).not.toContain(USER_EMAIL);
-    expect(JSON.stringify(response)).not.toContain(
-      mailer.sendVerificationEmail.mock.calls[0][1],
+  it('returns incomplete and logs generically when confirmation preparation fails unexpectedly', async () => {
+    prisma.$transaction.mockRejectedValue(
+      new Error('sensitive database failure details'),
     );
+    const warning = jest
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation();
+
+    await expect(
+      service.sendRegistrationConfirmation(USER_ID),
+    ).resolves.toBe(false);
+
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning).toHaveBeenCalledWith(
+      'Registration email confirmation could not be completed.',
+    );
+    expect(warning.mock.calls.flat().join(' ')).not.toContain(
+      'sensitive database failure details',
+    );
+    expect(prisma.emailVerificationToken.create).not.toHaveBeenCalled();
+    expect(mailer.sendVerificationEmail).not.toHaveBeenCalled();
+    warning.mockRestore();
   });
 });

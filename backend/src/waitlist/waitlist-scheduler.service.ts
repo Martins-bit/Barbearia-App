@@ -31,10 +31,9 @@ export class WaitlistSchedulerService {
           `Scheduler expirou ${result.expiredCount} claim(s) e reofertou ${result.reofferedWindows} janela(s).`,
         );
       }
-    } catch (error) {
+    } catch {
       this.logger.error(
         'Falha ao processar claims expirados na lista de espera; nova tentativa no próximo ciclo.',
-        error instanceof Error ? error.stack : undefined,
       );
     }
   }

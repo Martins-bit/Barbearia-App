@@ -20,12 +20,14 @@ describe('RolesGuard', () => {
     overrides: Partial<{
       id: number;
       ativo: boolean;
+      emailConfirmacaoObrigatoria: boolean;
       tipoUsuario: TipoUsuario;
       barbeiro: { ativo: boolean } | null;
     }> = {},
   ) => ({
     id: 1,
     ativo: true,
+    emailConfirmacaoObrigatoria: false,
     tipoUsuario: TipoUsuario.BARBEIRO,
     barbeiro: { ativo: true },
     ...overrides,
@@ -95,6 +97,21 @@ describe('RolesGuard', () => {
     reflector.getAllAndOverride.mockReturnValue([TipoUsuario.BARBEIRO]);
     usersService.findAuthorizationStateById.mockResolvedValue(
       createAuthorizationState({ ativo: false }),
+    );
+
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      UnauthorizedException,
+    );
+  });
+
+  it('rejeita conta com confirmação obrigatória pendente', async () => {
+    reflector.getAllAndOverride.mockReturnValue([TipoUsuario.CLIENTE]);
+    usersService.findAuthorizationStateById.mockResolvedValue(
+      createAuthorizationState({
+        tipoUsuario: TipoUsuario.CLIENTE,
+        emailConfirmacaoObrigatoria: true,
+        barbeiro: null,
+      }),
     );
 
     await expect(guard.canActivate(context)).rejects.toThrow(

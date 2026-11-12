@@ -11,6 +11,75 @@ import { normalizeEmail } from '../common/utils/email.util';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { BarberResponseDto } from '../barbers/dto/barber-response.dto';
+import {
+  dateKeyFromUtcMidnight,
+  formatLocalHHmm,
+} from '../schedule/tz.util';
+
+export interface PersonalDataExport {
+  formato: 'Barbearia-App personal data v1';
+  geradoEm: string;
+  limitacoes: string[];
+  conta: {
+    nome: string;
+    telefone: string;
+    email: string | null;
+    tipoUsuario: TipoUsuario;
+    ativo: boolean;
+    criadoEm: string;
+    atualizadoEm: string;
+    confirmacaoEmail: {
+      confirmadoEm: string | null;
+      confirmacaoObrigatoria: boolean;
+    };
+    perfil: Record<string, unknown>;
+  };
+  agendamentos: Array<{
+    data: string;
+    horaInicio: string;
+    horaFim: string;
+    status: string;
+    criadoEm: string;
+    atualizadoEm: string;
+    servico: { nome: string; duracaoMinutos: number };
+  }>;
+  listaEspera: Array<{
+    dataDesejada: string;
+    horaInicio: string | null;
+    horaFim: string | null;
+    status: string;
+    dataEntrada: string;
+    atualizadoEm: string;
+    servico: { nome: string };
+    claims: Array<{
+      data: string;
+      horaInicio: string;
+      horaFim: string;
+      status: string;
+      expiraEm: string;
+      criadoEm: string;
+    }>;
+  }>;
+  mensagens: {
+    conteudoIncluido: false;
+    registros: Array<{
+      direcao: 'ENVIADA' | 'RECEBIDA';
+      dataCriacao: string;
+      dataLeitura: string | null;
+      lida: boolean;
+      apagadaParaTodos: boolean;
+      dataExclusao: string | null;
+    }>;
+  };
+  notificacoes: Array<{
+    tipo: string;
+    lida: boolean;
+    dataCriacao: string;
+    dataLeitura: string | null;
+    claimStatus?: string;
+    claimExpiraEm?: string;
+  }>;
+}
 
 @Injectable()
 export class UsersService {
@@ -41,7 +110,10 @@ export class UsersService {
   async findById(id: number): Promise<UserResponseDto | null> {
     const usuario = await this.prisma.usuario.findUnique({
       where: { id },
-      select: this.publicUserSelect,
+      select: {
+        ...this.publicUserSelect,
+        emailVerificadoEm: true,
+      },
     });
 
     if (!usuario) {
@@ -51,10 +123,277 @@ export class UsersService {
     return this.sanitizeUser(usuario);
   }
 
+  async exportPersonalData(userId: number): Promise<PersonalDataExport> {
+    const user = await this.prisma.usuario.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        nome: true,
+        telefone: true,
+        email: true,
+        emailVerificadoEm: true,
+        emailConfirmacaoObrigatoria: true,
+        tipoUsuario: true,
+        ativo: true,
+        dataCriacao: true,
+        dataAtualizacao: true,
+        cliente: {
+          select: {
+            id: true,
+            dataCriacao: true,
+            dataAtualizacao: true,
+          },
+        },
+        barbeiro: {
+          select: {
+            id: true,
+            ativo: true,
+            dataCriacao: true,
+            dataAtualizacao: true,
+            horarios: {
+              select: {
+                diaSemana: true,
+                horaInicio: true,
+                horaFim: true,
+                ativo: true,
+              },
+              orderBy: [{ diaSemana: 'asc' }, { horaInicio: 'asc' }],
+            },
+            bloqueios: {
+              select: {
+                data: true,
+                horaInicio: true,
+                horaFim: true,
+                ativo: true,
+                dataCriacao: true,
+              },
+              orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }],
+            },
+            emergencias: {
+              select: {
+                dataInicio: true,
+                dataFim: true,
+                status: true,
+                dataCriacao: true,
+              },
+              orderBy: { dataInicio: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+
+    const appointmentOwnership = [
+      ...(user.cliente ? [{ clienteId: user.cliente.id }] : []),
+      ...(user.barbeiro ? [{ barbeiroId: user.barbeiro.id }] : []),
+    ];
+    const waitlistOwnership = [
+      ...(user.cliente ? [{ clienteId: user.cliente.id }] : []),
+      ...(user.barbeiro ? [{ barbeiroId: user.barbeiro.id }] : []),
+    ];
+    const counterpart =
+      user.tipoUsuario === TipoUsuario.CLIENTE
+        ? {
+            ativo: true,
+            tipoUsuario: TipoUsuario.BARBEIRO,
+            barbeiro: { is: { ativo: true } },
+          }
+        : { ativo: true, tipoUsuario: TipoUsuario.CLIENTE };
+
+    const [appointments, waitlist, messages, notifications] =
+      await Promise.all([
+        this.prisma.agendamento.findMany({
+          where: { OR: appointmentOwnership },
+          orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }, { id: 'asc' }],
+          select: {
+            data: true,
+            horaInicio: true,
+            horaFim: true,
+            status: true,
+            dataCriacao: true,
+            dataAtualizacao: true,
+            servico: {
+              select: { nome: true, duracaoMinutos: true },
+            },
+          },
+        }),
+        this.prisma.listaEspera.findMany({
+          where: { OR: waitlistOwnership },
+          orderBy: [{ dataDesejada: 'asc' }, { dataEntrada: 'asc' }, { id: 'asc' }],
+          select: {
+            dataDesejada: true,
+            horaInicio: true,
+            horaFim: true,
+            status: true,
+            dataEntrada: true,
+            dataAtualizacao: true,
+            servico: { select: { nome: true } },
+            claims: {
+              select: {
+                data: true,
+                horaInicio: true,
+                horaFim: true,
+                status: true,
+                expiraEm: true,
+                dataCriacao: true,
+              },
+              orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
+            },
+          },
+        }),
+        this.prisma.mensagem.findMany({
+          where: {
+            apagadaParaTodos: false,
+            OR: [
+              {
+                remetenteId: userId,
+                excluidaPeloRemetente: false,
+                destinatario: { is: counterpart },
+              },
+              {
+                destinatarioId: userId,
+                excluidaPeloDestinatario: false,
+                remetente: { is: counterpart },
+              },
+            ],
+          },
+          orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
+          select: {
+            remetenteId: true,
+            lida: true,
+            dataCriacao: true,
+            dataLeitura: true,
+            apagadaParaTodos: true,
+            dataExclusao: true,
+          },
+        }),
+        this.prisma.notificacao.findMany({
+          where: { usuarioId: userId, limpa: false },
+          orderBy: [{ dataCriacao: 'desc' }, { id: 'desc' }],
+          select: {
+            tipo: true,
+            lida: true,
+            dataCriacao: true,
+            dataLeitura: true,
+            claim: {
+              select: { status: true, expiraEm: true },
+            },
+          },
+        }),
+      ]);
+
+    const barberProfile = user.barbeiro
+      ? {
+          ativo: user.barbeiro.ativo,
+          criadoEm: user.barbeiro.dataCriacao.toISOString(),
+          atualizadoEm: user.barbeiro.dataAtualizacao.toISOString(),
+          horarios: user.barbeiro.horarios,
+          bloqueios: user.barbeiro.bloqueios.map((block) => ({
+            data: dateKeyFromUtcMidnight(block.data),
+            horaInicio: formatLocalHHmm(block.horaInicio),
+            horaFim: formatLocalHHmm(block.horaFim),
+            ativo: block.ativo,
+            dataCriacao: block.dataCriacao.toISOString(),
+          })),
+          emergencias: user.barbeiro.emergencias.map((emergency) => ({
+            dataInicio: emergency.dataInicio.toISOString(),
+            dataFim: emergency.dataFim.toISOString(),
+            status: emergency.status,
+            dataCriacao: emergency.dataCriacao.toISOString(),
+          })),
+        }
+      : user.cliente
+        ? {
+            criadoEm: user.cliente.dataCriacao.toISOString(),
+            atualizadoEm: user.cliente.dataAtualizacao.toISOString(),
+          }
+        : {};
+
+    return {
+      formato: 'Barbearia-App personal data v1',
+      geradoEm: new Date().toISOString(),
+      limitacoes: [
+        'O conteúdo das mensagens, observações de agendamentos, motivos de bloqueios/emergências e textos livres de notificações foram omitidos para reduzir a exposição de dados de terceiros; o escopo ainda depende de decisão do responsável pelo tratamento.',
+        'Mensagens apagadas para todos ou ocultadas para este usuário não são incluídas.',
+        'Tokens, hashes de senha, identificadores internos de autenticação, credenciais e segredos não são incluídos.',
+        'Solicitações de titulares e preferências não persistidas não estão disponíveis para exportação.',
+        'Notificações já limpas não são incluídas, pois não são exibidas pelo endpoint atual do usuário.',
+      ],
+      conta: {
+        nome: user.nome,
+        telefone: user.telefone,
+        email: user.email,
+        tipoUsuario: user.tipoUsuario,
+        ativo: user.ativo,
+        criadoEm: user.dataCriacao.toISOString(),
+        atualizadoEm: user.dataAtualizacao.toISOString(),
+        confirmacaoEmail: {
+          confirmadoEm: user.emailVerificadoEm?.toISOString() ?? null,
+          confirmacaoObrigatoria: user.emailConfirmacaoObrigatoria,
+        },
+        perfil: barberProfile,
+      },
+      agendamentos: appointments.map((appointment) => ({
+        data: dateKeyFromUtcMidnight(appointment.data),
+        horaInicio: formatLocalHHmm(appointment.horaInicio),
+        horaFim: formatLocalHHmm(appointment.horaFim),
+        status: appointment.status,
+        criadoEm: appointment.dataCriacao.toISOString(),
+        atualizadoEm: appointment.dataAtualizacao.toISOString(),
+        servico: appointment.servico,
+      })),
+      listaEspera: waitlist.map((entry) => ({
+        dataDesejada: dateKeyFromUtcMidnight(entry.dataDesejada),
+        horaInicio: entry.horaInicio,
+        horaFim: entry.horaFim,
+        status: entry.status,
+        dataEntrada: entry.dataEntrada.toISOString(),
+        atualizadoEm: entry.dataAtualizacao.toISOString(),
+        servico: entry.servico,
+        claims: entry.claims.map((claim) => ({
+          data: dateKeyFromUtcMidnight(claim.data),
+          horaInicio: claim.horaInicio,
+          horaFim: claim.horaFim,
+          status: claim.status,
+          expiraEm: claim.expiraEm.toISOString(),
+          criadoEm: claim.dataCriacao.toISOString(),
+        })),
+      })),
+      mensagens: {
+        conteudoIncluido: false,
+        registros: messages.map((message) => ({
+          direcao: message.remetenteId === userId ? 'ENVIADA' : 'RECEBIDA',
+          dataCriacao: message.dataCriacao.toISOString(),
+          dataLeitura: message.dataLeitura?.toISOString() ?? null,
+          lida: message.lida,
+          apagadaParaTodos: message.apagadaParaTodos,
+          dataExclusao: message.dataExclusao?.toISOString() ?? null,
+        })),
+      },
+      notificacoes: notifications.map((notification) => ({
+        tipo: notification.tipo,
+        lida: notification.lida,
+        dataCriacao: notification.dataCriacao.toISOString(),
+        dataLeitura: notification.dataLeitura?.toISOString() ?? null,
+        ...(notification.claim
+          ? {
+              claimStatus: notification.claim.status,
+              claimExpiraEm: notification.claim.expiraEm.toISOString(),
+            }
+          : {}),
+      })),
+    };
+  }
+
   async findAuthorizationStateById(userId: number): Promise<{
     id: number;
     ativo: boolean;
     authVersion: number;
+    emailConfirmacaoObrigatoria: boolean;
     tipoUsuario: TipoUsuario;
     barbeiro: { ativo: boolean } | null;
   } | null> {
@@ -64,6 +403,7 @@ export class UsersService {
         id: true,
         ativo: true,
         authVersion: true,
+        emailConfirmacaoObrigatoria: true,
         tipoUsuario: true,
         barbeiro: {
           select: {
@@ -77,10 +417,15 @@ export class UsersService {
   async findAuthVersionById(userId: number): Promise<{
     id: number;
     authVersion: number;
+    emailConfirmacaoObrigatoria: boolean;
   } | null> {
     return this.prisma.usuario.findUnique({
       where: { id: userId },
-      select: { id: true, authVersion: true },
+      select: {
+        id: true,
+        authVersion: true,
+        emailConfirmacaoObrigatoria: true,
+      },
     });
   }
 
@@ -345,14 +690,14 @@ export class UsersService {
         ? await this.prisma.$transaction(async (transaction) => {
             const updatedUser = await transaction.usuario.update({
               where: { id },
-              data: { ...updates, emailVerificadoEm: null },
+              data: {
+                ...updates,
+                emailVerificadoEm: null,
+                emailConfirmacaoObrigatoria: updates.email !== null,
+              },
               select: this.publicUserSelect,
             });
             await transaction.emailVerificationToken.updateMany({
-              where: { usuarioId: id, usadoEm: null },
-              data: { usadoEm: new Date() },
-            });
-            await transaction.passwordResetToken.updateMany({
               where: { usuarioId: id, usadoEm: null },
               data: { usadoEm: new Date() },
             });
@@ -406,6 +751,7 @@ export class UsersService {
     senhaHash: string;
     tipoUsuario: 'CLIENTE' | 'BARBEIRO';
     email?: string | null;
+    requireEmailVerification?: boolean;
   }) {
     try {
       // Para clients, criar usuário + cliente atomicamente
@@ -417,6 +763,8 @@ export class UsersService {
             senhaHash: data.senhaHash,
             tipoUsuario: data.tipoUsuario,
             email: data.email || null,
+            emailConfirmacaoObrigatoria:
+              data.requireEmailVerification ?? false,
             ativo: true,
             cliente: {
               create: {},
@@ -436,6 +784,8 @@ export class UsersService {
           senhaHash: data.senhaHash,
           tipoUsuario: data.tipoUsuario,
           email: data.email || null,
+          emailConfirmacaoObrigatoria:
+            data.requireEmailVerification ?? false,
           ativo: true,
         },
         select: this.publicUserSelect,

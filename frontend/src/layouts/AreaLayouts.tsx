@@ -19,6 +19,7 @@ import {
   ClockIcon,
   BlockIcon,
   TagIcon,
+  InfoIcon,
 } from '../components/ui/icons/Icon'
 
 const clientNav: NavItem[] = [
@@ -30,6 +31,7 @@ const clientNav: NavItem[] = [
   { label: 'Notificações', to: ROUTES.cliente.notificacoes, icon: <BellIcon /> },
   { label: 'Mensagens', to: ROUTES.cliente.mensagens, icon: <MessageIcon />, badge: -1 },
   { label: 'Perfil', to: ROUTES.cliente.perfil, icon: <UserIcon /> },
+  { label: 'Privacidade', to: ROUTES.cliente.privacidade, icon: <InfoIcon /> },
 ]
 
 const barberNav: NavItem[] = [
@@ -42,6 +44,7 @@ const barberNav: NavItem[] = [
   { label: 'Notificações', to: ROUTES.barbeiro.notificacoes, icon: <BellIcon /> },
   { label: 'Mensagens', to: ROUTES.barbeiro.mensagens, icon: <MessageIcon />, badge: -1 },
   { label: 'Perfil', to: ROUTES.barbeiro.perfil, icon: <UserIcon /> },
+  { label: 'Privacidade', to: ROUTES.barbeiro.privacidade, icon: <InfoIcon /> },
 ]
 
 function useMobileDrawer() {

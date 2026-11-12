@@ -1,20 +1,30 @@
-import { useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useState, type FormEvent } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Field'
+import { CheckIcon } from '../../components/ui/icons/Icon'
 import { useAuth } from '../../contexts/useAuth'
-import { useToast } from '../../contexts/useToast'
 import { AuthLayout } from '../../layouts/AuthLayout'
 import { authService } from '../../services/api/authService'
 import { ROUTES } from '../../routes/routes'
-import { authRequestErrorMessage } from './authValidation'
+import { authRequestErrorMessage, isValidEmail } from './authValidation'
 import styles from './LoginPage.module.css'
 
 const EMAIL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 
+interface VerificationLocationState {
+  email?: string
+  emailConfirmationSent?: boolean
+}
+
 export function EmailVerificationPage() {
-  const { status } = useAuth()
-  const toast = useToast()
+  const { user } = useAuth()
+  const location = useLocation()
+  const locationState =
+    location.state as VerificationLocationState | null
+  const [email, setEmail] = useState(
+    locationState?.email ?? user?.email ?? '',
+  )
   const [token, setToken] = useState('')
   const [requestMessage, setRequestMessage] = useState<string>()
   const [error, setError] = useState<string>()
@@ -22,23 +32,33 @@ export function EmailVerificationPage() {
   const [confirming, setConfirming] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
 
-  async function requestConfirmation() {
+  useEffect(() => {
+    if (!email && user?.email) setEmail(user.email)
+  }, [email, user?.email])
+
+  async function requestConfirmation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
     setError(undefined)
     setRequestMessage(undefined)
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!isValidEmail(normalizedEmail)) {
+      setError('Informe um endereço de e-mail válido.')
+      return
+    }
+
     setRequesting(true)
     try {
-      const response = await authService.requestEmailVerification()
-      setRequestMessage(response.message)
-      toast.success(response.message)
-    } catch (caught) {
+      await authService.requestEmailVerificationResend(normalizedEmail)
       const message =
-        caught instanceof Error && 'status' in caught && caught.status === 400
-          ? 'Adicione um endereço de e-mail válido ao seu perfil antes de solicitar a confirmação.'
-          : authRequestErrorMessage(
-              caught,
-              'Não foi possível solicitar a confirmação agora.',
-            )
-      setError(message)
+        'Se o endereço estiver associado a uma conta pendente, enviaremos as instruções.'
+      setRequestMessage(message)
+    } catch (caught) {
+      setError(
+        authRequestErrorMessage(
+          caught,
+          'Não foi possível processar a solicitação agora.',
+        ),
+      )
     } finally {
       setRequesting(false)
     }
@@ -47,6 +67,7 @@ export function EmailVerificationPage() {
   async function confirmAddress(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(undefined)
+    setRequestMessage(undefined)
 
     if (!EMAIL_TOKEN_PATTERN.test(token)) {
       setError('Informe o token de confirmação exatamente como recebido.')
@@ -58,7 +79,6 @@ export function EmailVerificationPage() {
       await authService.confirmEmail(token)
       setToken('')
       setConfirmed(true)
-      toast.success('Endereço de e-mail confirmado.')
     } catch (caught) {
       setError(
         authRequestErrorMessage(
@@ -74,70 +94,107 @@ export function EmailVerificationPage() {
   return (
     <AuthLayout
       heading="Confirme seu endereço."
-      subheading="A confirmação é feita com o token enviado ao e-mail da própria conta."
+      subheading="Confirme o e-mail para liberar o acesso à sua conta."
     >
       <div className={styles.header}>
         <span className={`eyebrow ${styles.eyebrow}`}>Conta</span>
         <h2 className={styles.title}>Confirmar e-mail</h2>
         <p className={styles.subtitle}>
-          Solicite o envio enquanto estiver conectado ou informe abaixo o token recebido.
+          Confirme seu endereço para concluir a proteção da sua conta.
         </p>
       </div>
 
-      {status === 'authenticated' ? (
-        <div className={styles.form}>
-          <Button
-            type="button"
-            variant="secondary"
-            fullWidth
-            loading={requesting}
-            onClick={requestConfirmation}
-          >
-            Solicitar confirmação do meu e-mail
-          </Button>
-          {requestMessage && <p role="status">{requestMessage}</p>}
-        </div>
-      ) : status === 'loading' ? (
-        <p className={styles.subtitle}>Verificando sua sessão.</p>
-      ) : (
-        <p className={styles.subtitle}>
-          Para solicitar o envio, entre na sua conta. A confirmação do token continua disponível sem login.
-        </p>
-      )}
-
       {confirmed ? (
-        <p className={styles.subtitle} role="status">
-          Seu endereço de e-mail foi confirmado.
-        </p>
+        <section className={styles.confirmedState} role="status">
+          <span className={styles.confirmedIcon}>
+            <CheckIcon size={28} />
+          </span>
+          <h3 className={styles.confirmedTitle}>E-mail confirmado</h3>
+          <p className={styles.confirmedText}>
+            Seu endereço está confirmado. Você já pode acessar sua conta.
+          </p>
+          <Link className={styles.successLink} to={ROUTES.login}>
+            Ir para o login
+          </Link>
+        </section>
       ) : (
-        <form className={styles.form} onSubmit={confirmAddress} noValidate>
-          <Input
-            label="Token de confirmação"
-            name="token"
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
-            required
-          />
-          <Button type="submit" fullWidth loading={confirming}>
-            Confirmar e-mail
-          </Button>
-        </form>
+        <>
+          {error ? (
+            <p className={styles.verificationError} role="alert">
+              {error}
+            </p>
+          ) : requestMessage ? (
+            <p className={styles.notice} role="status">
+              {requestMessage}
+            </p>
+          ) : locationState?.emailConfirmationSent === true ? (
+            <p className={styles.notice} role="status">
+              E-mail enviado. Confira sua caixa de entrada e o spam.
+            </p>
+          ) : locationState?.emailConfirmationSent === false ? (
+            <p className={styles.verificationError} role="status">
+              Conta criada, mas o e-mail não foi enviado. Você pode solicitar
+              um novo envio abaixo.
+            </p>
+          ) : null}
+
+          <form className={styles.formSection} onSubmit={confirmAddress} noValidate>
+            <div className={styles.sectionHeading}>
+              <h3 className={styles.sectionTitle}>Já recebeu o e-mail?</h3>
+              <p className={styles.sectionDescription}>
+                Cole aqui o token enviado para sua caixa de entrada.
+              </p>
+            </div>
+            <Input
+              label="Token de confirmação"
+              name="token"
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              required
+            />
+            <Button type="submit" fullWidth loading={confirming}>
+              Confirmar e-mail
+            </Button>
+          </form>
+
+          <form className={styles.resendSection} onSubmit={requestConfirmation} noValidate>
+            <div className={styles.sectionHeading}>
+              <h3 className={styles.sectionTitle}>Não recebeu?</h3>
+              <p className={styles.sectionDescription}>
+                Solicite um novo envio quando precisar.
+              </p>
+            </div>
+            <Input
+              label="E-mail da conta"
+              name="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+            <Button
+              type="submit"
+              variant="secondary"
+              fullWidth
+              loading={requesting}
+            >
+              Solicitar novo e-mail
+            </Button>
+          </form>
+        </>
       )}
 
-      {error && (
-        <p className={styles.error} role="alert">
-          {error}
+      {!confirmed && (
+        <p className={styles.footerText}>
+          <Link className={styles.link} to={ROUTES.login}>
+            Voltar ao login
+          </Link>
         </p>
       )}
-
-      <p className={styles.footerText}>
-        <Link className={styles.link} to={ROUTES.login}>
-          Voltar ao login
-        </Link>
-      </p>
     </AuthLayout>
   )
 }

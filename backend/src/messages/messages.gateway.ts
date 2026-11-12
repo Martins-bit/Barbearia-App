@@ -165,11 +165,19 @@ export class MessagesGateway
    */
   private async getAuthorizationState(
     usuarioId: number,
-  ): Promise<{ tipoUsuario: TipoUsuario; authVersion: number } | null> {
+  ): Promise<{
+    tipoUsuario: TipoUsuario;
+    authVersion: number;
+    emailConfirmacaoObrigatoria: boolean;
+  } | null> {
     const authorizationState =
       await this.usersService.findAuthorizationStateById(usuarioId);
 
-    if (!authorizationState || !authorizationState.ativo) {
+    if (
+      !authorizationState ||
+      !authorizationState.ativo ||
+      authorizationState.emailConfirmacaoObrigatoria
+    ) {
       return null;
     }
 
@@ -183,6 +191,8 @@ export class MessagesGateway
     return {
       tipoUsuario: authorizationState.tipoUsuario,
       authVersion: authorizationState.authVersion ?? 0,
+      emailConfirmacaoObrigatoria:
+        authorizationState.emailConfirmacaoObrigatoria,
     };
   }
 

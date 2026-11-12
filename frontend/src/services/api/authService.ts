@@ -1,5 +1,10 @@
 import { http, authTokenStorage } from './http.ts'
-import type { LoginResponse, Usuario, UpdateUserInput } from '../../types/domain'
+import type {
+  LoginResponse,
+  PersonalDataExport,
+  Usuario,
+  UpdateUserInput,
+} from '../../types/domain'
 
 export interface LoginInput {
   telefone: string
@@ -17,6 +22,10 @@ export interface AuthMessageResponse {
   message: string
 }
 
+export interface RegisterResponse extends Usuario {
+  emailConfirmationSent: boolean
+}
+
 /**
  * Serviço de autenticação — endpoints reais do backend.
  * Endpoints de autenticação, perfil, confirmação de e-mail e recuperação.
@@ -30,14 +39,24 @@ export const authService = {
     return response
   },
 
-  register(input: RegisterInput): Promise<Usuario> {
-    return http.post<Usuario>('/auth/register', input, { skipAuth: true })
+  register(input: RegisterInput): Promise<RegisterResponse> {
+    return http.post<RegisterResponse>('/auth/register', input, {
+      skipAuth: true,
+    })
   },
 
   requestEmailVerification(): Promise<AuthMessageResponse> {
     return http.post<AuthMessageResponse>(
       '/auth/email/verification/request',
       undefined,
+    )
+  },
+
+  requestEmailVerificationResend(email: string): Promise<AuthMessageResponse> {
+    return http.post<AuthMessageResponse>(
+      '/auth/email/verification/resend',
+      { email },
+      { skipAuth: true },
     )
   },
 
@@ -72,6 +91,11 @@ export const authService = {
   /** PATCH /users/me — atualiza nome, telefone e/ou e-mail da própria conta. */
   updateProfile(input: UpdateUserInput): Promise<Usuario> {
     return http.patch<Usuario>('/users/me', input)
+  },
+
+  /** GET /users/me/export — gera uma cópia JSON dos dados acessíveis da conta. */
+  exportPersonalData(): Promise<PersonalDataExport> {
+    return http.get<PersonalDataExport>('/users/me/export')
   },
 
   logout(): void {

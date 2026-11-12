@@ -38,6 +38,7 @@ export interface Usuario {
   nome: string
   telefone: string
   email: string | null
+  emailVerificadoEm?: string | null
   tipoUsuario: TipoUsuario
   ativo: boolean
   dataCriacao: string
@@ -49,6 +50,72 @@ export interface UpdateUserInput {
   nome?: string
   telefone?: string
   email?: string | null
+}
+
+/** Resposta de GET /users/me/export. Campos omissos são descritos em limitacoes. */
+export interface PersonalDataExport {
+  formato: 'Barbearia-App personal data v1'
+  geradoEm: string
+  limitacoes: string[]
+  conta: {
+    nome: string
+    telefone: string
+    email: string | null
+    tipoUsuario: TipoUsuario
+    ativo: boolean
+    criadoEm: string
+    atualizadoEm: string
+    confirmacaoEmail: {
+      confirmadoEm: string | null
+      confirmacaoObrigatoria: boolean
+    }
+    perfil: Record<string, unknown>
+  }
+  agendamentos: Array<{
+    data: string
+    horaInicio: string
+    horaFim: string
+    status: StatusAgendamento
+    criadoEm: string
+    atualizadoEm: string
+    servico: { nome: string; duracaoMinutos: number }
+  }>
+  listaEspera: Array<{
+    dataDesejada: string
+    horaInicio: string | null
+    horaFim: string | null
+    status: StatusListaEspera
+    dataEntrada: string
+    atualizadoEm: string
+    servico: { nome: string }
+    claims: Array<{
+      data: string
+      horaInicio: string
+      horaFim: string
+      status: StatusWaitlistClaim
+      expiraEm: string
+      criadoEm: string
+    }>
+  }>
+  mensagens: {
+    conteudoIncluido: false
+    registros: Array<{
+      direcao: 'ENVIADA' | 'RECEBIDA'
+      dataCriacao: string
+      dataLeitura: string | null
+      lida: boolean
+      apagadaParaTodos: boolean
+      dataExclusao: string | null
+    }>
+  }
+  notificacoes: Array<{
+    tipo: TipoNotificacao
+    lida: boolean
+    dataCriacao: string
+    dataLeitura: string | null
+    claimStatus?: StatusWaitlistClaim
+    claimExpiraEm?: string
+  }>
 }
 
 export interface LoginResponse {

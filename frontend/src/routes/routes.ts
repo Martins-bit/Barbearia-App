@@ -21,6 +21,7 @@ export const ROUTES = {
     notificacoes: '/cliente/notificacoes',
     mensagens: '/cliente/mensagens',
     perfil: '/cliente/perfil',
+    privacidade: '/cliente/privacidade',
   },
 
   // Área do barbeiro (protegida)
@@ -34,5 +35,6 @@ export const ROUTES = {
     notificacoes: '/barbeiro/notificacoes',
     mensagens: '/barbeiro/mensagens',
     perfil: '/barbeiro/perfil',
+    privacidade: '/barbeiro/privacidade',
   },
 } as const

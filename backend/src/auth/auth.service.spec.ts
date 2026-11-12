@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import {
   ConflictException,
   BadRequestException,
+  ForbiddenException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { RegisterDto } from './dto/register.dto';
@@ -21,6 +22,7 @@ describe('AuthService', () => {
   let service: any;
   let usersService: any;
   let jwtService: JwtService;
+  let emailVerificationService: { sendRegistrationConfirmation: jest.Mock };
 
   beforeEach(async () => {
     // Ensure JWT_SECRET is set for tests
@@ -39,6 +41,9 @@ describe('AuthService', () => {
     const mockJwtService = {
       sign: jest.fn(),
     };
+    emailVerificationService = {
+      sendRegistrationConfirmation: jest.fn().mockResolvedValue(true),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -50,6 +55,11 @@ describe('AuthService', () => {
         {
           provide: JwtService,
           useValue: mockJwtService,
+        },
+        {
+          provide: require('./email-verification.service')
+            .EmailVerificationService,
+          useValue: emailVerificationService,
         },
       ],
     }).compile();
@@ -76,7 +86,7 @@ describe('AuthService', () => {
         id: 1,
         nome: 'João Silva',
         telefone: '11999999999',
-        email: null,
+        email: 'joao@example.com',
         tipoUsuario: 'CLIENTE',
         ativo: true,
         dataCriacao: new Date(),
@@ -92,7 +102,10 @@ describe('AuthService', () => {
 
       const result = await service.register(registerDto);
 
-      expect(result).toEqual(usuarioRetornado);
+      expect(result).toEqual({
+        ...usuarioRetornado,
+        emailConfirmationSent: true,
+      });
       expect(usersService.findByPhoneWithPasswordHash).toHaveBeenCalledWith(
         registerDto.telefone,
       );
@@ -102,7 +115,12 @@ describe('AuthService', () => {
           telefone: registerDto.telefone,
           email: registerDto.email,
           tipoUsuario: 'CLIENTE',
+          requireEmailVerification: true,
         }),
+      );
+      expect(emailVerificationService.sendRegistrationConfirmation).toHaveBeenCalledTimes(1);
+      expect(emailVerificationService.sendRegistrationConfirmation).toHaveBeenCalledWith(
+        usuarioRetornado.id,
       );
     });
 
@@ -197,10 +215,73 @@ describe('AuthService', () => {
       const result = await service.register(registerDto);
 
       expect(result).not.toHaveProperty('senhaHash');
+      expect(emailVerificationService.sendRegistrationConfirmation).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns an explicit incomplete-delivery state after the account is created', async () => {
+      emailVerificationService.sendRegistrationConfirmation.mockResolvedValue(
+        false,
+      );
+      usersService.findByPhoneWithPasswordHash.mockResolvedValue(null);
+      usersService.createUser.mockResolvedValue({
+        id: 11,
+        nome: 'Cliente',
+        telefone: '11999999998',
+        email: 'cliente@example.com',
+        tipoUsuario: 'CLIENTE',
+        ativo: true,
+        dataCriacao: new Date(),
+        dataAtualizacao: new Date(),
+      });
+
+      const result = await service.register({
+        nome: 'Cliente',
+        telefone: '11999999998',
+        senha: 'senha-segura',
+        email: 'cliente@example.com',
+      });
+
+      expect(result.emailConfirmationSent).toBe(false);
+      expect(usersService.createUser).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('login', () => {
+    it('does not issue a JWT while a new account must confirm its e-mail', async () => {
+      usersService.findByPhoneWithPasswordHash.mockResolvedValue({
+        id: 7,
+        telefone: '11999999999',
+        senhaHash: 'hash',
+        ativo: true,
+        emailConfirmacaoObrigatoria: true,
+      });
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+      await expect(
+        service.login({ telefone: '11999999999', senha: 'senha12345' }),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(jwtService.sign).not.toHaveBeenCalled();
+      expect(emailVerificationService.sendRegistrationConfirmation).not.toHaveBeenCalled();
+    });
+
+    it('allows a previously registered account with the default marker to log in', async () => {
+      usersService.findByPhoneWithPasswordHash.mockResolvedValue({
+        id: 8,
+        telefone: '11888888888',
+        senhaHash: 'hash',
+        ativo: true,
+        emailConfirmacaoObrigatoria: false,
+        tipoUsuario: 'CLIENTE',
+      });
+      (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+      (jwtService.sign as jest.Mock).mockReturnValue('legacy-token');
+
+      await expect(
+        service.login({ telefone: '11888888888', senha: 'senha12345' }),
+      ).resolves.toMatchObject({ token: 'legacy-token' });
+      expect(emailVerificationService.sendRegistrationConfirmation).not.toHaveBeenCalled();
+    });
+
     it('should authenticate user and return token', async () => {
       const loginDto: LoginDto = {
         telefone: '11999999999',
@@ -211,7 +292,9 @@ describe('AuthService', () => {
         id: 1,
         nome: 'João Silva',
         telefone: '11999999999',
-        email: null,
+        email: 'joao@example.com',
+        emailVerificadoEm: new Date(),
+        emailConfirmacaoObrigatoria: false,
         senhaHash: '$2b$10$hashedpassword',
         tipoUsuario: 'CLIENTE',
         ativo: true,

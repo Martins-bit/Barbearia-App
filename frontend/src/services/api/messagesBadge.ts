@@ -22,6 +22,7 @@ const listeners = new Set<Listener>()
 /** Usuario.id do dono da sessão (definido em refresh). */
 let donoSessaoId: number | null = null
 let iniciado = false
+let atualizacaoId = 0
 
 function publicar(valor: number): void {
   total = Math.max(0, valor)
@@ -57,14 +58,30 @@ export const messagesBadge = {
   },
   /** Busca o total no backend e passa a acompanhar em tempo real. */
   refresh(usuarioId: number | null): void {
-    if (!usuarioId || !authTokenStorage.get()) return
+    const token = authTokenStorage.get()
+    if (!usuarioId || !token) return
     donoSessaoId = usuarioId
     iniciar()
+    const idDaAtualizacao = ++atualizacaoId
     const controller = new AbortController()
     messagesService
       .unreadCount(controller.signal)
-      .then((res) => publicar(res.count))
+      .then((res) => {
+        if (
+          idDaAtualizacao === atualizacaoId &&
+          donoSessaoId === usuarioId &&
+          authTokenStorage.get() === token
+        ) {
+          publicar(res.count)
+        }
+      })
       .catch(() => undefined)
+  },
+  /** Remove estado derivado da sessão anterior, sem encerrar seus listeners. */
+  reset(): void {
+    atualizacaoId++
+    donoSessaoId = null
+    publicar(0)
   },
   /** A página marcou mensagem(s) como lida(s): desconta do total. */
   descontar(quantidade = 1): void {

@@ -45,6 +45,8 @@ A entidade de usuários será responsável pelas informações necessárias para
 - `nome`
 - `telefone`
 - `email`, quando aplicável
+- `email_verificado_em`
+- `email_confirmacao_obrigatoria`, booleano com padrão `false`
 - `senha_hash`
 - `tipo_usuario`
 - `ativo`
@@ -65,6 +67,14 @@ O tipo de usuário será utilizado para controlar permissões.
 A senha nunca deverá ser armazenada em texto puro.
 
 Deverá ser armazenado somente um hash seguro da senha.
+
+O marcador `email_confirmacao_obrigatoria` será ativado apenas para novas
+contas criadas pelo fluxo de cadastro e ao definir um novo e-mail. Seu padrão
+falso preserva o acesso das contas existentes; a confirmação válida o
+desativa. Remover o e-mail invalida a confirmação anterior, mas não deixa a
+conta bloqueada sem um endereço confirmável.
+Limites públicos de reenvio devem guardar somente HMAC do endereço, contador,
+início da janela e instante da última solicitação.
 
 ---
 

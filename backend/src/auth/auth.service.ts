@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -9,22 +10,25 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { LoginResponseDto } from './dto/login-response.dto';
+import { RegisterResponseDto } from './dto/register-response.dto';
 import { UsersService } from '../users/users.service';
 import { hashPassword, comparePasswords } from '../common/utils/password.util';
 import { normalizeEmail } from '../common/utils/email.util';
 import { JWT_CONFIG } from '../common/config/jwt.config';
+import { EmailVerificationService } from './email-verification.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly usersService: UsersService,
     private readonly jwtService: JwtService,
+    private readonly emailVerificationService: EmailVerificationService,
   ) {}
 
   /**
    * Registra um novo usuário (CLIENTE)
    */
-  async register(registerDto: RegisterDto): Promise<AuthResponseDto> {
+  async register(registerDto: RegisterDto): Promise<RegisterResponseDto> {
     // Validações básicas
     if (
       !registerDto.nome ||
@@ -62,9 +66,15 @@ export class AuthService {
       email,
       senhaHash,
       tipoUsuario: 'CLIENTE',
+      requireEmailVerification: true,
     });
 
-    return usuario;
+    const emailConfirmationSent =
+      await this.emailVerificationService.sendRegistrationConfirmation(
+        usuario.id,
+      );
+
+    return { ...usuario, emailConfirmationSent };
   }
 
   /**
@@ -95,6 +105,11 @@ export class AuthService {
     // A autenticação só é válida quando senha está correta e conta está ativa
     if (!senhaValida || !usuario.ativo) {
       throw new UnauthorizedException('Telefone ou senha incorretos');
+    }
+    if (usuario.emailConfirmacaoObrigatoria) {
+      throw new ForbiddenException(
+        'Confirme seu e-mail antes de entrar na conta.',
+      );
     }
 
     // Gera o token JWT

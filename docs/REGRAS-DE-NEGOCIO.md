@@ -17,6 +17,26 @@ O sistema possui dois tipos principais de usuários:
 
 Cada tipo de usuário possui permissões específicas.
 
+## 2.1. Confirmação de e-mail
+
+Novas contas de cliente só poderão entrar e acessar recursos privados após
+confirmar o e-mail. O cadastro cria a conta com confirmação obrigatória, tenta
+enviar apenas uma mensagem e não inicia sessão. O usuário deve solicitar
+explicitamente qualquer reenvio; abrir a tela ou tentar login nunca dispara
+mensagem.
+
+O reenvio deverá respeitar 60 segundos entre solicitações, até três
+solicitações por endereço/conta por hora e limitação por IP. Endereços
+inexistentes não poderão ser distinguidos nas respostas públicas. Tokens
+permanecem aleatórios, com hash persistido, expiração de 30 minutos e uso único.
+
+Contas já existentes mantêm seu acesso pelo padrão não obrigatório do marcador.
+Informar ou alterar para um novo e-mail invalida tokens e a confirmação
+anterior e exige confirmar o novo endereço antes de continuar usando recursos
+protegidos. Remover o e-mail invalida a confirmação anterior, mas não deixa a
+conta bloqueada sem um endereço que possa ser confirmado. A confirmação
+desativa o marcador.
+
 ---
 
 # 3. CLIENTE
@@ -451,6 +471,13 @@ O cliente somente poderá acessar informações pertencentes à sua própria con
 O barbeiro poderá acessar somente as informações de clientes necessárias para administrar os atendimentos e a barbearia.
 
 Usuários não poderão acessar dados de outros usuários sem autorização.
+
+Um usuário autenticado poderá baixar uma cópia JSON dos dados pessoais
+disponíveis para a própria conta. O backend identifica o titular pela sessão e
+não aceita que o solicitante escolha outro usuário. A exportação deve respeitar
+os mesmos limites de acesso aplicados às consultas normais e minimizar dados de
+terceiros; nesta versão, não inclui o conteúdo de mensagens nem observações
+livres.
 
 ---
 

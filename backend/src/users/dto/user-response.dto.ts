@@ -3,6 +3,7 @@ export class UserResponseDto {
   nome: string;
   telefone: string;
   email: string | null;
+  emailVerificadoEm?: Date | null;
   tipoUsuario: 'CLIENTE' | 'BARBEIRO';
   ativo: boolean;
   dataCriacao: Date;

@@ -62,15 +62,15 @@ describe('WaitlistSchedulerService', () => {
 
   it('captura erro e registra log de erro sem lançar exceção', async () => {
     waitlistService.processExpiredClaims.mockRejectedValue(
-      new Error('Falha de conexão com banco de dados'),
+      new Error('Falha para private@example.com com dados internos'),
     );
 
     await expect(scheduler.handleExpiredClaims()).resolves.toBeUndefined();
     expect(loggerErrorSpy).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Falha ao processar claims expirados na lista de espera',
-      ),
-      expect.any(String),
+      'Falha ao processar claims expirados na lista de espera; nova tentativa no próximo ciclo.',
+    );
+    expect(loggerErrorSpy.mock.calls.flat().join(' ')).not.toContain(
+      'private@example.com',
     );
   });
 });

@@ -5,6 +5,7 @@ import { LoginDto } from './login.dto';
 import { ConfirmEmailDto } from './confirm-email.dto';
 import { PasswordRecoveryDto } from './password-recovery.dto';
 import { PasswordResetDto } from './password-reset.dto';
+import { RequestEmailVerificationDto } from './request-email-verification.dto';
 
 describe('Auth DTOs Validation', () => {
   describe('RegisterDto', () => {
@@ -126,6 +127,27 @@ describe('Auth DTOs Validation', () => {
       const dto = plainToClass(ConfirmEmailDto, { token: 'A'.repeat(43) });
 
       await expect(validate(dto)).resolves.toHaveLength(0);
+    });
+
+    describe('RequestEmailVerificationDto', () => {
+      it('normalizes and validates public resend addresses', async () => {
+        const dto = plainToClass(RequestEmailVerificationDto, {
+          email: '  CLIENTE@EXAMPLE.COM ',
+        });
+
+        await expect(validate(dto)).resolves.toHaveLength(0);
+        expect(dto.email).toBe('cliente@example.com');
+      });
+
+      it('rejects invalid public resend addresses', async () => {
+        const dto = plainToClass(RequestEmailVerificationDto, {
+          email: 'not-an-email',
+        });
+
+        expect(await validate(dto)).toEqual(
+          expect.arrayContaining([expect.objectContaining({ property: 'email' })]),
+        );
+      });
     });
 
     it('should reject malformed confirmation tokens', async () => {

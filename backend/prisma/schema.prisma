@@ -73,12 +73,24 @@ enum StatusEmergencia {
   CANCELADA
 }
 
+enum CategoriaSolicitacaoTitular {
+  ACESSO_EXPORTACAO
+  CORRECAO
+  EXCLUSAO_ANONIMIZACAO
+  OUTRA
+}
+
+enum StatusSolicitacaoTitular {
+  RECEBIDA
+}
+
 model Usuario {
   id              Int         @id @default(autoincrement())
   nome            String
   telefone        String      @unique
   email           String?     @unique
   emailVerificadoEm DateTime?
+  emailConfirmacaoObrigatoria Boolean @default(false)
   senhaHash       String
   authVersion     Int         @default(0)
   tipoUsuario     TipoUsuario
@@ -93,6 +105,21 @@ model Usuario {
   notificacoes       Notificacao[]
   mensagensEnviadas  Mensagem[]    @relation("MensagensEnviadas")
   mensagensRecebidas Mensagem[]    @relation("MensagensRecebidas")
+  solicitacoesTitular SolicitacaoTitular[] @relation("TitularSolicitacao")
+}
+
+model SolicitacaoTitular {
+  id                Int                       @id @default(autoincrement())
+  titularId         Int
+  chaveIdempotencia String                    @db.Uuid
+  categoria         CategoriaSolicitacaoTitular
+  status            StatusSolicitacaoTitular  @default(RECEBIDA)
+  dataCriacao       DateTime                  @default(now())
+
+  titular Usuario @relation("TitularSolicitacao", fields: [titularId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([titularId, chaveIdempotencia], map: "SolicitacaoTitular_titularId_chaveIdempotencia_key")
+  @@index([titularId, dataCriacao, id], map: "SolicitacaoTitular_titularId_dataCriacao_id_idx")
 }
 
 model EmailVerificationToken {
@@ -108,6 +135,16 @@ model EmailVerificationToken {
 
   @@index([usuarioId, criadoEm])
   @@index([expiraEm])
+}
+
+model EmailVerificationRateLimit {
+  emailHash       String   @id @db.Char(64)
+  windowStartedAt DateTime
+  attemptCount    Int
+  lastRequestedAt DateTime?
+  updatedAt       DateTime @updatedAt
+
+  @@index([windowStartedAt])
 }
 
 model PasswordResetToken {
