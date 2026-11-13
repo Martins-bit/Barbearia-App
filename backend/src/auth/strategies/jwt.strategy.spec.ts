@@ -27,7 +27,11 @@ describe('JwtStrategy authVersion validation', () => {
         iat: 1,
         exp: 9999999999,
       }),
-    ).resolves.toMatchObject({ sub: 8, tipoUsuario: 'CLIENTE' });
+    ).resolves.toMatchObject({
+      sub: 8,
+      tipoUsuario: 'CLIENTE',
+      authVersion: 0,
+    });
   });
 
   it('accepts BARBEIRO tokens with the current authVersion', async () => {
@@ -45,7 +49,11 @@ describe('JwtStrategy authVersion validation', () => {
         iat: 1,
         exp: 9999999999,
       }),
-    ).resolves.toMatchObject({ sub: 9, tipoUsuario: 'BARBEIRO' });
+    ).resolves.toMatchObject({
+      sub: 9,
+      tipoUsuario: 'BARBEIRO',
+      authVersion: 3,
+    });
   });
 
   it('rejects a token issued before password reset increments authVersion', async () => {
@@ -64,6 +72,36 @@ describe('JwtStrategy authVersion validation', () => {
         exp: 9999999999,
       }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('requires a new login after an e-mail change is confirmed', async () => {
+    usersService.findAuthVersionById.mockResolvedValue({
+      id: 8,
+      authVersion: 1,
+      emailConfirmacaoObrigatoria: false,
+    });
+
+    await expect(
+      strategy.validate({
+        sub: 8,
+        telefone: '11999999999',
+        tipoUsuario: 'CLIENTE',
+        authVersion: 0,
+        iat: 1,
+        exp: 9999999999,
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+
+    await expect(
+      strategy.validate({
+        sub: 8,
+        telefone: '11999999999',
+        tipoUsuario: 'CLIENTE',
+        authVersion: 1,
+        iat: 2,
+        exp: 9999999999,
+      }),
+    ).resolves.toMatchObject({ sub: 8, tipoUsuario: 'CLIENTE' });
   });
 
   it('rejects an otherwise-current token while email confirmation is mandatory', async () => {

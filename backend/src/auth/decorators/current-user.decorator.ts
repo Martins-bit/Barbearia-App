@@ -1,12 +1,18 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 
+interface CurrentUserClaims {
+  sub: number;
+  authVersion: number;
+}
+
 /**
- * Decorator para extrair o ID do usuário autenticado a partir do JWT.
- * Uso: @CurrentUser() userId: number
+ * Extrai uma claim validada do usuário autenticado.
+ * Uso: @CurrentUser() userId: number ou
+ * @CurrentUser('authVersion') version: number
  */
 export const CurrentUser = createParamDecorator(
-  (data: unknown, ctx: ExecutionContext) => {
+  (data: keyof CurrentUserClaims | undefined, ctx: ExecutionContext) => {
     const request = ctx.switchToHttp().getRequest();
-    return request.user?.sub;
+    return data ? request.user?.[data] : request.user?.sub;
   },
 );

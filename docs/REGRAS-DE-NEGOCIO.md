@@ -37,6 +37,12 @@ protegidos. Remover o e-mail invalida a confirmação anterior, mas não deixa a
 conta bloqueada sem um endereço que possa ser confirmado. A confirmação
 desativa o marcador.
 
+Uma alteração efetiva do e-mail, inclusive a remoção, incrementa `authVersion`
+e revoga imediatamente os JWTs e sessões anteriores. Confirmar o novo endereço
+não revalida esses tokens; é necessário fazer login novamente. Alterações
+somente de nome/telefone ou o reenvio do mesmo e-mail normalizado não revogam
+sessões.
+
 ---
 
 # 3. CLIENTE
@@ -478,6 +484,33 @@ não aceita que o solicitante escolha outro usuário. A exportação deve respei
 os mesmos limites de acesso aplicados às consultas normais e minimizar dados de
 terceiros; nesta versão, não inclui o conteúdo de mensagens nem observações
 livres.
+
+### Solicitações dos titulares
+
+- Clientes e barbeiros autenticados podem registrar e consultar somente as
+  solicitações vinculadas à própria conta. A identidade do titular vem
+  exclusivamente do JWT; o cliente não pode informar `titularId`.
+- A criação aceita uma categoria da lista fechada
+  (`ACESSO_EXPORTACAO`, `CORRECAO`, `EXCLUSAO_ANONIMIZACAO` ou `OUTRA`) e uma
+  chave UUID v4 no cabeçalho `Idempotency-Key`. Campos adicionais não são
+  aceitos.
+- O banco define o status inicial `RECEBIDA` e a data de criação. A mesma
+  chave, titular e categoria retorna o registro existente; reutilizar a chave
+  para outra categoria pelo mesmo titular resulta em conflito. A unicidade é
+  composta por titular e chave.
+- A consulta retorna somente registros do titular, em ordem decrescente, com
+  paginação limitada (padrão 20, máximo 100). O cursor também precisa pertencer
+  ao titular autenticado.
+- Os limites são 5 criações por minuto e 30 consultas por minuto por usuário
+  autenticado.
+- A solicitação é somente um registro: `RECEBIDA` é o único status
+  implementado. Não há alteração de status pelo titular, triagem
+  administrativa ou execução automática de correção, exportação, exclusão ou
+  anonimização. A exportação disponível é uma ação separada.
+- Não há exclusão automática de solicitações. A FK `RESTRICT` impede a
+  exclusão física de uma conta enquanto existirem solicitações vinculadas;
+  qualquer tratamento depende de procedimento específico autorizado e
+  documentado.
 
 ---
 

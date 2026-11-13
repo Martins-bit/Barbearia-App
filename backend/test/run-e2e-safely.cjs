@@ -1,6 +1,7 @@
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
+  assertSafeE2EJestArgs,
   loadE2EConfig,
   sanitizedDatabaseEnvironment,
 } = require('./e2e-safety.cjs');
@@ -11,11 +12,7 @@ function runE2ETests({
   env = process.env,
   spawn = spawnSync,
 } = {}) {
-  if (args.some((argument) => /^--config(?:=|$)/i.test(argument))) {
-    throw new Error(
-      'E2E bloqueado: não é permitido substituir a configuração Jest protegida.',
-    );
-  }
+  assertSafeE2EJestArgs(args);
 
   const { config, configPath: resolvedConfigPath } =
     loadE2EConfig(configPath);

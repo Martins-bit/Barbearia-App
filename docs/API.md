@@ -784,8 +784,10 @@ novamente as notificações e o contador de não lidas após a operação.
 
 # 12. MENSAGENS
 Comunicação persistente entre CLIENTE e BARBEIRO. Esta etapa implementa apenas a
-fundação persistente: **não há WebSocket, chat em tempo real, anexos, edição,
-exclusão nem notificação de mensagem**.
+API REST e os eventos de mensagens em tempo real via WebSocket/Socket.IO.
+Mensagens podem ser enviadas, consultadas, marcadas como lidas e excluídas
+logicamente. Não há anexos nem edição de mensagens. A exclusão lógica altera
+flags de visibilidade, mas não apaga fisicamente o conteúdo original do banco.
 
 O identificador do remetente é **sempre derivado do JWT** (`sub`). O frontend
 nunca informa quem envia; informa apenas o destinatário e o conteúdo.
@@ -890,6 +892,37 @@ leitura nunca sobrescreve o horário original.
 
 ---
 
+## 12.5.1. Apagar mensagem (REST)
+`DELETE /api/messages/:id`
+
+### Permissão e dados esperados
+
+Somente um participante da conversa pode apagar a mensagem. O corpo recebe
+somente o modo:
+
+```json
+{ "modo": "PARA_MIM" }
+```
+
+Os modos aceitos são `PARA_MIM` e `PARA_TODOS`. `PARA_MIM` pode ser solicitado
+pelo remetente ou destinatário e oculta a mensagem somente para quem fez a
+solicitação. `PARA_TODOS` só pode ser solicitado pelo remetente e marca a
+mensagem como apagada para os participantes. Uma nova operação deve ocorrer em
+até 60 minutos após o envio; uma repetição de uma operação já concluída é
+idempotente.
+
+### Persistência e resposta
+
+A exclusão é lógica. `PARA_MIM` atualiza a flag de visibilidade do participante;
+`PARA_TODOS` atualiza `apagadaParaTodos` e `dataExclusao`. Em ambos os casos,
+o campo original `conteudo` permanece armazenado no banco: a ação não significa
+remoção física imediata nem garante remoção de backups. Para `PARA_TODOS`, a
+resposta REST substitui o conteúdo exibido por um texto neutro. Quando a
+operação global é efetivada, o servidor também emite `message:deleted` aos
+participantes conectados e autorizados.
+
+---
+
 ## 12.6. Erros do módulo
 | Situação | HTTP |
 | --- | --- |
@@ -972,7 +1005,8 @@ ativo, BARBEIRO com perfil ativo e conteúdo de 1 a 500 caracteres após trim.
 2. validar o payload;
 3. **persistir** a mensagem no PostgreSQL;
 4. somente após o sucesso, emitir `message:sent` ao remetente;
-5. somente após o sucesso, emitir `message:received` ao destinatário.
+5. somente após o sucesso, revalidar cada socket do destinatário e emitir
+   `message:received` apenas às conexões ainda autorizadas.
 
 Nunca há emissão de sucesso antes da persistência. Uma única chamada
 `message:send` gera exatamente uma persistência, no máximo uma emissão
@@ -991,17 +1025,21 @@ mensagem de regra já usada pelo REST). Não são expostos stack trace, SQL, JWT
 senha ou hash.
 
 ### Fora do escopo desta etapa
-Leitura via WebSocket, `unread-count` via socket, sincronização de leitura em
-tempo real, fila offline, presença online/offline, typing indicator, Redis,
-filas, push, e-mail, WhatsApp, anexos, edição/exclusão. `PATCH
-/api/messages/:id/read` continua sendo REST.
+Comando de exclusão via WebSocket, leitura e `unread-count` via socket,
+sincronização de leitura em tempo real, fila offline, presença online/offline,
+typing indicator, Redis, filas, push, e-mail, WhatsApp, anexos e edição.
+`DELETE /api/messages/:id` e `PATCH /api/messages/:id/read` continuam sendo
+operações REST; a exclusão global efetivada também gera o evento
+`message:deleted`.
 
 ---
 
 ## 12.9. WebSocket — revalidação de autorização (ETAPA 7D.1)
 
 Um socket **não permanece autorizado** apenas porque o handshake foi aceito.
-Cada `message:send` revalida a autorização vigente **antes** de tocar no banco:
+O gateway revalida a autorização ao registrar a conexão, antes de responder a
+`ping`, antes/depois de processar `message:send` e antes de cada entrega
+privada (`message:sent`, `message:received` e `message:deleted`):
 
 1. **Expiração do JWT** — o handshake guarda no socket apenas o instante de
 expiração (`exp`), **nunca o token**. Se o JWT expirar durante a conexão, o
@@ -1022,6 +1060,14 @@ entregas como destinatário);
 
 A recusa é comunicada antes da desconexão, para que o motivo chegue ao
 cliente. O erro é genérico — nunca inclui token, JWT, SQL ou stack trace.
+
+Uma alteração efetiva de e-mail incrementa `authVersion` na transação do
+perfil. Depois do commit, o processo que executou a alteração desconecta os
+sockets locais do usuário. O registro e a revogação são em memória e não usam
+um adaptador distribuído: em implantação com múltiplas instâncias, a
+desconexão imediata nas demais instâncias não é garantida; a validação de
+autorização antes de uma nova entrega privada impede que sockets obsoletos
+recebam esses eventos quando a instância consulta o estado atualizado.
 
 ### Observação de integração (futuro)
 O servidor HTTP atual não configura CORS; quando o frontend (browser)
@@ -1108,6 +1154,15 @@ Retorna o perfil já atualizado, no mesmo formato de `GET /users/me`.
   pertencer a outra conta.
 - Limpar o e-mail (`"email": null`) é permitido: o e-mail é anulável e
   múltiplas contas podem tê-lo ausente.
+- Alterar o e-mail limpa a confirmação anterior, invalida tokens pendentes e
+  exige confirmar o novo endereço antes do acesso normal.
+
+Uma alteração efetiva do e-mail, inclusive sua remoção, incrementa
+`authVersion` na mesma transação que atualiza o perfil e invalida tokens
+pendentes. Todos os JWTs/sessões anteriores deixam de ser aceitos
+imediatamente. Confirmar o novo endereço não revalida esses tokens: após a
+confirmação, o usuário precisa fazer login novamente. Reenviar o mesmo e-mail
+normalizado, ou alterar somente nome/telefone, não revoga sessões.
 
 ### Erros
 
@@ -1117,6 +1172,7 @@ Retorna o perfil já atualizado, no mesmo formato de `GET /users/me`.
 | Conta ou perfil inativo                               | `403`  | Revalidação a cada requisição           |
 | Corpo sem campos válidos ou campo não permitido        | `400`  | Validação do DTO                        |
 | Telefone ou e-mail já usado por outra conta           | `409`  | Conflito de unicidade                   |
+| Perfil ou `authVersion` alterado durante a atualização | `409`  | Reenvie os dados atuais do perfil       |
 
 Observação sobre o `409`: a mensagem nomeia o campo em conflito apenas quando
 ele pode ser determinado com segurança a partir do erro de unicidade do
@@ -1155,9 +1211,10 @@ visíveis são representadas apenas por direção, datas, leitura e estado de
 exclusão; mensagens apagadas para todos ou ocultadas para o titular não são
 incluídas. Notificações são representadas por tipo, leitura, datas e metadados
 de claim, sem títulos ou textos livres. Não são incluídos dados do outro
-participante, notificações já limpas, solicitações de titulares não persistidas,
-preferências não persistidas, tokens, hashes, credenciais ou dados internos de
-autenticação.
+participante, notificações já limpas, preferências não persistidas, tokens,
+hashes, credenciais ou dados internos de autenticação. Inclui as solicitações
+registradas pelo próprio titular, limitadas à categoria, status e data de
+criação; a chave de idempotência não é exportada.
 
 Falhas inesperadas de geração retornam uma mensagem genérica; detalhes da
 exceção não são enviados na resposta nem incluídos no log específico da rota.
@@ -1167,7 +1224,64 @@ JSON no navegador a partir da resposta. O arquivo baixado fica sob controle do
 dispositivo/navegador do usuário.
 
 Esta cópia é parcial e não substitui o processo de atendimento de solicitações
-de titulares. Não existe ainda canal ou registro de acompanhamento confirmado.
+de titulares. A API registra e lista pedidos, mas não existe ainda canal
+operacional, análise administrativa ou prazo de atendimento confirmado.
+
+## 13.4. Solicitações do titular
+
+Os endpoints abaixo exigem JWT de usuário ativo com papel `CLIENTE` ou
+`BARBEIRO`. O titular é sempre obtido do JWT; o corpo, query e caminho não
+aceitam identificador de usuário. Todas as respostas omitem a chave de
+idempotência e dados da conta.
+
+### Criar solicitação
+
+`POST /users/me/requests`
+
+Cabeçalho obrigatório:
+
+`Idempotency-Key: <UUID v4 aleatório>`
+
+Corpo:
+
+```json
+{
+  "categoria": "CORRECAO"
+}
+```
+
+Categorias aceitas: `ACESSO_EXPORTACAO`, `CORRECAO`,
+`EXCLUSAO_ANONIMIZACAO` e `OUTRA`. Campos adicionais, incluindo `titularId`,
+`status` e `dataCriacao`, são rejeitados. A solicitação recebe status
+`RECEBIDA` e data de criação definidos pelo banco. O endpoint retorna `201`
+com `id`, `categoria`, `status` e `dataCriacao`.
+
+A mesma chave e categoria para o mesmo titular retorna o registro existente
+sem duplicar. Reutilizar a chave pelo mesmo titular com outra categoria
+retorna `409`. A chave é única por titular: seu uso por titulares diferentes
+não compartilha nem revela registros. A restrição única composta no banco
+resolve colisões concorrentes.
+
+As rotas têm limites independentes por usuário autenticado (`req.user.sub`):
+`POST` permite até 5 solicitações por minuto e `GET` até 30 consultas por
+minuto. A paginação e o uso normal da página são permitidos dentro desses
+limites; excedê-los retorna `429`.
+
+### Consultar solicitações próprias
+
+`GET /users/me/requests?limit=20&cursor=<id>`
+
+`limit` é opcional (padrão `20`, máximo `100`). `cursor` é opcional e deve
+identificar um registro pertencente ao titular autenticado; cursores
+inexistentes ou de terceiros são rejeitados sem revelar se o registro existe.
+Os resultados são ordenados por data de criação e ID em ordem decrescente. A
+resposta contém `solicitacoes` com `id`, `categoria`, `status` e `dataCriacao`,
+e sempre contém `proximoCursor`: o ID do último item da página quando houver
+mais resultados, ou `null` quando não houver próxima página.
+
+Não há endpoint para o titular alterar status. Nesta fase, toda solicitação
+permanece `RECEBIDA`; criar uma solicitação não executa correção, exportação,
+exclusão ou anonimização.
 
 ---
 

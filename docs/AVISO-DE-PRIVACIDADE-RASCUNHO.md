@@ -193,8 +193,12 @@ deve ser confirmada antes da publicação: **[PENDENTE DE DEFINIÇÃO]**.
 ## 7. Onde os dados ficam e por quanto tempo
 
 O código utiliza PostgreSQL por meio do Prisma para armazenar dados de contas,
-agendamentos, lista de espera, mensagens, notificações, tokens e registros
-operacionais. O frontend mantém a sessão JWT em `localStorage`.
+agendamentos, lista de espera, mensagens, notificações, tokens, solicitações
+dos titulares e registros operacionais. A solicitação guarda titular,
+categoria, status, data de criação e uma chave UUID interna de idempotência;
+não há descrição livre. O frontend mantém a sessão JWT em `localStorage`. A
+aplicação da migration no ambiente de execução precisa ser confirmada antes
+da publicação deste aviso.
 
 O código não permite confirmar o provedor, a localização física, a criptografia
 em repouso, os backups ou os prazos gerais de retenção. Essas informações estão
@@ -231,21 +235,30 @@ O perfil permite consultar e corrigir parte dos dados, e a área autenticada
 permite baixar um arquivo JSON com os dados próprios disponíveis ao usuário,
 como informações da conta e do perfil, registros acessíveis de agendamentos e
 lista de espera, além de metadados visíveis de mensagens e notificações.
+Solicitações próprias registradas também aparecem na exportação, limitadas à
+categoria, status e data de criação; a chave de idempotência não é exportada.
 Conteúdo de mensagens, dados do outro participante e observações livres não
 são incluídos nesta versão. O arquivo é montado para download pelo navegador;
 o endpoint não cria uma cópia persistente no servidor.
 
 Esse recurso não cobre todo conteúdo ou todo tipo de informação possivelmente
 relacionada à pessoa e não substitui um processo geral de atendimento. Não há
-fluxo implementado para solicitar exclusão ou anonimização da conta e de todos
-os dados associados. O canal de contato e o procedimento para registrar e
+fluxo implementado para executar exclusão ou anonimização da conta e de todos
+os dados associados. A API autenticada permite registrar e consultar pedidos
+próprios nas categorias acesso/exportação, correção, exclusão/anonimização e
+outras solicitações; o status inicial é `RECEBIDA`. O registro não executa o
+pedido, não permite descrição livre e não oferece análise administrativa ou
+mudança de status nesta fase. O canal de contato e o procedimento para
 responder solicitações estão **[PENDENTE DE DEFINIÇÃO]**.
 
 A área autenticada de Privacidade explica esses recursos e as limitações de
-pedidos de exclusão ou anonimização. Ela não recebe nem registra solicitações,
-e os estados de acompanhamento mostrados são apenas etapas previstas, não
-protocolos ou pedidos reais. O canal de atendimento continua
-**[PENDENTE DE DEFINIÇÃO]**.
+pedidos de exclusão ou anonimização e está integrada à API para registrar uma
+categoria e consultar solicitações próprias. A página exibe categoria, status e
+data de criação. Nesta primeira fase, `RECEBIDA` é o único status atual e
+significa apenas que o registro foi criado; não há análise administrativa,
+alteração de status, exclusão ou anonimização pela tela. Outros estados são
+apenas etapas futuras. O canal de atendimento continua **[PENDENTE DE
+DEFINIÇÃO]**.
 
 Para que este aviso possa ser publicado, o controlador deverá informar um canal
 de atendimento real e definir o processo de resposta, sem deixar o titular sem
@@ -255,13 +268,22 @@ orientação: **[PENDENTE DE DEFINIÇÃO]**.
 
 O aplicativo permite cancelar agendamentos e solicitações da lista de espera
 e possui ações de exclusão lógica de mensagens/notificações. Essas ações não
-significam necessariamente que o conteúdo ou todos os dados relacionados
-tenham sido removidos do banco ou de backups.
+significam que o conteúdo ou todos os dados relacionados foram removidos do
+banco ou de backups. No caso de mensagens, as ações atualizam flags de
+visibilidade; o campo original do conteúdo permanece armazenado no banco,
+inclusive após a opção “apagar para todos”. Isso não representa remoção física
+imediata.
 
 Não foi identificado no código um fluxo geral de exclusão de conta. A forma de
 tratar pedidos de exclusão, dados históricos, mensagens, cópias de segurança e
 registros que precisem eventualmente ser conservados está
 **[PENDENTE DE DEFINIÇÃO]**.
+
+A relação entre solicitações de titulares e contas usa `ON DELETE RESTRICT` no
+schema: a exclusão física de uma conta com solicitações vinculadas fica
+bloqueada. Não há exclusão automática de solicitações; qualquer exclusão ou
+anonimização depende de procedimento específico, autorizado e documentado. A
+política de retenção continua **[PENDENTE DE DEFINIÇÃO]**.
 
 ## 11. Transferências internacionais
 

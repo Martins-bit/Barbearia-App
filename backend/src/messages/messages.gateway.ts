@@ -13,7 +13,7 @@ import {
 } from '@nestjs/websockets';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { Server, Socket } from 'socket.io';
+import { Namespace, Socket } from 'socket.io';
 import { TipoUsuario } from '../generated/prisma/enums';
 import { UsersService } from '../users/users.service';
 import { MessageResponseDto } from './dto/message-response.dto';
@@ -89,7 +89,7 @@ export class MessagesGateway
   private readonly sendRateLimiter = new SlidingWindowRateLimiter(30, 60_000);
 
   @WebSocketServer()
-  server?: Server;
+  server?: Namespace;
 
   constructor(
     private readonly socketRegistry: MessagesSocketRegistry,
@@ -102,7 +102,7 @@ export class MessagesGateway
    * Middleware de handshake: rejeita a conexão ANTES de registrá-la quando a
    * autenticação falha (o cliente recebe `connect_error: Não autorizado.`).
    */
-  afterInit(server: Server): void {
+  afterInit(server: Namespace): void {
     server.use((client: Socket, next: (err?: Error) => void) =>
       this.authenticate(client)
         .then(() => next())
@@ -266,17 +266,21 @@ export class MessagesGateway
     client.disconnect(true);
   }
 
-  /** Registra a conexão autenticada (identidade já validada no handshake). */
-  handleConnection(client: Socket): void {
-    const identity = this.getIdentity(client);
-    if (!identity) {
-      // Defesa adicional: conexão sem identidade não deve existir aqui.
-      client.disconnect(true);
+  /** Revalida o handshake imediatamente antes de registrar a conexão. */
+  async handleConnection(client: Socket): Promise<void> {
+    let identity: SocketIdentity | null;
+    try {
+      identity = await this.assertCurrentAuthorization(client);
+    } catch {
+      this.logger.error('Falha ao revalidar WebSocket durante a conexão.');
+      this.rejectUnauthorized(client);
       return;
     }
+    if (!identity) return;
+
     this.socketRegistry.add(identity.usuarioId, client.id);
-    // Sala por usuário: permite entregar um evento a todas as conexões dele
-    // com um único emit (múltiplos dispositivos/abas).
+    // A sala continua agrupando conexões; eventos privados são enviados
+    // individualmente após revalidar a autorização de cada socket.
     void client.join(this.userRoom(identity.usuarioId));
     this.logger.debug(
       `WebSocket conectado: usuarioId=${identity.usuarioId} socketId=${client.id}`,
@@ -297,18 +301,24 @@ export class MessagesGateway
    * JWT. Não envia, não persiste e não dispara nenhuma mensagem.
    */
   @SubscribeMessage('ping')
-  handlePing(
+  async handlePing(
     @ConnectedSocket() client: Socket,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     @MessageBody() _body?: unknown,
-  ): { event: string; data: PingPongDto } {
-    // Não revalida autorização: `ping` é apenas o eco do handshake já
-    // autenticado e não concede acesso a nada. A revalidação (ETAPA 7D.1)
-    // acontece no evento que de fato altera estado — `message:send`.
-    const identity = this.getIdentity(client);
-    if (!identity) {
+  ): Promise<{ event: string; data: PingPongDto } | void> {
+    if (!this.getIdentity(client)) {
       throw new WsException('Não autorizado.');
     }
+    let identity: SocketIdentity | null;
+    try {
+      identity = await this.assertCurrentAuthorization(client);
+    } catch {
+      this.logger.error('Falha ao revalidar WebSocket antes do pong.');
+      this.rejectUnauthorized(client);
+      return;
+    }
+    if (!identity) return;
+
     return {
       event: 'pong',
       data: {
@@ -369,27 +379,42 @@ export class MessagesGateway
     // Persistido com sucesso: agora sim pode emitir. O handler NÃO retorna
     // valor — o Nest converteria o retorno em um segundo evento (duplicando
     // message:sent), então a emissão explícita abaixo é a única origem.
-    client.emit('message:sent', message);
-    this.emitToUser(message.destinatarioUsuarioId, 'message:received', message);
+    try {
+      if (await this.assertCurrentAuthorization(client)) {
+        client.emit('message:sent', message);
+      }
+    } catch {
+      this.logger.error(
+        'Falha ao revalidar WebSocket antes da confirmação privada.',
+      );
+      this.rejectUnauthorized(client);
+    }
+    await this.emitToUser(
+      message.destinatarioUsuarioId,
+      'message:received',
+      message,
+    );
   }
 
   /**
    * Notifica a exclusão global de uma mensagem (PARA_TODOS) para o remetente
-   * e o destinatário através de suas respectivas salas Socket.IO.
+   * e o destinatário através de seus sockets autorizados e revalidados.
    * Não emite se a mensagem não foi apagada para todos ou se o servidor socket
    * não estiver inicializado.
    */
-  notifyMessageDeleted(
+  async notifyMessageDeleted(
     remetenteId: number,
     destinatarioId: number,
     payload: MessageDeletedEventPayload,
-  ): void {
+  ): Promise<void> {
     if (!payload.apagadaParaTodos || !this.server) {
       return;
     }
 
-    this.emitToUser(remetenteId, 'message:deleted', payload);
-    this.emitToUser(destinatarioId, 'message:deleted', payload);
+    await Promise.all([
+      this.emitToUser(remetenteId, 'message:deleted', payload),
+      this.emitToUser(destinatarioId, 'message:deleted', payload),
+    ]);
   }
 
   /**
@@ -398,13 +423,60 @@ export class MessagesGateway
    * já está persistida e será recuperada via REST (sem fila offline nesta
    * etapa).
    */
-  private emitToUser(usuarioId: number, event: string, data: unknown): void {
+  private async emitToUser(
+    usuarioId: number,
+    event: string,
+    data: unknown,
+  ): Promise<void> {
     const socketIds = this.socketRegistry.getSocketIds(usuarioId);
     if (socketIds.length === 0 || !this.server) {
       return;
     }
-    // Sala por usuário: um único `to()` atinge todas as conexões dele.
-    this.server.to(this.userRoom(usuarioId)).emit(event, data);
+
+    const server = this.server;
+    await Promise.all(
+      socketIds.map(async (socketId) => {
+        const client = server.sockets.get(socketId);
+        if (!client) {
+          this.socketRegistry.remove(usuarioId, socketId);
+          return;
+        }
+
+        const identity = this.getIdentity(client);
+        if (!identity || identity.usuarioId !== usuarioId) {
+          this.socketRegistry.remove(usuarioId, socketId);
+          this.rejectUnauthorized(client);
+          return;
+        }
+
+        try {
+          if (await this.assertCurrentAuthorization(client)) {
+            client.emit(event, data);
+          }
+        } catch {
+          this.logger.error(
+            'Falha ao revalidar WebSocket antes da entrega privada.',
+          );
+          this.rejectUnauthorized(client);
+        }
+      }),
+    );
+  }
+
+  /** Desconecta somente os sockets locais registrados para o usuário. */
+  revokeUserSessions(usuarioId: number): void {
+    if (!this.server) {
+      return;
+    }
+
+    for (const socketId of this.socketRegistry.getSocketIds(usuarioId)) {
+      const client = this.server.sockets.get(socketId);
+      if (!client) {
+        this.socketRegistry.remove(usuarioId, socketId);
+        continue;
+      }
+      this.rejectUnauthorized(client);
+    }
   }
 
   /** Nome da sala Socket.IO que agrupa todas as conexões de um usuário. */

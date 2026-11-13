@@ -27,6 +27,7 @@ O sistema deverá possuir, inicialmente, as seguintes entidades:
 - Lista de espera;
 - Notificações;
 - Mensagens;
+- Solicitações de titulares;
 - Horários de funcionamento;
 - Bloqueios de agenda;
 - Registros de emergência.
@@ -332,7 +333,8 @@ integração externa.
 
 ## 11. MENSAGENS
 A entidade de mensagens armazena a comunicação persistente entre cliente e
-barbeiro. Esta etapa cobre apenas a fundação persistente, sem tempo real.
+barbeiro. O sistema oferece API REST e eventos em tempo real via
+WebSocket/Socket.IO.
 
 ### Model `Mensagem` (implementado)
 
@@ -345,6 +347,10 @@ barbeiro. Esta etapa cobre apenas a fundação persistente, sem tempo real.
 | `lida` | Boolean | default `false` |
 | `dataCriacao` | DateTime | default `now()` |
 | `dataLeitura` | DateTime? | preenchido na primeira leitura |
+| `apagadaParaTodos` | Boolean | default `false`; flag de exclusão lógica global |
+| `excluidaPeloRemetente` | Boolean | default `false`; ocultação lógica para o remetente |
+| `excluidaPeloDestinatario` | Boolean | default `false`; ocultação lógica para o destinatário |
+| `dataExclusao` | DateTime? | preenchido para exclusão lógica global |
 
 O remetente **nunca** é aceito do frontend: é derivado do JWT.
 
@@ -375,6 +381,15 @@ esse limite (ver `REGRAS-DE-NEGOCIO.md`).
 
 O campo `conteudo` é `TEXT` no banco; o limite de 500 é aplicado na camada de
 aplicação.
+
+### Exclusão lógica
+
+`PARA_MIM` altera a flag de visibilidade do participante que solicitou a
+operação. `PARA_TODOS`, permitido ao remetente, atualiza
+`apagadaParaTodos` e `dataExclusao`. Em ambos os modos, o campo `conteudo`
+permanece armazenado; as flags não representam remoção física imediata do
+banco nem descrevem o descarte de backups. As regras e a janela de 60 minutos
+estão descritas em `API.md`.
 
 ---
 
@@ -583,7 +598,43 @@ O banco deverá ser estruturado considerando consultas frequentes, principalment
 
 ---
 
-## 23. REGRA FINAL
+## 23. SOLICITAÇÕES DE TITULARES
+
+O modelo `SolicitacaoTitular` registra pedidos do próprio usuário autenticado.
+Ele não executa o direito solicitado nem representa atendimento concluído.
+
+### Campos e valores
+
+| Campo | Tipo/Regra |
+| --- | --- |
+| `id` | Inteiro autoincremental; chave primária |
+| `titularId` | Inteiro obrigatório; chave estrangeira para `Usuario.id` |
+| `chaveIdempotencia` | UUID obrigatório, usado com o titular para reconhecer repetição |
+| `categoria` | Enum: `ACESSO_EXPORTACAO`, `CORRECAO`, `EXCLUSAO_ANONIMIZACAO` ou `OUTRA` |
+| `status` | Enum com único valor `RECEBIDA`, definido por padrão no banco |
+| `dataCriacao` | Data/hora, definida por padrão no banco |
+
+Não há campo de descrição livre, atribuição ou decisão administrativa.
+
+### Relações, índices e restrições
+
+- `Usuario` possui várias solicitações; cada solicitação pertence a um único
+  titular.
+- A FK usa `ON DELETE RESTRICT` e `ON UPDATE CASCADE`. Uma conta com
+  solicitações vinculadas não pode ser removida fisicamente sem procedimento
+  específico autorizado; não há exclusão automática.
+- A chave única composta `(titularId, chaveIdempotencia)` permite repetir a
+  mesma tentativa sem criar outro registro e isola chaves entre titulares.
+- O índice `(titularId, dataCriacao, id)` atende à consulta ordenada e
+  paginada das solicitações próprias.
+
+O modelo consta em `backend/prisma/schema.prisma` e a migration aditiva está no
+repositório. A existência desses arquivos não confirma que a migration tenha
+sido aplicada nos ambientes.
+
+---
+
+## 24. REGRA FINAL
 
 A estrutura do banco de dados deverá sempre respeitar:
 

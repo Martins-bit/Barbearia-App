@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -35,6 +36,8 @@ export const DELETED_MESSAGE_TEXT = 'Esta mensagem foi apagada';
  */
 @Injectable()
 export class MessagesService {
+  private readonly logger = new Logger(MessagesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly moduleRef?: ModuleRef,
@@ -562,14 +565,33 @@ export class MessagesService {
     }
 
     try {
-      const gateway = this.moduleRef.get<any>('MESSAGES_GATEWAY', {
+      const gateway = this.moduleRef.get<{
+        notifyMessageDeleted?: (
+          senderId: number,
+          recipientId: number,
+          event: MessageDeletedEventPayload,
+        ) => void | Promise<void>;
+      }>('MESSAGES_GATEWAY', {
         strict: false,
       });
       if (gateway && typeof gateway.notifyMessageDeleted === 'function') {
-        gateway.notifyMessageDeleted(remetenteId, destinatarioId, payload);
+        const notification = gateway.notifyMessageDeleted(
+          remetenteId,
+          destinatarioId,
+          payload,
+        );
+        if (notification) {
+          void notification.catch(() => {
+            this.logger.error(
+              'Falha ao notificar a exclusão de mensagem em tempo real.',
+            );
+          });
+        }
       }
     } catch {
-      // Falha ao obter o gateway não impede nem desfaz a exclusão confirmada no banco
+      this.logger.error(
+        'Falha ao obter o gateway para notificar exclusão de mensagem.',
+      );
     }
   }
 }

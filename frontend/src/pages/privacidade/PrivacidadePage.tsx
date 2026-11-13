@@ -1,39 +1,53 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '../../components/layout/PagePlaceholder'
 import { Badge } from '../../components/ui/Badge'
 import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
+import { Select } from '../../components/ui/Field'
 import { useAuth } from '../../contexts/useAuth'
 import { useToast } from '../../contexts/useToast'
+import { ApiError } from '../../services/api/ApiError'
 import { authService } from '../../services/api/authService'
+import { privacyRequestsService } from '../../services/api/privacyRequestsService'
+import type {
+  CategoriaSolicitacaoTitular,
+  SolicitacaoTitular,
+} from '../../types/domain'
 import { ROUTES } from '../../routes/routes'
 import {
   downloadJsonFile,
   personalDataExportFilename,
 } from '../../utils/downloadJson'
+import {
+  getOrCreatePrivacyRequestAttempt,
+  privacyRequestCreatedMessage,
+  privacyRequestErrorMessage,
+  privacyRequestCategories,
+  PrivacyRequestSubmissionGuard,
+  type PrivacyRequestAttempt,
+} from './privacyRequestsUi'
+import { PrivacyRequestsHistory } from './PrivacyRequestsHistory'
 import styles from './PrivacidadePage.module.css'
 
-const etapasPrevistas = [
-  {
-    nome: 'Recebida',
-    descricao: 'O pedido foi registrado para atendimento.',
-  },
+const PAGE_SIZE = 20
+
+const etapasFuturas = [
   {
     nome: 'Em análise',
-    descricao: 'O pedido está sendo avaliado pela equipe responsável.',
+    descricao: 'Etapa futura, ainda não disponível para acompanhamento.',
   },
   {
     nome: 'Aguardando informações',
-    descricao: 'São necessárias informações adicionais para continuar.',
+    descricao: 'Etapa futura, ainda não disponível para acompanhamento.',
   },
   {
     nome: 'Atendida',
-    descricao: 'A solicitação teve uma resposta ou providência.',
+    descricao: 'Etapa futura, ainda não disponível para acompanhamento.',
   },
   {
     nome: 'Encerrada',
-    descricao: 'O atendimento foi concluído.',
+    descricao: 'Etapa futura, ainda não disponível para acompanhamento.',
   },
 ]
 
@@ -41,8 +55,78 @@ export function PrivacidadePage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const toast = useToast()
+  const titularId = user?.id ?? null
   const [exportando, setExportando] = useState(false)
   const exportEmAndamento = useRef(false)
+  const [categoria, setCategoria] = useState<CategoriaSolicitacaoTitular | ''>(
+    '',
+  )
+  const [enviandoSolicitacao, setEnviandoSolicitacao] = useState(false)
+  const envioEmAndamento = useRef(new PrivacyRequestSubmissionGuard())
+  const tentativaRef = useRef<PrivacyRequestAttempt | null>(null)
+  const [feedbackEnvio, setFeedbackEnvio] = useState<{
+    tipo: 'sucesso' | 'erro'
+    mensagem: string
+  } | null>(null)
+  const [solicitacoes, setSolicitacoes] = useState<SolicitacaoTitular[]>([])
+  const [titularDaLista, setTitularDaLista] = useState<number | null>(null)
+  const [carregandoLista, setCarregandoLista] = useState(true)
+  const [erroLista, setErroLista] = useState<string | null>(null)
+  const [proximoCursor, setProximoCursor] = useState<number | null>(null)
+  const [carregandoMais, setCarregandoMais] = useState(false)
+  const carregamentoMaisEmAndamento = useRef(false)
+  const carregamentoMaisAbort = useRef<AbortController | null>(null)
+  const [erroMais, setErroMais] = useState<string | null>(null)
+  const [versaoLista, setVersaoLista] = useState(0)
+
+  useEffect(() => {
+    tentativaRef.current = null
+    setCategoria('')
+    setFeedbackEnvio(null)
+    carregamentoMaisAbort.current?.abort()
+    carregamentoMaisAbort.current = null
+    carregamentoMaisEmAndamento.current = false
+    setCarregandoMais(false)
+
+    if (titularId === null) {
+      setSolicitacoes([])
+      setTitularDaLista(null)
+      setProximoCursor(null)
+      setErroLista(null)
+      setErroMais(null)
+      setCarregandoLista(false)
+      return
+    }
+
+    const controller = new AbortController()
+    let active = true
+    setTitularDaLista(titularId)
+    setSolicitacoes([])
+    setProximoCursor(null)
+    setErroLista(null)
+    setErroMais(null)
+    setCarregandoLista(true)
+
+    void privacyRequestsService
+      .listMine({ limit: PAGE_SIZE, signal: controller.signal })
+      .then((page) => {
+        if (!active) return
+        setSolicitacoes(page.solicitacoes)
+        setProximoCursor(page.proximoCursor)
+      })
+      .catch((error: unknown) => {
+        if (!active || controller.signal.aborted) return
+        setErroLista(privacyRequestErrorMessage(error))
+      })
+      .finally(() => {
+        if (active) setCarregandoLista(false)
+      })
+
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [titularId, versaoLista])
 
   async function handleExportarDados() {
     if (exportEmAndamento.current) return
@@ -64,19 +148,121 @@ export function PrivacidadePage() {
     }
   }
 
+  function handleCategoriaChange(value: string) {
+    const selectedCategory = privacyRequestCategories.find(
+      (option) => option.value === value,
+    )
+    const nextCategory = selectedCategory?.value ?? ''
+    if (nextCategory !== categoria) tentativaRef.current = null
+    setCategoria(nextCategory)
+    setFeedbackEnvio(null)
+  }
+
+  async function handleRegistrarSolicitacao(
+    event: FormEvent<HTMLFormElement>,
+  ) {
+    event.preventDefault()
+    if (
+      titularId === null ||
+      categoria === ''
+    ) {
+      return
+    }
+    if (!envioEmAndamento.current.acquire()) return
+
+    setEnviandoSolicitacao(true)
+    setFeedbackEnvio(null)
+
+    try {
+      const attempt = getOrCreatePrivacyRequestAttempt(
+        categoria,
+        tentativaRef.current,
+      )
+      tentativaRef.current = attempt
+      const created = await privacyRequestsService.create(
+        attempt.categoria,
+        attempt.idempotencyKey,
+      )
+      tentativaRef.current = null
+      setCategoria('')
+      setFeedbackEnvio({
+        tipo: 'sucesso',
+        mensagem: privacyRequestCreatedMessage(created),
+      })
+      setVersaoLista((current) => current + 1)
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        tentativaRef.current = null
+      }
+      setFeedbackEnvio({
+        tipo: 'erro',
+        mensagem: privacyRequestErrorMessage(error),
+      })
+    } finally {
+      envioEmAndamento.current.release()
+      setEnviandoSolicitacao(false)
+    }
+  }
+
+  async function handleCarregarMais() {
+    if (
+      proximoCursor === null ||
+      carregamentoMaisEmAndamento.current ||
+      titularId === null
+    ) {
+      return
+    }
+
+    const controller = new AbortController()
+    carregamentoMaisAbort.current = controller
+    carregamentoMaisEmAndamento.current = true
+    setCarregandoMais(true)
+    setErroMais(null)
+
+    try {
+      const page = await privacyRequestsService.listMine({
+        limit: PAGE_SIZE,
+        cursor: proximoCursor,
+        signal: controller.signal,
+      })
+      if (controller.signal.aborted) return
+      setSolicitacoes((current) => [...current, ...page.solicitacoes])
+      setProximoCursor(page.proximoCursor)
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setErroMais(privacyRequestErrorMessage(error))
+      }
+    } finally {
+      if (carregamentoMaisAbort.current === controller) {
+        carregamentoMaisAbort.current = null
+        carregamentoMaisEmAndamento.current = false
+        setCarregandoMais(false)
+      }
+    }
+  }
+
+  const listaDoTitularAtual =
+    titularDaLista === titularId ? solicitacoes : []
+  const listaInicialCarregando =
+    titularId !== null &&
+    (titularDaLista !== titularId || carregandoLista)
+  const erroDaLista = titularDaLista === titularId ? erroLista : null
+  const cursorAtual =
+    titularDaLista === titularId ? proximoCursor : null
+
   return (
     <div className={styles.page}>
       <PageHeader
         title="Privacidade e seus dados"
-        description="Veja como consultar, corrigir e solicitar atendimento sobre seus dados pessoais."
+        description="Consulte, corrija e registre solicitações sobre seus dados pessoais."
       />
 
       <Card className={styles.introCard}>
-        <Badge tone="info">Área informativa</Badge>
+        <Badge tone="info">Registro disponível</Badge>
         <p>
-          Você pode consultar e corrigir alguns dados diretamente no aplicativo.
-          Outros pedidos precisam ser avaliados. Esta tela não envia nem registra
-          solicitações de atendimento.
+          Você pode registrar uma solicitação e acompanhar o status e a data de
+          criação nesta página. O registro não significa que o pedido já foi
+          analisado ou concluído.
         </p>
       </Card>
 
@@ -134,51 +320,106 @@ export function PrivacidadePage() {
               <Badge tone="warning">Requer análise</Badge>
             </div>
             <p>
-              O aplicativo não executa esses pedidos. Eles podem afetar
-              agendamentos, históricos e dados compartilhados, e precisam de
-              análise antes de qualquer medida.
+              Você pode registrar esse tipo de pedido, mas a tela não apaga ou
+              anonimiza dados. Qualquer medida depende de análise e procedimento
+              específico.
             </p>
           </Card>
 
           <Card className={styles.rightCard}>
             <div className={styles.cardHeading}>
               <h3>Outras solicitações</h3>
-              <Badge tone="neutral">Canal pendente</Badge>
+              <Badge tone="info">Registro disponível</Badge>
             </div>
             <p>
-              O canal oficial e o procedimento de atendimento ainda não foram
-              definidos. Não há formulário nesta página e nenhuma solicitação
-              será encaminhada por ela.
+              O formulário registra somente a categoria do pedido. O canal
+              operacional e os prazos de atendimento ainda estão pendentes de
+              definição.
             </p>
           </Card>
         </div>
       </section>
 
+      <section className={styles.section} aria-labelledby="registrar-titulo">
+        <div className={styles.sectionHead}>
+          <h2 id="registrar-titulo">Registrar uma solicitação</h2>
+          <p>
+            Escolha uma categoria. Não inclua dados pessoais adicionais: a
+            primeira fase não recebe descrição nem anexos.
+          </p>
+        </div>
+        <Card className={styles.requestFormCard}>
+          <form onSubmit={(event) => void handleRegistrarSolicitacao(event)}>
+            <Select
+              label="Categoria da solicitação"
+              options={[...privacyRequestCategories]}
+              placeholder="Selecione uma categoria"
+              value={categoria}
+              onChange={(event) =>
+                handleCategoriaChange(event.currentTarget.value)
+              }
+              disabled={enviandoSolicitacao || titularId === null}
+              required
+            />
+            <Button
+              type="submit"
+              loading={enviandoSolicitacao}
+              disabled={enviandoSolicitacao || categoria === '' || titularId === null}
+            >
+              Registrar solicitação
+            </Button>
+            {feedbackEnvio && (
+              <p
+                className={
+                  feedbackEnvio.tipo === 'erro'
+                    ? styles.requestError
+                    : styles.requestSuccess
+                }
+                role={feedbackEnvio.tipo === 'erro' ? 'alert' : 'status'}
+              >
+                {feedbackEnvio.mensagem}
+              </p>
+            )}
+          </form>
+        </Card>
+      </section>
+
       <section className={styles.section} aria-labelledby="acompanhamento-titulo">
         <div className={styles.sectionHead}>
-          <h2 id="acompanhamento-titulo">Acompanhamento de solicitações</h2>
+          <h2 id="acompanhamento-titulo">Minhas solicitações</h2>
           <p>
-            O registro e a consulta de pedidos ainda não estão implementados.
+            Esta lista contém somente solicitações da sessão autenticada. Não é
+            possível alterar status ou excluir registros nesta tela.
+          </p>
+        </div>
+        <PrivacyRequestsHistory
+          requests={listaDoTitularAtual}
+          loading={listaInicialCarregando}
+          error={erroDaLista}
+          cursor={cursorAtual}
+          loadingMore={carregandoMais}
+          moreError={erroMais}
+          onRetry={() => setVersaoLista((current) => current + 1)}
+          onLoadMore={() => void handleCarregarMais()}
+        />
+      </section>
+
+      <section className={styles.section} aria-labelledby="etapas-futuras-titulo">
+        <div className={styles.sectionHead}>
+          <h2 id="etapas-futuras-titulo">Etapas futuras do atendimento</h2>
+          <p>
+            Os status abaixo não são usados para as solicitações registradas
+            nesta primeira fase.
           </p>
         </div>
         <Card className={styles.trackingCard}>
-          <div className={styles.trackingNotice}>
-            <Badge tone="warning">Indisponível</Badge>
-            <p>
-              O sistema ainda não registra nem consulta solicitações. Por isso,
-              esta tela não informa se existe algum pedido em andamento. Nenhum
-              status abaixo representa um pedido real.
-            </p>
-          </div>
-          <div className={styles.stageHeading}>
-            <h3>Etapas previstas para um fluxo futuro</h3>
-            <span>São apenas definições de status, não protocolos ativos.</span>
-          </div>
           <ol className={styles.stageList}>
-            {etapasPrevistas.map((etapa) => (
+            {etapasFuturas.map((etapa) => (
               <li className={styles.stage} key={etapa.nome}>
                 <span className={styles.stageName}>{etapa.nome}</span>
-                <span className={styles.stageDescription}>{etapa.descricao}</span>
+                <span className={styles.stageDescription}>
+                  {etapa.descricao}
+                </span>
               </li>
             ))}
           </ol>

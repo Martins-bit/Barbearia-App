@@ -91,6 +91,10 @@ Isso permitirá manter uma linguagem principal entre frontend e backend.
 
 NestJS será utilizado como framework principal do backend.
 
+O runtime do backend permanece na major 11. As ferramentas de desenvolvimento
+Nest CLI e Nest Schematics estão na major 12; o projeto valida essa combinação
+com TypeScript 6 no build.
+
 Responsabilidades:
 
 - API;
@@ -104,6 +108,16 @@ Responsabilidades:
 - Tratamento de erros.
 
 A arquitetura deverá manter separação adequada entre responsabilidades.
+
+---
+
+## Redis
+
+Redis será utilizado somente como storage compartilhado dos contadores do
+rate limit HTTP, permitindo aplicar limites consistentes entre instâncias da
+API. A conexão é configurada por `REDIS_URL` e é obrigatória para iniciar o
+backend. Redis não substitui PostgreSQL/Prisma nem é usado como storage de
+sessões ou mensagens.
 
 ---
 
@@ -295,11 +309,12 @@ Frontend:
 React + TypeScript + Vite + Tailwind CSS
 
 Backend:
-
 Node.js + TypeScript + NestJS
 
-Banco:
+Storage compartilhado de rate limit:
+Redis
 
+Banco:
 PostgreSQL + Prisma
 
 Testes:

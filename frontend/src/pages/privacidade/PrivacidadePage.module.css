@@ -82,6 +82,78 @@
   padding: var(--space-5);
 }
 
+.requestFormCard {
+  padding: var(--space-5);
+}
+
+.requestFormCard form {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-4);
+  max-width: 520px;
+}
+
+.requestFormCard form > * {
+  width: 100%;
+}
+
+.requestError,
+.requestSuccess,
+.receivedNotice {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.requestError {
+  color: var(--color-danger);
+}
+
+.requestSuccess {
+  color: var(--color-success);
+}
+
+.receivedNotice {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-inset);
+  color: var(--color-text);
+}
+
+.requestList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.requestItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+}
+
+.requestItemHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.requestItemHeading h3 {
+  margin: 0;
+  font-size: var(--text-base);
+}
+
+.requestDate {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
 .trackingNotice {
   display: flex;
   align-items: flex-start;
@@ -151,11 +223,13 @@
   }
 
   .rightCard,
-  .trackingCard {
+  .trackingCard,
+  .requestFormCard {
     padding: var(--space-4);
   }
 
-  .rightCard button {
+  .rightCard button,
+  .requestFormCard button {
     width: 100%;
   }
 }

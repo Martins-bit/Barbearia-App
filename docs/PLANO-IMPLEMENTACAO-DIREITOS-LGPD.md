@@ -1,9 +1,10 @@
 # Plano de Implementação Técnica dos Direitos dos Titulares — Barbearia-App
 
 **Status:** implementação parcial concluída e validada por testes unitários e
-builds. A exportação JSON autenticada dos dados próprios e ajustes de
-minimização de logs foram implementados; este documento registra os itens
-ainda bloqueados ou pendentes de validação operacional.
+builds. A exportação JSON autenticada dos dados próprios, o registro e a
+consulta autenticados de solicitações dos titulares e ajustes de minimização de
+logs foram implementados; este documento registra os itens ainda bloqueados ou
+pendentes de validação operacional.
 
 **Base da análise:** leitura do código e dos documentos existentes em
 12/11/2026, incluindo [Inventário de Dados](./INVENTARIO-DE-DADOS-LGPD.md),
@@ -107,10 +108,10 @@ Princípios técnicos a preservar:
   armazenadas; não deve ser apresentada como abrangente.
 - Escopo final, necessidade de incluir dados de terceiros e procedimento para
   titulares sem conta ou representantes dependem de avaliação/decisão.
-- Não há registro persistente nem canal confirmado para solicitar e acompanhar
-  atendimento. Isso não foi criado porque a persistência exige mudança de
-  schema/migration, vedada nesta etapa, e o canal/responsáveis ainda não foram
-  definidos.
+- O registro persistente e a API autenticada para criar e consultar solicitações
+  próprias já existem; isso registra o pedido e permite ao titular consultá-lo,
+  mas não fornece canal operacional, triagem, atendimento ou conclusão. Ver a
+  seção 12. A aplicação da migration nos ambientes não foi verificada.
 - Autenticação recente, limites operacionais e processo formal de entrega
   precisam ser avaliados antes de ampliar o escopo.
 
@@ -144,8 +145,9 @@ Princípios técnicos a preservar:
    recente, limites adicionais e ampliação segura do conjunto de dados.
 4. Não armazenar cópia adicional da exportação nem criar processamento
    assíncrono sem necessidade operacional comprovada.
-5. Se o processo formal de atendimento exigir registro persistente, elaborar
-   proposta de schema e migration separada, sem aplicá-la nesta etapa.
+5. O registro persistente das solicitações já existe nesta primeira fase.
+   Qualquer ampliação de schema ou migration depende de nova justificativa,
+   revisão e autorização; não aplicar mudanças de banco como parte deste plano.
 
 ## 4. Correção dos dados pessoais
 
@@ -153,7 +155,9 @@ Princípios técnicos a preservar:
 
 - `PATCH /users/me` permite corrigir nome, telefone e e-mail do próprio usuário.
 - Validação de formato, conflitos de unicidade e whitelist de campos.
-- Mudança de e-mail invalida confirmação e tokens pendentes.
+- Mudança efetiva de e-mail invalida confirmação e tokens pendentes,
+  incrementa `authVersion` e revoga sessões/JWTs existentes. Após confirmar o
+  endereço novo, o usuário precisa fazer login novamente.
 - Barbeiros e clientes usam os formulários de perfil existentes.
 
 ### Falta
@@ -182,11 +186,12 @@ Princípios técnicos a preservar:
    correções que repercutam em registros históricos ou de terceiros.
 3. Não sobrescrever ou reescrever registros históricos sem decisão documentada
    sobre consistência, rastreabilidade e necessidade de conservação.
-4. Caso se implemente registro de solicitação, armazenar status, categoria,
-   datas e responsável mínimo; evitar guardar cópias do dado corrigido no
-   registro de atendimento sem necessidade.
-5. Testar alteração própria, tentativa de alterar outro usuário, e-mail
-   conflitante e invalidação já existente de tokens.
+4. O registro de solicitações implementado armazena somente titular, categoria,
+   status, data e chave interna de idempotência; não guardar cópias dos dados
+   corrigidos nem adicionar contexto sem necessidade aprovada.
+5. Manter testes para alteração própria, tentativa de alterar outro usuário,
+   e-mail conflitante, invalidação de tokens pendentes e rejeição dos JWTs
+   anteriores após a confirmação do novo endereço.
 
 ## 5. Solicitação de exclusão ou anonimização da conta
 
@@ -352,8 +357,10 @@ Princípios técnicos a preservar:
 
 ### Já existe
 
-- Não foi identificado um módulo/endereço dedicado para receber, classificar e
-  acompanhar pedidos gerais de titulares.
+- A área de Privacidade e a API autenticada permitem registrar e consultar
+  pedidos próprios nas categorias aprovadas. A tabela persiste somente
+  titular, chave de idempotência, categoria, status e data de criação; o status
+  inicial e único é `RECEBIDA`. Isso não equivale a triagem ou atendimento.
 - O perfil permite operações diretas de consulta e correção de campos básicos.
 - Não foi encontrado canal de privacidade confirmado na documentação ou código.
 
@@ -361,8 +368,9 @@ Princípios técnicos a preservar:
 
 - Canal real e controlado pelo responsável; responsáveis autorizados e
   procedimento de encaminhamento.
-- Verificação proporcional da identidade e representação, classificação e
-  registro do pedido, estados, comunicação, decisão e conclusão.
+- Verificação proporcional da identidade e representação, triagem,
+  encaminhamento, comunicação, decisão e conclusão. O registro técnico de
+  abertura já existe; não há fluxo operacional de acompanhamento.
 - Processo para solicitações de pessoas sem conta ou mencionadas por terceiros.
 - Prazos de resposta definidos pelo controlador após avaliação aplicável;
   não fixar prazo neste plano.
@@ -371,22 +379,26 @@ Princípios técnicos a preservar:
 
 ### Arquivos envolvidos
 
-- Backend: módulo de usuários/autenticação ou módulo de privacidade a definir,
-  guards e DTOs; possivelmente `schema.prisma` se for decidido guardar pedidos.
-- Frontend: perfil e canal de ajuda/solicitação a definir.
+- Backend existente: [users.controller.ts](../backend/src/users/users.controller.ts),
+  [privacy-requests.service.ts](../backend/src/users/privacy-requests/privacy-requests.service.ts),
+  guards e DTOs. O modelo e a migration da primeira fase já existem; qualquer
+  ampliação depende de justificativa e autorização próprias.
+- Frontend existente: área de Privacidade. Um canal de ajuda ou interface
+  operacional adicional depende das decisões do responsável.
 - Documentação: [AVISO-DE-PRIVACIDADE-RASCUNHO.md](./AVISO-DE-PRIVACIDADE-RASCUNHO.md),
   [API.md](./API.md), [TELAS.md](./TELAS.md) e guia de operação/runbook a criar.
 
 ### Proposta
 
 1. Definir canal, responsáveis, verificação de identidade, matriz de
-   encaminhamento e prazos com o controlador antes de criar a interface.
-2. Especificar categorias (acesso/exportação, correção, exclusão/anonimização,
-   oposição/informação e outras aplicáveis), estados e comunicação com o titular.
-3. Escolher entre registro de acompanhamento no sistema e procedimento
-   operacional controlado. Se persistido no aplicativo, guardar somente
-   identificador, categoria, estado, timestamps necessários, responsável e
-   decisão resumida; limitar acesso e definir retenção antes da implantação.
+    encaminhamento e prazos com o controlador antes de ampliar a interface ou
+    anunciar um processo de atendimento.
+2. Preservar as categorias já implementadas; qualquer categoria ou estado novo
+    depende de necessidade aprovada e documentação.
+3. Decidir como o pedido registrado será triado e acompanhado: por procedimento
+    operacional controlado ou por uma extensão autorizada da aplicação. O
+    registro técnico atual não tem responsável, análise, decisão ou transição de
+    status; definir acesso e retenção antes de ampliar o armazenamento.
 4. Evitar registrar no ticket tokens, senha, conteúdo integral de mensagens ou
    cópias completas de exportações.
 5. Testar autorização por função, não enumeração de contas, idempotência,
@@ -509,7 +521,7 @@ Os prazos de atendimento e retenção permanecem pendentes de decisão e avalia�
 apropriada; não são pré-requisitos para começar melhorias reversíveis, mas devem
 ser definidos antes de anunciar prazos ou automatizar expurgo.
 
-## 12. Central informativa de privacidade (implementação sem persistência)
+## 12. Central informativa e API de solicitações LGPD
 
 ### Implementado nesta etapa
 
@@ -519,26 +531,29 @@ ser definidos antes de anunciar prazos ou automatizar expurgo.
 - Ação de exportação que reutiliza `GET /users/me/export`, sem aceitar
   identificador enviado pelo frontend, sem armazenar cópia no servidor e com
   retorno visual de carregamento/sucesso/falha.
+- API autenticada para criar e consultar solicitações próprias por CLIENTE e
+  BARBEIRO, com titular derivado do JWT, categorias aprovadas, status inicial
+  `RECEBIDA`, idempotência composta por titular/chave e paginação isolada.
+- Exportação dos pedidos próprios com categoria, status e data de criação,
+  sem a chave de idempotência.
+- Limites por usuário autenticado de 5 criações/minuto e 30 consultas/minuto
+  nas rotas de solicitações.
 - Atalho para o perfil existente para correção dos campos já editáveis.
-- Apresentação dos estados RECEBIDA, EM_ANALISE,
-  AGUARDANDO_INFORMACOES, ATENDIDA e ENCERRADA como etapas futuras, junto de
-  aviso explícito de que não há solicitações registradas nem acompanhamento
-  funcional.
-- Navegação e rota protegida para os dois papéis; nenhuma permissão de backend
-  foi alterada.
+- Exibição de `RECEBIDA` com a explicação de que indica somente o registro do
+  pedido, não análise ou conclusão.
+- O modelo Prisma e a migration aditiva correspondentes já existem. A aplicação
+  da migration nos ambientes não foi verificada nesta auditoria.
 
 ### Não implementado
 
-- Criação, consulta ou atualização de pedidos; não há formulário ou protocolo
-  fictício.
+- Alteração de status, análise administrativa ou atendimento; a primeira fase
+  não permite ao titular alterar seu status.
 - Canal de contato, prazo de resposta, verificação de identidade ou política de
   retenção para solicitações.
 - Execução de exclusão ou anonimização de conta e dados vinculados.
 
-O modelo Prisma e o SQL propostos para eventual persistência estão em
+O modelo Prisma, o SQL da migration e o estado técnico estão descritos em
 [Proposta de Schema para Solicitações LGPD](./PROPOSTA-SCHEMA-SOLICITACOES-LGPD.md).
-Esse arquivo é somente uma proposta: não foi alterado `schema.prisma`, o banco
-ou qualquer migration.
 
 ## 13. Critérios mínimos de validação futura
 

@@ -18,6 +18,7 @@ export class UpdateUserDto {
    * estourar em P2011 (500). `@ValidateIf` só ignora `undefined`, então
    * `null` é efetivamente validado por `@IsString()` e vira 400.
    */
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @ValidateIf((_, value: unknown) => value !== undefined)
   @IsString()
   @MinLength(2)

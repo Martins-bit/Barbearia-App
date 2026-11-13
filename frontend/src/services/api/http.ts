@@ -49,6 +49,8 @@ interface RequestOptions {
   auth?: boolean
   /** Desabilita o header Authorization mesmo com token presente (ex.: login). */
   skipAuth?: boolean
+  /** Chave de idempotência enviada como cabeçalho, nunca persistida. */
+  idempotencyKey?: string
   signal?: AbortSignal
 }
 
@@ -68,10 +70,19 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
  * backend). Único ponto de saída HTTP do frontend.
  */
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, query, auth = true, skipAuth = false, signal } = options
+  const {
+    method = 'GET',
+    body,
+    query,
+    auth = true,
+    skipAuth = false,
+    idempotencyKey,
+    signal,
+  } = options
 
   const headers: Record<string, string> = { Accept: 'application/json' }
   if (body !== undefined) headers['Content-Type'] = 'application/json'
+  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey
 
   if (auth && !skipAuth) {
     const token = authTokenStorage.get()

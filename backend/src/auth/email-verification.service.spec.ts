@@ -114,6 +114,13 @@ describe('EmailVerificationService', () => {
     prisma.emailVerificationToken.findUnique
       .mockResolvedValueOnce({ id: record.id, usuarioId: USER_ID })
       .mockResolvedValueOnce(record);
+    prisma.usuario.findUnique.mockResolvedValueOnce({
+      id: USER_ID,
+      email: USER_EMAIL,
+      emailVerificadoEm: null,
+      ativo: true,
+      authVersion: 1,
+    });
 
     await expect(service.confirm(TOKEN)).resolves.toEqual({
       message: 'Endereço de e-mail confirmado.',
@@ -143,6 +150,9 @@ describe('EmailVerificationService', () => {
         },
       }),
     );
+    expect(
+      prisma.usuario.updateMany.mock.calls[0][0].data,
+    ).not.toHaveProperty('authVersion');
   });
 
   it('rejects expired tokens without marking the address verified', async () => {

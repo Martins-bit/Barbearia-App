@@ -12,9 +12,9 @@ function runE2EMigrations({
   spawn = spawnSync,
   args = [],
 } = {}) {
-  if (args.some((argument) => /^--config(?:=|$)/i.test(argument))) {
+  if (args.length > 0) {
     throw new Error(
-      'E2E bloqueado: não é permitido substituir a configuração Prisma protegida.',
+      'E2E bloqueado: argumentos extras não são permitidos no runner de migrations.',
     );
   }
 

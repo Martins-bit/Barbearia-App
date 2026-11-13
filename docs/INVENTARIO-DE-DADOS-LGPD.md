@@ -41,8 +41,8 @@ e operacional.
 
 | Titular/categoria | Evidência e dados associados |
 |---|---|
-| Clientes com conta | Contas do tipo cliente; dados de cadastro e perfil, agendamentos, lista de espera, mensagens, notificações e tokens associados. |
-| Barbeiros com conta | Contas do tipo barbeiro; dados de perfil e configuração profissional, agenda, mensagens, notificações e dados de acesso. |
+| Clientes com conta | Contas do tipo cliente; dados de cadastro e perfil, agendamentos, lista de espera, mensagens, notificações, tokens associados e solicitações próprias (titular, categoria, status, data e UUID interno de idempotência). |
+| Barbeiros com conta | Contas do tipo barbeiro; dados de perfil e configuração profissional, agenda, mensagens, notificações, dados de acesso e solicitações próprias (titular, categoria, status, data e UUID interno de idempotência). |
 | Pessoas que tentam se cadastrar ou recuperar acesso | Telefone/e-mail e demais campos enviados podem ser tratados durante solicitações, inclusive quando a operação não conclui. A retenção desses dados em logs e infraestrutura não foi verificada. |
 | Pessoas mencionadas em mensagens ou observações | O conteúdo livre pode incluir dados de terceiros; o sistema não identifica separadamente esses titulares. |
 | Pessoas cujos dados apareçam em registros operacionais | Logs, erros ou dados de integração podem potencialmente conter dados pessoais. Conteúdo real dos registros não foi consultado. |
@@ -203,7 +203,8 @@ isso pode ocorrer na prática e definir salvaguardas caso aplicável.
   notificações relacionadas e backups.
 - **Situação e lacuna:** a exclusão no código é lógica; as flags de exclusão são
   atualizadas, mas o campo original `conteudo` permanece no banco. A
-  documentação da API também requer alinhamento com a rota de exclusão existente.
+  API documenta a rota de exclusão existente e esclarece que ela não remove
+  fisicamente o conteúdo. Retenção e descarte de backups continuam pendentes.
 
 ### 4.7 Notificações
 
@@ -420,12 +421,12 @@ permissões.
 
 | Direito/solicitação | Evidência atual | Situação |
 |---|---|---|
-| Confirmação e acesso | Perfil permite consultar dados próprios; `GET /users/me/export` fornece JSON autenticado e limitado aos dados acessíveis ao titular. | Parcial; conteúdo de mensagens e observações livres é omitido; confirmar escopo e processo geral de atendimento. |
+| Confirmação e acesso | Perfil permite consultar dados próprios; `GET /users/me/export` fornece JSON autenticado limitado aos dados acessíveis ao titular, incluindo categoria, status e data das solicitações próprias. | Parcial; conteúdo de mensagens e observações livres é omitido; confirmar escopo e processo geral de atendimento. |
 | Correção/atualização | Perfil permite alterar nome, telefone e e-mail. | Parcial; não cobre necessariamente todos os dados derivados e registros históricos. |
 | Anonimização, bloqueio ou eliminação | Não foi encontrado fluxo geral de conta ou dados; exclusões de mensagem são lógicas. | Não implementado como processo abrangente; definir exceções e impacto relacional. |
-| Portabilidade | Há exportação JSON dos dados de conta/perfil, agenda/lista de espera, metadados visíveis de mensagens e notificações acessíveis; a resposta declara limitações. | Implementação inicial; avaliar aplicabilidade e escopo. Não é exportação integral de todo conteúdo. |
+| Portabilidade | Há exportação JSON dos dados de conta/perfil, agenda/lista de espera, metadados visíveis de mensagens e notificações acessíveis e dados mínimos das solicitações próprias; a resposta declara limitações. | Implementação inicial; avaliar aplicabilidade e escopo. Não é exportação integral de todo conteúdo. |
 | Informação sobre compartilhamentos e bases | Não há aviso/inventário completo publicado identificado nesta revisão. | Pendente. |
-| Oposição/revisão de tratamento | Nenhum processo geral de solicitação foi identificado. | Pendente de avaliação e procedimento. |
+| Oposição/revisão de tratamento | API autenticada registra e lista pedidos próprios, sem análise administrativa ou alteração de status. | O registro não representa análise ou atendimento; procedimento permanece pendente. |
 | Revogação de consentimento | Não foi identificado consentimento universal, nem se deve criá-lo como base universal. | Definir somente para tratamentos que usem consentimento. |
 | Canal de atendimento | Não foi fornecido ou localizado como canal de privacidade neste inventário. | Pendente; não inventar contato. |
 

@@ -1,15 +1,17 @@
 # Proposta de Schema — Solicitações de Direitos dos Titulares
 
-**Escopo:** proposta para a primeira fase, tecnicamente estruturada para
-revisão e validação, ainda não aplicada. A relação com `Usuario` usará
-`ON DELETE RESTRICT`: a exclusão física de uma conta fica bloqueada enquanto
-houver solicitações vinculadas. Solicitações não serão apagadas
+**Escopo:** especificação aprovada para a primeira fase. O modelo Prisma e a
+migration correspondente já existem; a API de criação e consulta foi
+implementada junto desta etapa. A migration existe no repositório; sua
+aplicação nos ambientes não é verificada neste documento. A relação com
+`Usuario` usa `ON DELETE RESTRICT`: a exclusão física de uma conta fica
+bloqueada enquanto houver solicitações vinculadas. Solicitações não serão apagadas
 automaticamente. Exclusão ou anonimização dependerá de procedimento
 específico, autorizado e documentado. Retenção, canal e prazos continuam
-pendentes. Este documento não altera `schema.prisma`, banco ou migrations. A
-primeira fase registra e lista solicitações do próprio usuário autenticado.
-Não oferece atendimento administrativo nem executa o direito solicitado
-automaticamente.
+pendentes. Este documento registra as decisões do modelo; não autoriza
+operações em banco. A primeira fase registra e lista solicitações do próprio
+usuário autenticado. Não oferece atendimento administrativo nem executa o
+direito solicitado automaticamente.
 
 Esta proposta não define bases legais, prazos de resposta, identidade do
 controlador, canal de atendimento ou política de retenção. Não é uma declaração
@@ -48,12 +50,13 @@ não se enquadra nas opções, mas não permite explicá-lo nesta fase. Se a
 operação exigir contexto adicional, sua necessidade e seus controles devem
 ser avaliados antes de acrescentar um campo.
 
-## 2. Modelo Prisma proposto
+## 2. Modelo Prisma de referência implementado
 
 O modelo `Usuario` existente tem os papéis `CLIENTE` e `BARBEIRO`, ambos
-elegíveis para a funcionalidade. A proposta acrescenta uma única relação
-inversa nomeada a `Usuario`; não exige modelo de atendente. Os nomes são
-propostos e ainda não devem ser copiados para `schema.prisma` sem autorização.
+elegíveis para a funcionalidade. O modelo acrescenta uma única relação inversa
+nomeada a `Usuario`; não exige modelo de atendente. Os nomes e campos abaixo
+correspondem ao schema já implementado. Alterações adicionais ao modelo
+continuam sujeitas a autorização própria.
 
 ```prisma
 enum CategoriaSolicitacaoTitular {
@@ -82,7 +85,7 @@ model SolicitacaoTitular {
 }
 ```
 
-Adicionar ao modelo `Usuario` somente esta relação inversa:
+A relação inversa já incluída no modelo `Usuario` é:
 
 ```prisma
 solicitacoesTitular SolicitacaoTitular[] @relation("TitularSolicitacao")
@@ -103,7 +106,7 @@ solicitacoesTitular SolicitacaoTitular[] @relation("TitularSolicitacao")
   determinística, inclusive quando duas criações tiverem timestamps iguais.
   Seu prefixo também indexa a chave estrangeira `titularId`.
 
-Esses são os únicos dados propostos para a primeira fase: não guardar nome,
+Esses são os únicos dados persistidos para a primeira fase: não guardar nome,
 e-mail, telefone, descrição, anexos, cópias de dados ou conteúdo de mensagens.
 A chave de idempotência não carrega dados pessoais por si só, mas, por estar
 associada ao titular na tabela, deve receber os mesmos controles de acesso e
@@ -121,11 +124,13 @@ uma conta fica bloqueada enquanto houver solicitações vinculadas. Não haverá
 exclusão automática dessas solicitações. Qualquer exclusão ou anonimização
 dependerá de procedimento específico, autorizado e documentado.
 
-## 3. SQL PostgreSQL proposto
+## 3. SQL PostgreSQL correspondente à migration
 
-Este SQL corresponde aos modelos e índices da seção 2. É uma proposta
-informativa, não deve ser executada nesta etapa. O campo UUID é fornecido pela
-aplicação; não depende de extensão ou de default de UUID no PostgreSQL.
+Este SQL corresponde aos modelos e índices da seção 2 e à migration existente.
+É uma referência para revisão estática; não deve ser executado manualmente. A
+aplicação da migration em cada ambiente deve ser confirmada por procedimento
+controlado. O campo UUID é fornecido pela aplicação; não depende de extensão
+ou de default de UUID no PostgreSQL.
 
 ```sql
 CREATE TYPE "CategoriaSolicitacaoTitular" AS ENUM (
@@ -237,9 +242,6 @@ de isolamento e concorrência antes de habilitar qualquer alteração de status.
 - Prazo e critérios de retenção de solicitações: **[PENDENTE DE DEFINIÇÃO]**.
 - Canal operacional de atendimento: **[PENDENTE DE DEFINIÇÃO]**.
 - Prazos de atendimento: **[PENDENTE DE DEFINIÇÃO]**.
-- Confirmar se a sequência de criação e consulta sem atendimento é adequada
-  antes da implementação.
-
 Não haverá exclusão automática de solicitações ou de dados enquanto não
 existir política de retenção aprovada. Nenhuma categoria implica deferimento
 ou execução automática.
@@ -278,36 +280,36 @@ explicitamente as solicitações e respeitar a estratégia aprovada.
 O schema existente usa PostgreSQL, `Usuario.id` inteiro autoincremental,
 `TipoUsuario` com `CLIENTE` e `BARBEIRO`, enums PostgreSQL, nomes de tabelas
 PascalCase entre aspas, timestamps `TIMESTAMP(3)` e relações com
-`ON DELETE RESTRICT ON UPDATE CASCADE`. A proposta segue essas convenções:
+`ON DELETE RESTRICT ON UPDATE CASCADE`. O modelo segue essas convenções:
 uma tabela nova, dois enums, uma relação inversa nomeada, UUID PostgreSQL
-nativo e nenhuma dependência de extensão. A lista declarada de pacotes contém
-Prisma `7.9.1`; o gerador e a configuração atuais também foram considerados
-na proposta. Essa revisão documental não substitui `prisma validate` nem a
-comparação com o SQL gerado, que deverão ocorrer em uma implementação
-autorizada.
+nativo e nenhuma dependência de extensão. Os manifests do backend declaram
+`prisma` e `@prisma/client` na faixa `^7.10.1`; o gerador e a configuração
+atuais também foram considerados no schema. O schema passou por
+`npx prisma validate` e a migration foi revisada estaticamente. Essas
+verificações não confirmam a aplicação da
+migration nos bancos, que deve ser verificada por procedimento controlado.
 
-Sequência futura:
+## Estado da implementação
 
-1. Resolver as pendências da seção 6: política de retenção, canal operacional
-   e prazos de atendimento.
-2. Definir e documentar o procedimento específico necessário para tratar
-   exclusão ou anonimização de conta com solicitações vinculadas. Até lá, a
-   exclusão física permanece bloqueada por `RESTRICT`.
-3. Autorizar a implementação e confirmar categorias, idempotência e contrato
-   de criação/consulta.
-4. Adicionar somente os dois enums, `SolicitacaoTitular` e sua relação inversa
-   em `Usuario`; validar o schema com a versão de Prisma do projeto.
-5. Gerar uma migration aditiva e revisar todo o SQL gerado contra esta proposta,
-   incluindo defaults, nomes, índices e FK. Não editar migrations anteriores.
-6. Aplicar a migration somente com autorização explícita e no ambiente
-   autorizado.
-7. Implementar endpoints autenticados com titular derivado do JWT, filtro
-   obrigatório por titular, validação estrita do corpo e idempotência.
-8. Testar clientes e barbeiros, acesso não autenticado, isolamento contra
-   IDs/chaves de outros titulares, submissões repetidas e concorrentes, status
-   inicial e datas; usar ambiente de teste isolado sem dados reais.
-9. Habilitar a interface de abertura/consulta somente depois de confirmados o
-   processo e as orientações apresentados ao titular.
+- Os enums, o modelo, a relação inversa, os índices e a migration SQL
+  correspondem à estrutura descrita neste documento.
+- A API autenticada cria e lista solicitações do titular, aplica a chave
+  idempotente por titular e categoria, limita a consulta por cursor e mantém o
+  status inicial `RECEBIDA`. Não oferece alteração de status nem atendimento
+  administrativo.
+- A exportação inclui somente categoria, status e data de criação das
+  solicitações próprias, sem exportar a chave de idempotência.
+- A geração do Prisma Client foi executada sem operação de banco. A aplicação
+  da migration nos ambientes não foi verificada neste documento.
+- A interface está integrada à API para criação e consulta. A identidade do
+  controlador, canal, prazos e política de retenção continuam pendentes.
+- A decisão `ON DELETE RESTRICT` permanece inalterada; nenhuma exclusão ou
+  anonimização é executada automaticamente.
+- A API limita criação a 5 solicitações por minuto e consulta a 30 por minuto,
+  por usuário autenticado. A revogação das sessões anteriores ao alterar
+  efetivamente o e-mail usa o `authVersion` já existente; nenhuma mudança no
+  schema foi necessária para essas proteções.
 
-Nenhum modelo, SQL ou operação foi aplicado. A central existente permanece
-informativa até a implementação autorizada.
+Aplicar a migration exige autorização própria e validação do ambiente de
+destino. Retenção, canal de atendimento, prazos e procedimento para exclusão ou
+anonimização continuam pendentes de decisão humana.

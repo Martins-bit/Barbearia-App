@@ -97,6 +97,12 @@ nas operações sensíveis. Leituras e demais rotas legítimas **não** são lim
   usuários.
 - O excesso retorna **`429`** (REST) ou um erro de limitação equivalente no
   socket, respeitando o formato de erro já usado no projeto.
+- O `ThrottlerGuard` HTTP usa storage Redis compartilhado para que os limites
+  sejam agregados entre instâncias da API. `REDIS_URL` é obrigatório; a API
+  falha no boot se não estiver definido ou se não conseguir conectar ao Redis.
+  Falhas posteriores no storage não recorrem a contadores locais, evitando
+  enfraquecer os limites silenciosamente. O Redis deve ser operado com acesso
+  restrito e TLS/autenticação conforme a topologia de produção.
 - A solicitação de confirmação do Perfil exige sessão e usa somente o e-mail do
   usuário autenticado. O reenvio público exige uma ação explícita, usa resposta
   idêntica para endereços existentes e inexistentes e aplica cota persistida
@@ -166,6 +172,10 @@ privilégios de DDL necessários nesse banco. A criação e concessão dessas ro
 é uma tarefa administrativa separada.
 
 `npm run test:e2e` valida antes do Jest; o setup do Jest repete a validação.
+O runner aceita somente filtros por nome de teste, padrões posicionais e opções
+de execução não configuráveis (`--runInBand`, `--verbose`, `--silent`); opções
+desconhecidas ou que alterem configuração/setup são rejeitadas, inclusive após
+um separador `--`.
 O runner remove variáveis herdadas `DATABASE_URL`, `DIRECT_URL`, URLs Prisma e
 variáveis `PG*` antes de iniciar processos filhos, e fornece a URL já
 validada. O teste não cria nem limpa bancos. `npm run test:e2e:guard` cobre
@@ -174,10 +184,11 @@ essas regras com processos simulados, sem conectar ao PostgreSQL.
 O caminho oficial para migrations E2E é `npm run db:e2e:migrate`, que fixa
 `prisma.e2e.config.ts`, `test/.env.e2e.migrate` e a role específica de
 migration. O wrapper rejeita uma tentativa de substituir o config com
-`--config`; o config dedicado também valida destino e credenciais antes de o
-Prisma abrir conexão. `E2E_MIGRATION_RUNNER_AUTH=1` é uma confirmação explícita
-de execução, não uma autenticação nem prova de que o wrapper foi usado: o valor
-pode ser definido manualmente.
+qualquer argumento extra e fixa o config Prisma; o config dedicado também
+valida destino e credenciais antes de o Prisma abrir conexão.
+`E2E_MIGRATION_RUNNER_AUTH=1` é uma confirmação explícita de execução, não uma
+autenticação nem prova de que o wrapper foi usado: o valor pode ser definido
+manualmente.
 
 A configuração Prisma padrão valida `migrate` e `db push` somente quando ela
 própria é selecionada: exige `PRISMA_MIGRATION_TARGET=development` e uma URL
@@ -199,6 +210,8 @@ e qualquer execução manual também exige validação E2E.
 - `backend/src/common/config/cors.config.ts` — resolução/validação das origens.
 - `backend/src/common/utils/sliding-window-rate-limiter.ts` — janela p/ socket.
 - `backend/src/app.module.ts` — registro do `ThrottlerModule` (throttler `default`).
+- `backend/src/common/throttling/redis-throttler-storage.ts` — storage Redis
+  atômico e compartilhado do `ThrottlerGuard` HTTP.
 - `backend/src/auth/auth.controller.ts` — `@Throttle` em login/register.
 - `backend/src/messages/messages.controller.ts` — `@Throttle` (por usuário) no envio REST.
 - `backend/src/messages/messages.gateway.ts` — CORS do handshake + limite do `message:send`.

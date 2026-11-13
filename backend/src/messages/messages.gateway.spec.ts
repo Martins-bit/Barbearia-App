@@ -35,10 +35,15 @@ function buildMessagesServiceMock(): any {
   return { sendMessage: jest.fn() };
 }
 
-/** Server Socket.IO mínimo: `to(room).emit(event, payload)`. */
+/** Server Socket.IO mínimo para lookup local de sockets e rooms. */
 function buildServerMock(): any {
   const emit = jest.fn();
-  return { use: jest.fn(), to: jest.fn(() => ({ emit })), emitted: emit };
+  return {
+    use: jest.fn(),
+    to: jest.fn(() => ({ emit })),
+    emitted: emit,
+    sockets: new Map<string, any>(),
+  };
 }
 
 const clientAuthState = {
@@ -58,6 +63,30 @@ const barberAuthState = {
   tipoUsuario: TipoUsuario.BARBEIRO,
   barbeiro: { ativo: true },
 };
+
+function buildRegisteredSocket(usuarioId: number, socketId: string): any {
+  const client = buildClient(undefined, socketId);
+  client.data = {
+    usuarioId,
+    tipoUsuario:
+      usuarioId === 20 ? TipoUsuario.BARBEIRO : TipoUsuario.CLIENTE,
+    authVersion: 0,
+    tokenExpiraEm: Math.floor(Date.now() / 1000) + 3600,
+  };
+  return client;
+}
+
+function registerSocket(
+  server: any,
+  registry: MessagesSocketRegistry,
+  usuarioId: number,
+  socketId: string,
+): any {
+  const client = buildRegisteredSocket(usuarioId, socketId);
+  server.sockets.set(socketId, client);
+  registry.add(usuarioId, socketId);
+  return client;
+}
 
 describe('MessagesGateway', () => {
   let registry: MessagesSocketRegistry;
@@ -270,25 +299,25 @@ describe('MessagesGateway', () => {
       return client;
     };
 
-    it('handleConnection registra o socket do usuário autenticado', () => {
-      gateway.handleConnection(authenticatedClient(10, 'socket-1'));
+    it('handleConnection registra o socket do usuário autenticado', async () => {
+      await gateway.handleConnection(authenticatedClient(10, 'socket-1'));
 
       expect(registry.has(10)).toBe(true);
       expect(registry.getSocketIds(10)).toEqual(['socket-1']);
     });
 
-    it('handleConnection desconecta socket sem identidade (defesa)', () => {
+    it('handleConnection desconecta socket sem identidade (defesa)', async () => {
       const client = buildClient();
 
-      gateway.handleConnection(client);
+      await gateway.handleConnection(client);
 
       expect(registry.size()).toBe(0);
       expect(client.disconnect).toHaveBeenCalledWith(true);
     });
 
-    it('handleDisconnect remove o socket do registro', () => {
+    it('handleDisconnect remove o socket do registro', async () => {
       const client = authenticatedClient(10, 'socket-1');
-      gateway.handleConnection(client);
+      await gateway.handleConnection(client);
 
       gateway.handleDisconnect(client);
 
@@ -299,15 +328,29 @@ describe('MessagesGateway', () => {
     it('handleDisconnect sem identidade não lança erro', () => {
       expect(() => gateway.handleDisconnect(buildClient())).not.toThrow();
     });
+
+    it('rejects a handshake that became stale before connection registration', async () => {
+      const client = authenticatedClient(10, 'socket-stale');
+      users.findAuthorizationStateById.mockResolvedValue({
+        ...clientAuthState,
+        authVersion: 1,
+      });
+
+      await gateway.handleConnection(client);
+
+      expect(client.disconnect).toHaveBeenCalledWith(true);
+      expect(registry.has(10)).toBe(false);
+    });
   });
 
   describe('handshake ping/pong', () => {
-    it('responde pong com a identidade validada do JWT', () => {
+    it('responde pong com a identidade validada do JWT', async () => {
       const client = buildClient();
       client.data.usuarioId = 20;
       client.data.tipoUsuario = TipoUsuario.BARBEIRO;
+      users.findAuthorizationStateById.mockResolvedValue(barberAuthState);
 
-      const response = gateway.handlePing(client);
+      const response = await gateway.handlePing(client);
 
       expect(response).toEqual({
         event: 'pong',
@@ -315,8 +358,29 @@ describe('MessagesGateway', () => {
       });
     });
 
-    it('rejeita ping de socket sem identidade', () => {
-      expect(() => gateway.handlePing(buildClient())).toThrow(WsException);
+    it('rejeita ping de socket sem identidade', async () => {
+      await expect(gateway.handlePing(buildClient())).rejects.toThrow(
+        WsException,
+      );
+    });
+
+    it('não responde a ping quando authVersion foi revogada', async () => {
+      const client = buildClient();
+      client.data.usuarioId = 10;
+      client.data.tipoUsuario = TipoUsuario.CLIENTE;
+      client.data.authVersion = 0;
+      users.findAuthorizationStateById.mockResolvedValue({
+        ...clientAuthState,
+        authVersion: 1,
+      });
+
+      await expect(gateway.handlePing(client)).resolves.toBeUndefined();
+
+      expect(client.emit).toHaveBeenCalledWith('exception', {
+        status: 'error',
+        message: 'Não autorizado.',
+      });
+      expect(client.disconnect).toHaveBeenCalledWith(true);
     });
   });
 
@@ -527,17 +591,21 @@ describe('MessagesGateway', () => {
       const server = buildServerMock();
       gateway.server = server;
       const ordem: string[] = [];
-      // Destinatário conectado: garante que message:received seria emitido.
-      registry.add(20, 'socket-dest');
+      const destinatario = registerSocket(
+        server,
+        registry,
+        20,
+        'socket-dest',
+      );
 
       messagesService.sendMessage.mockImplementation(async () => {
         ordem.push('persistir');
         return createdMessage;
       });
       client.emit.mockImplementation(() => ordem.push('message:sent'));
-      server.to.mockImplementation(() => ({
-        emit: () => ordem.push('message:received'),
-      }));
+      destinatario.emit.mockImplementation(() =>
+        ordem.push('message:received'),
+      );
 
       await gateway.handleMessageSend(client, {
         destinatarioId: 20,
@@ -553,18 +621,51 @@ describe('MessagesGateway', () => {
       const client = authenticatedClient(10);
       const server = buildServerMock();
       gateway.server = server;
-      registry.add(20, 'socket-dest');
+      const destinatario = registerSocket(
+        server,
+        registry,
+        20,
+        'socket-dest',
+      );
 
       await gateway.handleMessageSend(client, {
         destinatarioId: 20,
         conteudo: 'Olá!',
       });
 
-      expect(server.to).toHaveBeenCalledWith('usuario:20');
-      expect(server.emitted).toHaveBeenCalledWith(
+      expect(destinatario.emit).toHaveBeenCalledWith(
         'message:received',
         createdMessage,
       );
+    });
+
+    it('não entrega message:received a destinatário com authVersion revogado', async () => {
+      const client = authenticatedClient(10);
+      const server = buildServerMock();
+      gateway.server = server;
+      const destinatario = registerSocket(
+        server,
+        registry,
+        20,
+        'socket-dest',
+      );
+      users.findAuthorizationStateById.mockImplementation(async (usuarioId) =>
+        usuarioId === 20
+          ? { ...barberAuthState, authVersion: 1 }
+          : clientAuthState,
+      );
+
+      await gateway.handleMessageSend(client, {
+        destinatarioId: 20,
+        conteudo: 'Olá!',
+      });
+
+      expect(destinatario.emit).not.toHaveBeenCalledWith(
+        'message:received',
+        createdMessage,
+      );
+      expect(destinatario.disconnect).toHaveBeenCalledWith(true);
+      expect(registry.has(20)).toBe(false);
     });
 
     it('TODAS as conexões do destinatário recebem a mensagem', async () => {
@@ -572,9 +673,11 @@ describe('MessagesGateway', () => {
       const server = buildServerMock();
       gateway.server = server;
       // Múltiplas abas/dispositivos do mesmo destinatário.
-      registry.add(20, 'socket-1');
-      registry.add(20, 'socket-2');
-      registry.add(20, 'socket-3');
+      const sockets = [
+        registerSocket(server, registry, 20, 'socket-1'),
+        registerSocket(server, registry, 20, 'socket-2'),
+        registerSocket(server, registry, 20, 'socket-3'),
+      ];
 
       await gateway.handleMessageSend(client, {
         destinatarioId: 20,
@@ -582,12 +685,12 @@ describe('MessagesGateway', () => {
       });
 
       expect(registry.getSocketIds(20)).toHaveLength(3);
-      expect(server.to).toHaveBeenCalledWith('usuario:20');
-      expect(server.emitted).toHaveBeenCalledTimes(1);
-      expect(server.emitted).toHaveBeenCalledWith(
-        'message:received',
-        createdMessage,
-      );
+      for (const socket of sockets) {
+        expect(socket.emit).toHaveBeenCalledWith(
+          'message:received',
+          createdMessage,
+        );
+      }
     });
 
     it('destinatário offline não impede a persistência nem gera erro', async () => {
@@ -611,7 +714,12 @@ describe('MessagesGateway', () => {
       const client = authenticatedClient(10);
       const server = buildServerMock();
       gateway.server = server;
-      registry.add(20, 'socket-dest');
+      const destinatario = registerSocket(
+        server,
+        registry,
+        20,
+        'socket-dest',
+      );
 
       await gateway.handleMessageSend(client, {
         destinatarioId: 20,
@@ -620,7 +728,7 @@ describe('MessagesGateway', () => {
 
       expect(messagesService.sendMessage).toHaveBeenCalledTimes(1);
       expect(client.emit).toHaveBeenCalledTimes(1);
-      expect(server.emitted).toHaveBeenCalledTimes(1);
+      expect(destinatario.emit).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -706,7 +814,7 @@ describe('MessagesGateway', () => {
     it('usuário desativado APÓS a conexão: envio recusado, desconectado e removido do registry', async () => {
       const socket = client();
       // Conectou enquanto ativo...
-      gateway.handleConnection(socket);
+      await gateway.handleConnection(socket);
       expect(registry.has(10)).toBe(true);
 
       // ...e foi desativado no banco depois.
@@ -742,7 +850,7 @@ describe('MessagesGateway', () => {
 
     it('invalida socket já conectado após redefinição incrementa authVersion', async () => {
       const socket = client();
-      gateway.handleConnection(socket);
+      await gateway.handleConnection(socket);
       users.findAuthorizationStateById.mockResolvedValue({
         ...clientAuthState,
         authVersion: 1,
@@ -761,7 +869,7 @@ describe('MessagesGateway', () => {
 
     it('BARBEIRO com perfil desativado APÓS a conexão: envio recusado', async () => {
       const socket = client(FUTURO, 20, TipoUsuario.BARBEIRO);
-      gateway.handleConnection(socket);
+      await gateway.handleConnection(socket);
 
       users.findAuthorizationStateById.mockResolvedValue({
         ...barberAuthState,
@@ -799,7 +907,7 @@ describe('MessagesGateway', () => {
 
     it('socket válido não é desconectado pela revalidação', async () => {
       const socket = client();
-      gateway.handleConnection(socket);
+      await gateway.handleConnection(socket);
       gateway.server = buildServerMock();
 
       await gateway.handleMessageSend(socket, {
@@ -829,8 +937,8 @@ describe('MessagesGateway', () => {
       const primeira = client();
       const segunda = client();
       segunda.id = 'socket-2';
-      gateway.handleConnection(primeira);
-      gateway.handleConnection(segunda);
+      await gateway.handleConnection(primeira);
+      await gateway.handleConnection(segunda);
       expect(registry.count(10)).toBe(2);
 
       users.findAuthorizationStateById.mockResolvedValue({
@@ -889,11 +997,21 @@ describe('MessagesGateway', () => {
     });
 
     describe('notificação de exclusão de mensagens em tempo real (message:deleted)', () => {
-      it('1. notifyMessageDeleted emite message:deleted para o remetente e destinatário quando ambos estão conectados', () => {
+      it('emite message:deleted para os sockets autorizados de ambos os participantes', async () => {
         const server = buildServerMock();
         gateway.server = server;
-        registry.add(10, 'socket-remetente');
-        registry.add(20, 'socket-destinatario');
+        const remetente = registerSocket(
+          server,
+          registry,
+          10,
+          'socket-remetente',
+        );
+        const destinatario = registerSocket(
+          server,
+          registry,
+          20,
+          'socket-destinatario',
+        );
 
         const agora = new Date();
         const payload = {
@@ -902,18 +1020,24 @@ describe('MessagesGateway', () => {
           dataExclusao: agora,
         };
 
-        gateway.notifyMessageDeleted(10, 20, payload);
+        await gateway.notifyMessageDeleted(10, 20, payload);
 
-        expect(server.to).toHaveBeenCalledWith('usuario:10');
-        expect(server.to).toHaveBeenCalledWith('usuario:20');
-        expect(server.emitted).toHaveBeenCalledTimes(2);
-        expect(server.emitted).toHaveBeenCalledWith('message:deleted', payload);
+        expect(remetente.emit).toHaveBeenCalledWith('message:deleted', payload);
+        expect(destinatario.emit).toHaveBeenCalledWith(
+          'message:deleted',
+          payload,
+        );
       });
 
-      it('2. payload não contém o conteúdo original da mensagem', () => {
+      it('payload não contém o conteúdo original da mensagem', async () => {
         const server = buildServerMock();
         gateway.server = server;
-        registry.add(10, 'socket-remetente');
+        const remetente = registerSocket(
+          server,
+          registry,
+          10,
+          'socket-remetente',
+        );
 
         const payload = {
           messageId: 500,
@@ -921,9 +1045,11 @@ describe('MessagesGateway', () => {
           dataExclusao: new Date(),
         };
 
-        gateway.notifyMessageDeleted(10, 20, payload);
+        await gateway.notifyMessageDeleted(10, 20, payload);
 
-        const emitArgs = server.emitted.mock.calls[0];
+        const emitArgs = remetente.emit.mock.calls.find(
+          ([event]) => event === 'message:deleted',
+        );
         const emittedPayload = emitArgs[1];
         expect(emittedPayload).not.toHaveProperty('conteudo');
         expect(emittedPayload).toEqual({
@@ -933,27 +1059,41 @@ describe('MessagesGateway', () => {
         });
       });
 
-      it('3. não emite se apagadaParaTodos for falso', () => {
+      it('não emite se apagadaParaTodos for falso', async () => {
         const server = buildServerMock();
         gateway.server = server;
-        registry.add(10, 'socket-remetente');
-        registry.add(20, 'socket-destinatario');
+        const remetente = registerSocket(
+          server,
+          registry,
+          10,
+          'socket-remetente',
+        );
+        const destinatario = registerSocket(
+          server,
+          registry,
+          20,
+          'socket-destinatario',
+        );
 
-        gateway.notifyMessageDeleted(10, 20, {
+        await gateway.notifyMessageDeleted(10, 20, {
           messageId: 500,
           apagadaParaTodos: false,
           dataExclusao: new Date(),
         });
 
-        expect(server.to).not.toHaveBeenCalled();
-        expect(server.emitted).not.toHaveBeenCalled();
+        expect(remetente.emit).not.toHaveBeenCalled();
+        expect(destinatario.emit).not.toHaveBeenCalled();
       });
 
-      it('4. se destinatário estiver desconectado, remetente ainda recebe o evento na sua sala', () => {
+      it('remetente recebe o evento quando o destinatário está offline', async () => {
         const server = buildServerMock();
         gateway.server = server;
-        registry.add(10, 'socket-remetente');
-        // Usuário 20 NÃO está no registry
+        const remetente = registerSocket(
+          server,
+          registry,
+          10,
+          'socket-remetente',
+        );
 
         const payload = {
           messageId: 500,
@@ -961,19 +1101,24 @@ describe('MessagesGateway', () => {
           dataExclusao: new Date(),
         };
 
-        gateway.notifyMessageDeleted(10, 20, payload);
+        await gateway.notifyMessageDeleted(10, 20, payload);
 
-        expect(server.to).toHaveBeenCalledWith('usuario:10');
-        expect(server.to).not.toHaveBeenCalledWith('usuario:20');
-        expect(server.emitted).toHaveBeenCalledTimes(1);
-        expect(server.emitted).toHaveBeenCalledWith('message:deleted', payload);
+        expect(remetente.emit).toHaveBeenCalledWith('message:deleted', payload);
       });
 
-      it('5. se remetente estiver desconectado, destinatário ainda recebe o evento na sua sala', () => {
+      it('recusa a entrega a socket com authVersion revogado', async () => {
         const server = buildServerMock();
         gateway.server = server;
-        // Usuário 10 NÃO está no registry
-        registry.add(20, 'socket-destinatario');
+        const destinatario = registerSocket(
+          server,
+          registry,
+          20,
+          'socket-destinatario',
+        );
+        users.findAuthorizationStateById.mockResolvedValue({
+          ...clientAuthState,
+          authVersion: 1,
+        });
 
         const payload = {
           messageId: 500,
@@ -981,24 +1126,44 @@ describe('MessagesGateway', () => {
           dataExclusao: new Date(),
         };
 
-        gateway.notifyMessageDeleted(10, 20, payload);
+        await gateway.notifyMessageDeleted(10, 20, payload);
 
-        expect(server.to).toHaveBeenCalledWith('usuario:20');
-        expect(server.to).not.toHaveBeenCalledWith('usuario:10');
-        expect(server.emitted).toHaveBeenCalledTimes(1);
-        expect(server.emitted).toHaveBeenCalledWith('message:deleted', payload);
+        expect(destinatario.emit).toHaveBeenCalledWith('exception', {
+          status: 'error',
+          message: 'Não autorizado.',
+        });
+        expect(destinatario.emit).not.toHaveBeenCalledWith(
+          'message:deleted',
+          payload,
+        );
+        expect(destinatario.disconnect).toHaveBeenCalledWith(true);
+        expect(registry.has(20)).toBe(false);
       });
 
-      it('6. se o server não estiver inicializado, não gera erro nem emite', () => {
+      it('desconecta somente sockets do usuário cuja sessão foi revogada', () => {
+        const server = buildServerMock();
+        gateway.server = server;
+        const revoked = registerSocket(server, registry, 10, 'socket-revoked');
+        const otherUser = registerSocket(server, registry, 20, 'socket-other');
+
+        gateway.revokeUserSessions(10);
+
+        expect(revoked.disconnect).toHaveBeenCalledWith(true);
+        expect(otherUser.disconnect).not.toHaveBeenCalled();
+        expect(registry.has(10)).toBe(false);
+        expect(registry.has(20)).toBe(true);
+      });
+
+      it('se o server não estiver inicializado, não gera erro nem emite', async () => {
         gateway.server = undefined;
 
-        expect(() =>
+        await expect(
           gateway.notifyMessageDeleted(10, 20, {
             messageId: 500,
             apagadaParaTodos: true,
             dataExclusao: new Date(),
           }),
-        ).not.toThrow();
+        ).resolves.toBeUndefined();
       });
     });
   });

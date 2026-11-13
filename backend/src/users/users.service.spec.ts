@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -48,8 +49,11 @@ function buildDriverAdapterCause(
 
 describe('UsersService', () => {
   let service: UsersService;
+  let moduleRef: { get: jest.Mock };
+  let sessionRevoker: { revokeUserSessions: jest.Mock };
   let prisma: {
     $transaction: jest.Mock;
+    $queryRaw: jest.Mock;
     usuario: {
       findUnique: jest.Mock;
       findFirst: jest.Mock;
@@ -67,11 +71,15 @@ describe('UsersService', () => {
     listaEspera: { findMany: jest.Mock };
     mensagem: { findMany: jest.Mock };
     notificacao: { findMany: jest.Mock };
+    solicitacaoTitular: { findMany: jest.Mock };
   };
 
   beforeEach(async () => {
+    sessionRevoker = { revokeUserSessions: jest.fn() };
+    moduleRef = { get: jest.fn().mockReturnValue(sessionRevoker) };
     prisma = {
       $transaction: jest.fn((callback) => callback(prisma)),
+      $queryRaw: jest.fn().mockResolvedValue([{ id: 1 }]),
       usuario: {
         findUnique: jest.fn(),
         findFirst: jest.fn(),
@@ -89,6 +97,7 @@ describe('UsersService', () => {
       listaEspera: { findMany: jest.fn().mockResolvedValue([]) },
       mensagem: { findMany: jest.fn().mockResolvedValue([]) },
       notificacao: { findMany: jest.fn().mockResolvedValue([]) },
+      solicitacaoTitular: { findMany: jest.fn().mockResolvedValue([]) },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -98,6 +107,7 @@ describe('UsersService', () => {
           provide: PrismaService,
           useValue: prisma,
         },
+        { provide: ModuleRef, useValue: moduleRef },
       ],
     }).compile();
 
@@ -218,6 +228,15 @@ describe('UsersService', () => {
         claim: null,
       },
     ]);
+    prisma.solicitacaoTitular.findMany.mockResolvedValue([
+      {
+        titularId: 21,
+        chaveIdempotencia: '9c1e39b2-e675-4e29-a0de-4e4c15c3b64c',
+        categoria: 'CORRECAO',
+        status: 'RECEBIDA',
+        dataCriacao: createdAt,
+      },
+    ]);
 
     const result = await service.exportPersonalData(21);
 
@@ -258,6 +277,16 @@ describe('UsersService', () => {
     expect(prisma.notificacao.findMany.mock.calls[0][0].select).not.toHaveProperty(
       'mensagem',
     );
+    expect(prisma.solicitacaoTitular.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { titularId: 21 },
+        select: {
+          categoria: true,
+          status: true,
+          dataCriacao: true,
+        },
+      }),
+    );
     expect(result.conta).toMatchObject({
       nome: 'Cliente',
       email: 'cliente@example.com',
@@ -269,6 +298,13 @@ describe('UsersService', () => {
     expect(result.agendamentos).toHaveLength(1);
     expect(result.mensagens.conteudoIncluido).toBe(false);
     expect(result.mensagens.registros).toHaveLength(1);
+    expect(result.solicitacoes).toEqual([
+      {
+        categoria: 'CORRECAO',
+        status: 'RECEBIDA',
+        dataCriacao: createdAt.toISOString(),
+      },
+    ]);
     expect(JSON.stringify(result)).not.toContain('texto que não deve ser exportado');
     expect(JSON.stringify(result)).not.toContain('terceiro@example.com');
     expect(JSON.stringify(result)).not.toContain('Detalhe privado de terceiro');
@@ -276,6 +312,10 @@ describe('UsersService', () => {
     expect(JSON.stringify(result)).not.toContain('authVersion');
     expect(JSON.stringify(result)).not.toContain('senhaHash');
     expect(JSON.stringify(result)).not.toContain('tokenHash');
+    expect(JSON.stringify(result)).not.toContain('chaveIdempotencia');
+    expect(JSON.stringify(result)).not.toContain(
+      '9c1e39b2-e675-4e29-a0de-4e4c15c3b64c',
+    );
   });
 
   it('should not export any data when the authenticated account no longer exists', async () => {
@@ -506,6 +546,7 @@ describe('UsersService', () => {
       data: {
         ...payload,
         email: 'joao.novo@email.com',
+        authVersion: { increment: 1 },
         emailVerificadoEm: null,
         emailConfirmacaoObrigatoria: true,
       },
@@ -529,8 +570,46 @@ describe('UsersService', () => {
       where: { usuarioId: 1, usadoEm: null },
       data: { usadoEm: expect.any(Date) },
     });
+    expect(sessionRevoker.revokeUserSessions).toHaveBeenCalledWith(1);
     expect(result).not.toHaveProperty('senhaHash');
     expect(result.nome).toBe('João Atualizado');
+  });
+
+  it.each<[string, Partial<UpdateUserDto>]>([
+    ['name', { nome: 'João Atualizado' }],
+    ['phone', { telefone: '11999999998' }],
+  ])('does not revoke sessions when only the %s changes', async (_, updates) => {
+    prisma.usuario.findUnique.mockResolvedValue({
+      id: 1,
+      nome: 'João',
+      telefone: '11999999999',
+      email: 'joao@email.com',
+      senhaHash: 'hash-secreta',
+      tipoUsuario: 'CLIENTE',
+      ativo: true,
+      dataCriacao: new Date(),
+      dataAtualizacao: new Date(),
+    });
+    prisma.usuario.update.mockResolvedValue({
+      id: 1,
+      ...updates,
+      telefone: updates.telefone ?? '11999999999',
+      email: 'joao@email.com',
+      senhaHash: 'hash-secreta',
+      tipoUsuario: 'CLIENTE',
+      ativo: true,
+      dataCriacao: new Date(),
+      dataAtualizacao: new Date(),
+    });
+
+    await service.updateUser(1, updates);
+
+    const updateData = prisma.usuario.update.mock.calls[0][0].data;
+    expect(updateData).not.toHaveProperty('authVersion');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.emailVerificationToken.updateMany).not.toHaveBeenCalled();
+    expect(prisma.passwordResetToken.updateMany).not.toHaveBeenCalled();
+    expect(sessionRevoker.revokeUserSessions).not.toHaveBeenCalled();
   });
 
   it('should prepare an internal list method without exposing it publicly', async () => {
@@ -604,6 +683,7 @@ describe('UsersService', () => {
           where: { id: 10 },
           data: {
             email: null,
+            authVersion: { increment: 1 },
             emailVerificadoEm: null,
             emailConfirmacaoObrigatoria: false,
           },
@@ -712,20 +792,15 @@ describe('UsersService', () => {
       await expect(
         service.updateUser(13, { email: ' MEU@EMAIL.COM ' }),
       ).resolves.toBeDefined();
-      expect(prisma.usuario.findFirst).toHaveBeenCalledWith({
-        where: {
-          email: { equals: 'meu@email.com', mode: 'insensitive' },
-          id: { not: 13 },
-        },
-        select: { id: true },
-      });
+      expect(prisma.usuario.findFirst).not.toHaveBeenCalled();
       expect(prisma.usuario.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 13 },
           data: { email: 'Meu@Email.com' },
         }),
       );
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(sessionRevoker.revokeUserSessions).not.toHaveBeenCalled();
     });
   });
 
@@ -866,6 +941,158 @@ describe('UsersService', () => {
       await expect(
         service.updateUser(20, { nome: 'Novo Nome' }),
       ).rejects.toThrow(erro);
+    });
+  });
+
+  describe('updateUser — concorrência e revogação WebSocket', () => {
+    const existingUser = {
+      id: 30,
+      nome: 'Cliente',
+      telefone: '11999990030',
+      email: 'cliente@email.com',
+      authVersion: 0,
+      senhaHash: 'hash',
+      tipoUsuario: 'CLIENTE',
+      ativo: true,
+      dataCriacao: new Date(),
+      dataAtualizacao: new Date(),
+    };
+
+    it('serializes competing email changes and rejects the stale request', async () => {
+      let currentUser = { ...existingUser };
+      let reads = 0;
+      let transactionTail: Promise<unknown> = Promise.resolve();
+
+      prisma.usuario.findUnique.mockImplementation(async () => {
+        reads += 1;
+        return reads <= 2 ? { ...existingUser } : { ...currentUser };
+      });
+      prisma.usuario.findFirst.mockResolvedValue(null);
+      prisma.usuario.update.mockImplementation(async ({ data }) => {
+        currentUser = {
+          ...currentUser,
+          ...data,
+          authVersion:
+            currentUser.authVersion + (data.authVersion?.increment ?? 0),
+        };
+        return { ...currentUser };
+      });
+      prisma.$transaction.mockImplementation((callback) => {
+        const transaction = transactionTail.then(() => callback(prisma));
+        transactionTail = transaction.then(
+          () => undefined,
+          () => undefined,
+        );
+        return transaction;
+      });
+
+      const outcomes = await Promise.allSettled([
+        service.updateUser(30, { email: 'primeiro@email.com' }),
+        service.updateUser(30, { email: 'segundo@email.com' }),
+      ]);
+
+      expect(
+        outcomes.filter((outcome) => outcome.status === 'fulfilled'),
+      ).toHaveLength(1);
+      const rejected = outcomes.find(
+        (outcome) => outcome.status === 'rejected',
+      );
+      expect(rejected).toMatchObject({
+        status: 'rejected',
+        reason: expect.any(ConflictException),
+      });
+      expect(currentUser.email).not.toBe('cliente@email.com');
+      expect(currentUser.authVersion).toBe(1);
+      expect(sessionRevoker.revokeUserSessions).toHaveBeenCalledTimes(1);
+      expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
+      expect(prisma.usuario.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects an update admitted with a JWT version made stale before service execution', async () => {
+      prisma.usuario.findUnique.mockResolvedValue({
+        ...existingUser,
+        email: 'concorrente@email.com',
+        authVersion: 1,
+      });
+
+      await expect(
+        service.updateUser(30, { email: 'cliente@email.com' }, 0),
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      expect(prisma.usuario.update).not.toHaveBeenCalled();
+      expect(sessionRevoker.revokeUserSessions).not.toHaveBeenCalled();
+    });
+
+    it('revokes sockets only after the email transaction commits', async () => {
+      let transactionCommitted = false;
+      prisma.usuario.findUnique.mockResolvedValue(existingUser);
+      prisma.usuario.findFirst.mockResolvedValue(null);
+      prisma.usuario.update.mockResolvedValue({
+        ...existingUser,
+        email: 'novo@email.com',
+        authVersion: 1,
+      });
+      prisma.$transaction.mockImplementation(async (callback) => {
+        const result = await callback(prisma);
+        transactionCommitted = true;
+        return result;
+      });
+      sessionRevoker.revokeUserSessions.mockImplementation(() => {
+        expect(transactionCommitted).toBe(true);
+      });
+
+      await service.updateUser(30, { email: 'novo@email.com' }, 0);
+
+      expect(sessionRevoker.revokeUserSessions).toHaveBeenCalledWith(30);
+    });
+
+    it('does not revoke sockets when the email transaction fails', async () => {
+      const transactionError = new Error('transaction failed');
+      let persistedUser = { ...existingUser };
+      let stagedUser = { ...existingUser };
+      const transactionalPrisma = {
+        ...prisma,
+        usuario: {
+          ...prisma.usuario,
+          findUnique: jest.fn().mockImplementation(async () => ({
+            ...stagedUser,
+          })),
+          update: jest.fn().mockImplementation(async ({ data }) => {
+            stagedUser = {
+              ...stagedUser,
+              ...data,
+              authVersion:
+                stagedUser.authVersion + (data.authVersion?.increment ?? 0),
+            };
+            return { ...stagedUser };
+          }),
+        },
+        passwordResetToken: {
+          ...prisma.passwordResetToken,
+          updateMany: jest.fn().mockRejectedValue(transactionError),
+        },
+      };
+      prisma.usuario.findUnique.mockResolvedValue(existingUser);
+      prisma.usuario.findFirst.mockResolvedValue(null);
+      prisma.$transaction.mockImplementation(async (callback) => {
+        const result = await callback(transactionalPrisma);
+        persistedUser = { ...stagedUser };
+        return result;
+      });
+
+      await expect(
+        service.updateUser(30, { email: 'novo@email.com' }, 0),
+      ).rejects.toBe(transactionError);
+
+      expect(persistedUser).toMatchObject({
+        email: 'cliente@email.com',
+        authVersion: 0,
+      });
+      expect(stagedUser).toMatchObject({
+        email: 'novo@email.com',
+        authVersion: 1,
+      });
+      expect(sessionRevoker.revokeUserSessions).not.toHaveBeenCalled();
     });
   });
 });

@@ -147,8 +147,8 @@ Fluxo do evento `message:send`:
 3. delega a criação ao `MessagesService.sendMessage`, que aplica as mesmas
    regras do `POST /api/messages` e **persiste no PostgreSQL**;
 4. somente após o sucesso emite `message:sent` ao remetente;
-5. somente após o sucesso emite `message:received` a todas as conexões do
-   destinatário (via sala `usuario:<id>`).
+5. somente após o sucesso emite `message:received` a cada socket do
+   destinatário cuja autorização atual foi revalidada.
 
 O handler **não retorna valor**: o retorno de um `@SubscribeMessage` seria
 convertido pelo Nest em um segundo evento, duplicando `message:sent`. A
@@ -157,24 +157,38 @@ emissão explícita é a única origem dos eventos de sucesso.
 Se o destinatário estiver offline, nada é emitido e **nenhum erro** é gerado:
 a mensagem já está persistida e é recuperada via REST.
 
-### Revalidação de autorização (ETAPA 7D.1)
+### Revalidação e revogação de autorização (ETAPA 7D.1)
 O handshake autoriza a conexão, mas o socket **não fica autorizado para
-sempre**. Antes de processar `message:send`, o gateway revalida:
+sempre**. O gateway revalida ao registrar a conexão, antes de responder a
+`ping`, antes/depois de processar `message:send` e antes de cada entrega
+privada:
 
 - a **expiração do JWT** — `client.data` guarda só o `exp` (epoch), nunca o
 token, mantendo o socket sem qualquer credencial em memória;
 - o **estado vigente da conta e do perfil**, pelo mesmo
   `UsersService.findAuthorizationStateById` que o `RolesGuard` usa.
 
-Perdendo a autorização (JWT expirado, usuário desativado, ou perfil de
-barbeiro desativado depois da conexão), o socket é removido do
-`MessagesSocketRegistry`, recebe `exception: Não autorizado.` e é desconectado.
-A ordem é deliberada: **emitir o erro e só então desconectar**, senão o motivo
-se perderia junto com o socket. Nada é persistido pela tentativa recusada.
+Perdendo a autorização (JWT expirado, `authVersion` alterado, usuário
+desativado ou perfil de barbeiro desativado depois da conexão), o socket é
+removido do `MessagesSocketRegistry`, recebe `exception: Não autorizado.` e é
+desconectado. A ordem é deliberada: **emitir o erro e só então desconectar**,
+senão o motivo se perderia junto com o socket. Cada entrega privada consulta a
+autorização atual e envia diretamente apenas aos sockets validados.
 
-Essa é a única extensão de comportamento: não há Redis, tabela de sessões,
-fila, heartbeat periódico nem regra de autorização reescrita — a decisão
-continua centralizada em `UsersService`/`RolesGuard`.
+Uma alteração efetiva de e-mail incrementa `authVersion` junto com o perfil e
+invalida tokens pendentes na mesma transação. Após o commit, `UsersService`
+resolve o token `MESSAGES_GATEWAY` via `ModuleRef` (padrão já usado por
+`MessagesService`) para desconectar sockets locais do titular, sem dependência
+circular. Uma falha da transação não publica a revogação.
+
+O registry e a desconexão são locais ao processo: o Redis configurado para
+rate limiting HTTP não é um adaptador Socket.IO e não permite desconectar
+imediatamente sockets mantidos por outra instância. Nessas instâncias, a
+checagem do estado atual impede novas entregas privadas aos sockets revogados
+quando uma mensagem for emitida; a desconexão remota imediata não é garantida.
+
+Não há tabela de sessões, fila, heartbeat periódico nem regra de autorização
+reescrita — a decisão continua centralizada em `UsersService`/`RolesGuard`.
 
 Não há fila offline, notificações, unread-count via socket, presença ou typing
 indicator nesta etapa. Quando o frontend conectar de origem cruzada, o CORS do

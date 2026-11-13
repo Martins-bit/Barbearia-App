@@ -48,6 +48,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       sub: userId,
       telefone: payload.telefone,
       tipoUsuario: payload.tipoUsuario,
+      authVersion: tokenVersion,
     };
   }
 }

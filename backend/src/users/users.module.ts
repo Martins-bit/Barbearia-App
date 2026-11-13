@@ -3,6 +3,8 @@ import { JwtGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
+import { PrivacyRequestsService } from './privacy-requests/privacy-requests.service';
+import { TemporaryExportStorageService } from './temporary-export-storage.service';
 
 /**
  * Os guards são PROVIDERS locais (e não importados do AuthModule) para
@@ -12,7 +14,13 @@ import { UsersService } from './users.service';
  */
 @Module({
   controllers: [UsersController],
-  providers: [UsersService, JwtGuard, RolesGuard],
+  providers: [
+    UsersService,
+    PrivacyRequestsService,
+    TemporaryExportStorageService,
+    JwtGuard,
+    RolesGuard,
+  ],
   exports: [UsersService],
 })
 export class UsersModule {}

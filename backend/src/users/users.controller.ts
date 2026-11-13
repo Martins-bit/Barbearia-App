@@ -1,17 +1,22 @@
 import {
   Body,
+  BadRequestException,
   Controller,
   Get,
+  Headers,
   Header,
   HttpException,
-  InternalServerErrorException,
   HttpCode,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
   Patch,
+  Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { isUUID } from 'class-validator';
 import { TipoUsuario } from '../generated/prisma/enums';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -20,6 +25,12 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { PersonalDataExport, UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { CreatePrivacyRequestDto } from './privacy-requests/dto/create-privacy-request.dto';
+import { ListPrivacyRequestsQueryDto } from './privacy-requests/dto/list-privacy-requests-query.dto';
+import { PrivacyRequestsService } from './privacy-requests/privacy-requests.service';
+
+const authenticatedUserTracker = (req: { user?: { sub?: unknown } }) =>
+  `usuario:${String(req?.user?.sub ?? 'anon')}`;
 
 /**
  * Recurso do próprio usuário autenticado (API.md §13).
@@ -44,7 +55,48 @@ import { UserResponseDto } from './dto/user-response.dto';
 export class UsersController {
   private readonly logger = new Logger(UsersController.name);
 
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly privacyRequestsService: PrivacyRequestsService,
+  ) {}
+
+  @Post('me/requests')
+  @HttpCode(201)
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    default: {
+      limit: 5,
+      ttl: 60_000,
+      getTracker: authenticatedUserTracker,
+    },
+  })
+  async createPrivacyRequest(
+    @CurrentUser() userId: number,
+    @Body() dto: CreatePrivacyRequestDto,
+    @Headers('idempotency-key') idempotencyKey: string | undefined,
+  ) {
+    if (!idempotencyKey || !isUUID(idempotencyKey, '4')) {
+      throw new BadRequestException('Cabeçalho Idempotency-Key inválido.');
+    }
+
+    return this.privacyRequestsService.create(userId, dto, idempotencyKey);
+  }
+
+  @Get('me/requests')
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    default: {
+      limit: 30,
+      ttl: 60_000,
+      getTracker: authenticatedUserTracker,
+    },
+  })
+  async findMyPrivacyRequests(
+    @CurrentUser() userId: number,
+    @Query() query: ListPrivacyRequestsQueryDto,
+  ) {
+    return this.privacyRequestsService.findMine(userId, query);
+  }
 
   /**
    * GET /users/me/export — gera uma cópia JSON síncrona dos dados acessíveis
@@ -61,8 +113,7 @@ export class UsersController {
     default: {
       limit: 3,
       ttl: 60_000,
-      getTracker: (req: { user?: { sub?: unknown } }) =>
-        `usuario:${String(req?.user?.sub ?? 'anon')}`,
+      getTracker: authenticatedUserTracker,
     },
   })
   async exportMe(
@@ -104,8 +155,9 @@ export class UsersController {
   @HttpCode(200)
   async updateMe(
     @CurrentUser() userId: number,
+    @CurrentUser('authVersion') authVersion: number,
     @Body() dto: UpdateUserDto,
   ): Promise<UserResponseDto> {
-    return this.usersService.updateUser(userId, dto);
+    return this.usersService.updateUser(userId, dto, authVersion);
   }
 }

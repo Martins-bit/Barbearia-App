@@ -328,11 +328,63 @@ test('runner E2E interrompe antes do Jest em configuração inválida', () => {
   });
 });
 
-test('runner E2E não permite substituir o setup Jest protegido', () => {
-  assert.throws(
-    () => runE2ETests({ args: ['--config', 'unsafe.json'] }),
-    /E2E bloqueado/,
-  );
+test('runner E2E rejeita opções protegidas em todas as formas e argumentos desconhecidos', () => {
+  const invalidArguments = [
+    ['--config', 'unsafe.json'],
+    ['--config=unsafe.json'],
+    ['-c', 'unsafe.json'],
+    ['-c=unsafe.json'],
+    ['--setupFiles', 'unsafe.js'],
+    ['--setupFiles=unsafe.js'],
+    ['--setup-files', 'unsafe.js'],
+    ['--setup-files=unsafe.js'],
+    ['--setupFilesAfterEnv', 'unsafe.js'],
+    ['--setupFilesAfterEnv=unsafe.js'],
+    ['--setup-files-after-env', 'unsafe.js'],
+    ['--setup-files-after-env=unsafe.js'],
+    ['--globalSetup', 'unsafe.js'],
+    ['--global-setup=unsafe.js'],
+    ['--resolver=unsafe.js'],
+    ['--maxWorkers=1'],
+    ['--', '--setup-files=unsafe.js'],
+  ];
+
+  for (const args of invalidArguments) {
+    let spawned = false;
+    assert.throws(
+      () =>
+        runE2ETests({
+          args,
+          spawn: () => {
+            spawned = true;
+            return { status: 0 };
+          },
+        }),
+      /E2E bloqueado/,
+      `deveria rejeitar: ${args.join(' ')}`,
+    );
+    assert.equal(spawned, false, `não deve iniciar Jest: ${args.join(' ')}`);
+  }
+});
+
+test('runner E2E permite apenas filtros e opções de execução aprovados', () => {
+  withConfig(asEnvFile(testConfig()), (configPath) => {
+    let captured;
+    const status = runE2ETests({
+      configPath,
+      args: ['--runInBand', '--testNamePattern', 'solicitação', 'privacy'],
+      spawn: (...args) => {
+        captured = args;
+        return { status: 0 };
+      },
+    });
+
+    assert.equal(status, 0);
+    assert.ok(captured[1].includes('--runInBand'));
+    assert.ok(captured[1].includes('--testNamePattern'));
+    assert.ok(captured[1].includes('solicitação'));
+    assert.ok(captured[1].includes('privacy'));
+  });
 });
 
 test('exige confirmação explícita antes de carregar configuração de migration E2E', () => {
@@ -430,19 +482,27 @@ test('runner de migrations passa configuração dedicada e não inicia se invál
 });
 
 test('runner de migrations rejeita configuração Prisma alternativa antes do spawn', () => {
-  let spawned = false;
-  assert.throws(
-    () =>
-      runE2EMigrations({
-        args: ['--config=unsafe.prisma.config.ts'],
-        spawn: () => {
-          spawned = true;
-          return { status: 0 };
-        },
-      }),
-    /E2E bloqueado/,
-  );
-  assert.equal(spawned, false);
+  for (const args of [
+    ['--config=unsafe.prisma.config.ts'],
+    ['-c', 'unsafe.prisma.config.ts'],
+    ['--schema', 'unsafe.prisma'],
+    ['--', '--config=unsafe.prisma.config.ts'],
+  ]) {
+    let spawned = false;
+    assert.throws(
+      () =>
+        runE2EMigrations({
+          args,
+          spawn: () => {
+            spawned = true;
+            return { status: 0 };
+          },
+        }),
+      /E2E bloqueado/,
+      `deveria rejeitar: ${args.join(' ')}`,
+    );
+    assert.equal(spawned, false, `não deve iniciar Prisma: ${args.join(' ')}`);
+  }
 });
 
 test('marcador manual não autentica o runner nem dispensa validação do destino', () => {

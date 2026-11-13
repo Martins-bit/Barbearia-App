@@ -3,10 +3,16 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
 import { Prisma } from '../generated/prisma/client';
-import { TipoUsuario } from '../generated/prisma/enums';
+import {
+  CategoriaSolicitacaoTitular,
+  StatusSolicitacaoTitular,
+  TipoUsuario,
+} from '../generated/prisma/enums';
 import { normalizeEmail } from '../common/utils/email.util';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
@@ -79,11 +85,19 @@ export interface PersonalDataExport {
     claimStatus?: string;
     claimExpiraEm?: string;
   }>;
+  solicitacoes: Array<{
+    categoria: CategoriaSolicitacaoTitular;
+    status: StatusSolicitacaoTitular;
+    dataCriacao: string;
+  }>;
 }
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly moduleRef?: ModuleRef,
+  ) {}
 
   private readonly publicUserSelect = {
     id: true,
@@ -204,7 +218,13 @@ export class UsersService {
           }
         : { ativo: true, tipoUsuario: TipoUsuario.CLIENTE };
 
-    const [appointments, waitlist, messages, notifications] =
+    const [
+      appointments,
+      waitlist,
+      messages,
+      notifications,
+      privacyRequests,
+    ] =
       await Promise.all([
         this.prisma.agendamento.findMany({
           where: { OR: appointmentOwnership },
@@ -284,6 +304,15 @@ export class UsersService {
             },
           },
         }),
+        this.prisma.solicitacaoTitular.findMany({
+          where: { titularId: userId },
+          orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
+          select: {
+            categoria: true,
+            status: true,
+            dataCriacao: true,
+          },
+        }),
       ]);
 
     const barberProfile = user.barbeiro
@@ -320,7 +349,7 @@ export class UsersService {
         'O conteúdo das mensagens, observações de agendamentos, motivos de bloqueios/emergências e textos livres de notificações foram omitidos para reduzir a exposição de dados de terceiros; o escopo ainda depende de decisão do responsável pelo tratamento.',
         'Mensagens apagadas para todos ou ocultadas para este usuário não são incluídas.',
         'Tokens, hashes de senha, identificadores internos de autenticação, credenciais e segredos não são incluídos.',
-        'Solicitações de titulares e preferências não persistidas não estão disponíveis para exportação.',
+        'Preferências não persistidas não estão disponíveis para exportação.',
         'Notificações já limpas não são incluídas, pois não são exibidas pelo endpoint atual do usuário.',
       ],
       conta: {
@@ -385,6 +414,11 @@ export class UsersService {
               claimExpiraEm: notification.claim.expiraEm.toISOString(),
             }
           : {}),
+      })),
+      solicitacoes: privacyRequests.map((request) => ({
+        categoria: request.categoria,
+        status: request.status,
+        dataCriacao: request.dataCriacao.toISOString(),
       })),
     };
   }
@@ -617,9 +651,20 @@ export class UsersService {
    * - Telefone/email duplicados dos outros usuários são tratados como 409
    *   (P2002 do Prisma tratado de forma centralizada).
    */
-  async updateUser(id: number, data: UpdateUserDto): Promise<UserResponseDto> {
+  async updateUser(
+    id: number,
+    data: UpdateUserDto,
+    expectedAuthVersion?: number,
+  ): Promise<UserResponseDto> {
     const existingUser = await this.prisma.usuario.findUnique({
       where: { id },
+      select: {
+        id: true,
+        nome: true,
+        telefone: true,
+        email: true,
+        authVersion: true,
+      },
     });
 
     if (!existingUser) {
@@ -643,60 +688,120 @@ export class UsersService {
       );
     }
 
-    // 2) Conflito de unicidade: verifica-se antes a escrita, mantendo a
-    //    consistência same-pattern do cadastro (register).
-    const telefoneAlvo =
-      updates.telefone !== undefined ? updates.telefone : existingUser.telefone;
-    if (telefoneAlvo !== existingUser.telefone) {
-      const pegouTelefone = await this.prisma.usuario.findUnique({
-        where: { telefone: telefoneAlvo },
-      });
-      if (pegouTelefone && pegouTelefone.id !== id) {
-        throw new ConflictException('Telefone já cadastrado.');
-      }
-    }
+    const tokenAuthVersion =
+      expectedAuthVersion ?? existingUser.authVersion ?? 0;
 
-    const currentEmail =
-      existingUser.email === null ? null : normalizeEmail(existingUser.email);
-    const emailAlvo = updates.email;
-    const emailChanged =
-      updates.email !== undefined && updates.email !== currentEmail;
-    if (
-      !emailChanged &&
-      updates.email !== undefined &&
-      existingUser.email !== null
-    ) {
-      updates.email = existingUser.email;
-    }
-
-    if (emailAlvo !== undefined && emailAlvo !== null) {
-      const pegouEmail = await this.prisma.usuario.findFirst({
-        where: {
-          email: { equals: emailAlvo, mode: 'insensitive' },
-          id: { not: id },
-        },
-        select: { id: true },
-      });
-      if (pegouEmail) {
-        throw new ConflictException('E-mail já cadastrado em outra conta.');
-      }
-    }
-
-    // 3) Leitura por observador de escrita: caso concorrência gere
-    //    PrismaClientKnownRequestError P2002 (email/telefone único), converte
-    //    em 409 com mensagem acessível.
     try {
-      const usuarioAtualizado = emailChanged
-        ? await this.prisma.$transaction(async (transaction) => {
-            const updatedUser = await transaction.usuario.update({
-              where: { id },
-              data: {
-                ...updates,
-                emailVerificadoEm: null,
-                emailConfirmacaoObrigatoria: updates.email !== null,
-              },
-              select: this.publicUserSelect,
+      const { usuarioAtualizado, emailChanged } =
+        await this.prisma.$transaction(async (transaction) => {
+          await transaction.$queryRaw`
+            SELECT "id" FROM "Usuario" WHERE "id" = ${id} FOR UPDATE
+          `;
+
+          const currentUser = await transaction.usuario.findUnique({
+            where: { id },
+            select: {
+              id: true,
+              nome: true,
+              telefone: true,
+              email: true,
+              authVersion: true,
+            },
+          });
+
+          if (!currentUser) {
+            throw new NotFoundException(
+              `Usuário com ID ${id} não encontrado.`,
+            );
+          }
+
+          const currentAuthVersion = currentUser.authVersion ?? 0;
+          if (currentAuthVersion !== tokenAuthVersion) {
+            throw new ConflictException(
+              'O perfil foi alterado durante a atualização. Atualize os dados e tente novamente.',
+            );
+          }
+
+          const requestedEmail =
+            updates.email === undefined || updates.email === null
+              ? updates.email
+              : normalizeEmail(updates.email);
+          const normalizeNullableEmail = (email: string | null) =>
+            email === null ? null : normalizeEmail(email);
+
+          const staleName =
+            updates.nome !== undefined &&
+            existingUser.nome !== currentUser.nome &&
+            updates.nome !== currentUser.nome;
+          const stalePhone =
+            updates.telefone !== undefined &&
+            existingUser.telefone !== currentUser.telefone &&
+            updates.telefone !== currentUser.telefone;
+          const staleEmail =
+            requestedEmail !== undefined &&
+            normalizeNullableEmail(existingUser.email) !==
+              normalizeNullableEmail(currentUser.email) &&
+            normalizeNullableEmail(requestedEmail) !==
+              normalizeNullableEmail(currentUser.email);
+
+          if (staleName || stalePhone || staleEmail) {
+            throw new ConflictException(
+              'O perfil foi alterado durante a atualização. Atualize os dados e tente novamente.',
+            );
+          }
+
+          const currentEmail = normalizeNullableEmail(currentUser.email);
+          const emailChanged =
+            requestedEmail !== undefined && requestedEmail !== currentEmail;
+
+          if (
+            updates.telefone !== undefined &&
+            updates.telefone !== currentUser.telefone
+          ) {
+            const existingPhone = await transaction.usuario.findUnique({
+              where: { telefone: updates.telefone },
+              select: { id: true },
             });
+            if (existingPhone && existingPhone.id !== id) {
+              throw new ConflictException('Telefone já cadastrado.');
+            }
+          }
+
+          if (emailChanged && requestedEmail !== null) {
+            const existingEmail = await transaction.usuario.findFirst({
+              where: {
+                email: { equals: requestedEmail, mode: 'insensitive' },
+                id: { not: id },
+              },
+              select: { id: true },
+            });
+            if (existingEmail) {
+              throw new ConflictException(
+                'E-mail já cadastrado em outra conta.',
+              );
+            }
+          }
+
+          if (updates.email !== undefined && !emailChanged) {
+            updates.email = currentUser.email;
+          } else if (updates.email !== undefined) {
+            updates.email = requestedEmail;
+          }
+
+          const updatedUser = await transaction.usuario.update({
+            where: { id },
+            data: emailChanged
+              ? {
+                  ...updates,
+                  authVersion: { increment: 1 },
+                  emailVerificadoEm: null,
+                  emailConfirmacaoObrigatoria: updates.email !== null,
+                }
+              : updates,
+            select: this.publicUserSelect,
+          });
+
+          if (emailChanged) {
             await transaction.emailVerificationToken.updateMany({
               where: { usuarioId: id, usadoEm: null },
               data: { usadoEm: new Date() },
@@ -705,13 +810,14 @@ export class UsersService {
               where: { usuarioId: id, usadoEm: null },
               data: { usadoEm: new Date() },
             });
-            return updatedUser;
-          })
-        : await this.prisma.usuario.update({
-            where: { id },
-            data: updates,
-            select: this.publicUserSelect,
-          });
+          }
+
+          return { usuarioAtualizado: updatedUser, emailChanged };
+        });
+
+      if (emailChanged) {
+        this.revokeWebSocketSessions(id);
+      }
 
       return this.sanitizeUser(usuarioAtualizado) as UserResponseDto;
     } catch (error) {
@@ -726,6 +832,22 @@ export class UsersService {
       }
       throw error;
     }
+  }
+
+  private revokeWebSocketSessions(usuarioId: number): void {
+    if (!this.moduleRef) {
+      throw new Error('ModuleRef indisponível para revogar sessões WebSocket.');
+    }
+
+    const gateway = this.moduleRef.get<{
+      revokeUserSessions: (userId: number) => void;
+    }>('MESSAGES_GATEWAY', { strict: false });
+
+    if (!gateway || typeof gateway.revokeUserSessions !== 'function') {
+      throw new Error('Gateway de mensagens indisponível para revogar sessões.');
+    }
+
+    gateway.revokeUserSessions(usuarioId);
   }
 
   /**

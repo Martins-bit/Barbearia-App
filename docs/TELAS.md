@@ -644,32 +644,38 @@ oferecer acesso rápido aos recursos existentes.
   claras suas limitações;
 - Acessar o Perfil para corrigir nome, telefone e e-mail conforme as regras
   existentes;
-- Informar que pedidos de exclusão ou anonimização dependem de análise e não
-  são executados nesta tela.
+- Registrar uma solicitação escolhendo uma das categorias fechadas: acesso e
+  exportação, correção, exclusão ou anonimização, e outras solicitações. O
+  formulário não recebe descrição livre nem anexos;
+- Informar que o registro de pedidos de exclusão ou anonimização não executa
+  essas operações e que qualquer medida depende de análise e procedimento
+  específico.
 
 ### Acompanhamento
 
-A tela apresenta estados previstos para um futuro processo:
+A tela deverá consultar e exibir somente as solicitações do titular autenticado,
+com categoria, status e data de criação, respeitando a paginação da API. Na
+primeira fase, o status será sempre `RECEBIDA`, que significa apenas que o
+registro foi criado, não que o pedido tenha sido analisado ou concluído.
 
-- Recebida;
+Os seguintes estados permanecem previstos para etapas futuras:
+
 - Em análise;
 - Aguardando informações;
 - Atendida;
 - Encerrada.
 
-Enquanto não houver registro persistente, canal de atendimento e responsáveis
-definidos, esses estados deverão ser apresentados somente como etapas previstas,
-nunca como pedidos reais ou status da conta. A tela deverá informar claramente
-que não recebe nem registra solicitações e que o canal de atendimento está
-pendente de definição.
+Esses estados futuros não deverão ser apresentados como status atuais. O canal
+operacional de atendimento e os prazos permanecem pendentes de definição.
 
 ### Segurança e responsividade
 
-A área deverá ser protegida pela autenticação de cliente. A exportação deverá
-reutilizar o endpoint autenticado existente, que identifica o titular pelo JWT.
-A página não deverá solicitar um ID de usuário nem criar formulários que deem a
-entender que uma solicitação foi enviada. A interface deverá funcionar em
-celular, tablet e computador.
+A área deverá ser protegida pela autenticação do titular, tanto para clientes
+quanto para barbeiros. A exportação e as solicitações deverão reutilizar
+endpoints autenticados que identificam o titular pelo JWT. A página não deverá
+solicitar ou enviar um ID de usuário, permitir alteração de status ou exclusão
+de solicitações, nem armazenar a chave de idempotência fora da tentativa em
+memória. A interface deverá funcionar em celular, tablet e computador.
 
 # 2. ÁREA DO BARBEIRO
 
@@ -1162,9 +1168,11 @@ Os relatórios são exclusivamente operacionais.
 
 A área de privacidade deverá oferecer as mesmas orientações e recursos
 disponíveis ao cliente, respeitando a autenticação de barbeiro. A exportação
-reutiliza a resposta já limitada ao próprio titular. Estados de solicitação
-continuam sendo apenas etapas previstas enquanto não existir acompanhamento
-persistente e processo operacional definido.
+e o registro/consulta de solicitações devem reutilizar endpoints limitados ao
+próprio titular pelo JWT. A primeira fase oferece as mesmas categorias fechadas
+e exibe categoria, status e data de criação; o status permanece `RECEBIDA` até
+que um processo futuro seja aprovado e implementado. Não é permitido alterar
+status ou excluir solicitações pela tela.
 
 # 3. TELAS DE AUTENTICAÇÃO
 

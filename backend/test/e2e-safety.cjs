@@ -18,6 +18,58 @@ function blocked(message) {
   throw new Error(`E2E bloqueado: ${message}`);
 }
 
+function assertSafeE2EJestArgs(args = []) {
+  const booleanOptions = new Set(['runinband', 'verbose', 'silent']);
+  const valueOptions = new Set(['testnamepattern']);
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === '--') {
+      blocked('o separador -- não é permitido nos argumentos do Jest.');
+    }
+
+    if (!argument.startsWith('-')) {
+      continue;
+    }
+
+    let option;
+    let value;
+    if (argument.startsWith('--')) {
+      const equalsIndex = argument.indexOf('=');
+      option =
+        equalsIndex === -1 ? argument.slice(2) : argument.slice(2, equalsIndex);
+      value = equalsIndex === -1 ? undefined : argument.slice(equalsIndex + 1);
+    } else if (argument === '-i') {
+      option = 'runInBand';
+    } else if (argument === '-t') {
+      option = 'testNamePattern';
+    } else if (argument.startsWith('-t=')) {
+      option = 'testNamePattern';
+      value = argument.slice(3);
+    } else {
+      blocked('opção de linha de comando não permitida no runner Jest.');
+    }
+
+    const normalizedOption = option.replace(/[-_]/g, '').toLowerCase();
+    if (booleanOptions.has(normalizedOption) && value === undefined) {
+      continue;
+    }
+    if (valueOptions.has(normalizedOption)) {
+      if (value === undefined) {
+        value = args[index + 1];
+        if (typeof value !== 'string' || value.startsWith('-')) {
+          blocked('valor inválido para filtro de nome de teste.');
+        }
+        index += 1;
+      }
+      if (value.length > 0) {
+        continue;
+      }
+    }
+    blocked('opção de linha de comando não permitida no runner Jest.');
+  }
+}
+
 function validateDatabaseUrl(
   connectionString,
   { databaseName, username, allowLocalhost = false },
@@ -208,6 +260,7 @@ module.exports = {
   E2E_MIGRATION_DATABASE_USER,
   E2E_TEST_DATABASE_USER,
   applyE2EConfig,
+  assertSafeE2EJestArgs,
   loadE2EConfig,
   loadE2EMigrationConfig,
   sanitizedDatabaseEnvironment,

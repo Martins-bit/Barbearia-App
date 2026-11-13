@@ -22,6 +22,26 @@ export type StatusListaEspera =
 
 export type StatusWaitlistClaim = 'ATIVO' | 'EXPIRADO' | 'ACEITO' | 'RECUSADO'
 
+export type CategoriaSolicitacaoTitular =
+  | 'ACESSO_EXPORTACAO'
+  | 'CORRECAO'
+  | 'EXCLUSAO_ANONIMIZACAO'
+  | 'OUTRA'
+
+export type StatusSolicitacaoTitular = 'RECEBIDA'
+
+export interface SolicitacaoTitular {
+  id: number
+  categoria: CategoriaSolicitacaoTitular
+  status: StatusSolicitacaoTitular
+  dataCriacao: string
+}
+
+export interface PaginaSolicitacoesTitular {
+  solicitacoes: SolicitacaoTitular[]
+  proximoCursor: number | null
+}
+
 export type TipoNotificacao =
   | 'WAITLIST_OPPORTUNITY'
   | 'AGENDAMENTO'
@@ -115,6 +135,11 @@ export interface PersonalDataExport {
     dataLeitura: string | null
     claimStatus?: StatusWaitlistClaim
     claimExpiraEm?: string
+  }>
+  solicitacoes: Array<{
+    categoria: CategoriaSolicitacaoTitular
+    status: StatusSolicitacaoTitular
+    dataCriacao: string
   }>
 }
 
