@@ -783,6 +783,7 @@ novamente as notificações e o contador de não lidas após a operação.
 ---
 
 # 12. MENSAGENS
+
 Comunicação persistente entre CLIENTE e BARBEIRO. Esta etapa implementa apenas a
 API REST e os eventos de mensagens em tempo real via WebSocket/Socket.IO.
 Mensagens podem ser enviadas, consultadas, marcadas como lidas e excluídas
@@ -793,18 +794,22 @@ O identificador do remetente é **sempre derivado do JWT** (`sub`). O frontend
 nunca informa quem envia; informa apenas o destinatário e o conteúdo.
 
 ## 12.1. Enviar mensagem
+
 `POST /api/messages`
 
 ### Permissão
+
 CLIENTE ou BARBEIRO autenticado e ativo. O barbeiro precisa possuir perfil ativo.
 
 ### Dados esperados
+
 - `destinatarioId` — inteiro positivo;
 - `conteudo` — texto.
 
 O `remetenteUsuarioId` **não é aceito** no corpo da requisição (é derivado do JWT).
 
 ### Regra
+
 Somente CLIENTE ↔ BARBEIRO. São rejeitados:
 
 - CLIENTE → CLIENTE;
@@ -816,6 +821,7 @@ Somente CLIENTE ↔ BARBEIRO. São rejeitados:
 O conteúdo é trimado e deve possuir de **1 a 500 caracteres**.
 
 ### Resultado
+
 Retorna a mensagem criada com `remetenteUsuarioId`, `destinatarioUsuarioId`,
 `conteudo`, `lida`, `dataCriacao` e `dataLeitura`. Nenhum dado sensível
 (senha, telefone, e-mail) é retornado.
@@ -823,9 +829,11 @@ Retorna a mensagem criada com `remetenteUsuarioId`, `destinatarioUsuarioId`,
 ---
 
 ## 12.2. Listar conversa com um usuário
+
 `GET /api/messages/:userId`
 
 ### Regra
+
 Somente as mensagens trocadas entre o usuário autenticado e o participante
 informado — conversa isolada por par de participantes. Um terceiro usuário nunca
 aparece no resultado.
@@ -837,14 +845,17 @@ seu perfil também deve estar ativo. O próprio usuário autenticado precisa est
 autorizado, incluindo perfil ativo quando for barbeiro.
 
 ### Ordem
+
 Ordem cronológica **crescente** (`dataCriacao`, com `id` como desempate).
 
 ---
 
 ## 12.3. Listar conversas
+
 `GET /api/messages/conversations`
 
 ### Regra
+
 Retorna somente as conversas das quais o usuário autenticado participa, sempre
 CLIENTE ↔ BARBEIRO e com ambos os participantes ativos. Para barbeiros, isso
 exige conta e perfil ativos. Usuários não autorizados não podem listar conversas.
@@ -852,7 +863,9 @@ Não são criadas conversas artificiais: usuário com quem nunca houve mensagem 
 aparece.
 
 ### Resposta
+
 Cada conversa retorna:
+
 - `usuarioId` — identificador do outro participante;
 - `nome` — nome do outro participante;
 - `tipoUsuario` — `CLIENTE` ou `BARBEIRO`;
@@ -862,12 +875,14 @@ Cada conversa retorna:
   autenticado (mensagens enviadas pelo próprio usuário não contam).
 
 ### Ordenação
+
 A conversa com a mensagem mais recente aparece primeiro (desempate pelo `id`
 da mensagem). Nenhum dado sensível (telefone, e-mail, senha/hash) é exposto.
 
 ---
 
 ## 12.4. Contar mensagens não lidas
+
 `GET /api/messages/unread-count`
 
 Retorna `{ "count": n }`, a quantidade total de mensagens não lidas destinadas
@@ -878,14 +893,17 @@ usuário autenticado e `lida = false`.
 ---
 
 ## 12.5. Marcar mensagem como lida
+
 `PATCH /api/messages/:id/read`
 
 ### Permissão
+
 Somente o **destinatário** da mensagem. O remetente não pode marcar a própria
 mensagem como lida. Mensagem inexistente, de terceiros ou enviada pelo próprio
 remetente retorna 404 genérico.
 
 ### Idempotência
+
 Operação idempotente: define `lida = true` e preenche `dataLeitura`. Repetir a
 operação retorna sucesso **preservando o primeiro `dataLeitura`** — a segunda
 leitura nunca sobrescreve o horário original.
@@ -893,6 +911,7 @@ leitura nunca sobrescreve o horário original.
 ---
 
 ## 12.5.1. Apagar mensagem (REST)
+
 `DELETE /api/messages/:id`
 
 ### Permissão e dados esperados
@@ -924,13 +943,14 @@ participantes conectados e autorizados.
 ---
 
 ## 12.6. Erros do módulo
-| Situação | HTTP |
-| --- | --- |
-| Sem token, token inválido, usuário inativo | 401 |
-| Barbeiro sem perfil ativo (como remetente) | 403 |
-| CLIENTE → CLIENTE, BARBEIRO → BARBEIRO, mensagem para si mesmo | 400 |
-| Conteúdo vazio ou acima de 500 caracteres; payload inválido | 400 |
-| Destinatário inexistente/inativo; conversa ou mensagem não acessível | 404 |
+
+| Situação                                                             | HTTP |
+| -------------------------------------------------------------------- | ---- |
+| Sem token, token inválido, usuário inativo                           | 401  |
+| Barbeiro sem perfil ativo (como remetente)                           | 403  |
+| CLIENTE → CLIENTE, BARBEIRO → BARBEIRO, mensagem para si mesmo       | 400  |
+| Conteúdo vazio ou acima de 500 caracteres; payload inválido          | 400  |
+| Destinatário inexistente/inativo; conversa ou mensagem não acessível | 404  |
 
 ---
 
@@ -941,6 +961,7 @@ Namespace dedicado:
 `/messages` (Socket.IO)
 
 ### Autenticação no handshake
+
 - A conexão exige **JWT válido**, informado em `auth.token` (com ou sem o
   prefixo `Bearer`) ou no header `Authorization`.
 - O JWT é validado com o mesmo serviço/configuração de autenticação do REST
@@ -953,6 +974,7 @@ Namespace dedicado:
   `Não autorizado.` (sem expor o motivo).
 
 ### Comportamento implementado
+
 - Registro da conexão/desconexão **em memória** (mapeamento usuário →
   sockets), para permitir localizar as conexões de um usuário;
   conexões **não são persistidas** no PostgreSQL (nenhuma tabela/migration).
@@ -969,9 +991,11 @@ Namespace dedicado:
 ## 12.8. WebSocket — envio de mensagens em tempo real (ETAPA 7C.2)
 
 ### Enviar mensagem (cliente → servidor)
+
 Evento: `message:send`
 
 Payload:
+
 ```json
 { "destinatarioId": 123, "conteudo": "Olá!" }
 ```
@@ -981,6 +1005,7 @@ handshake JWT. Campos de identidade no payload (`remetenteId`,
 `remetenteUsuarioId`, `usuarioId`, `tipoUsuario`) são **rejeitados**.
 
 ### Confirmação ao remetente (servidor → remetente)
+
 Evento: `message:sent`
 
 Payload: a mensagem persistida, no mesmo formato seguro do REST
@@ -988,6 +1013,7 @@ Payload: a mensagem persistida, no mesmo formato seguro do REST
 `dataCriacao`, `dataLeitura`). Nunca inclui senha/hash/JWT ou dados internos.
 
 ### Entrega ao destinatário (servidor → destinatário)
+
 Evento: `message:received`
 
 O mesmo payload de `message:sent`, entregue a **todas as conexões ativas** do
@@ -995,12 +1021,14 @@ destinatário (um dispositivo, várias abas ou vários dispositivos recebem a
 mesma mensagem).
 
 ### Regras aplicadas
+
 São exatamente as mesmas do `POST /api/messages`, pois o gateway delega ao
 `MessagesService`: somente CLIENTE ↔ BARBEIRO (sem CLIENTE→CLIENTE,
 BARBEIRO→BARBEIRO ou autoenvio), destinatário existente e ativo, remetente
 ativo, BARBEIRO com perfil ativo e conteúdo de 1 a 500 caracteres após trim.
 
 ### Ordem de execução
+
 1. autenticar o socket (handshake);
 2. validar o payload;
 3. **persistir** a mensagem no PostgreSQL;
@@ -1014,17 +1042,20 @@ Nunca há emissão de sucesso antes da persistência. Uma única chamada
 destinatário.
 
 ### Destinatário offline
+
 A mensagem é **persistida normalmente** e **nenhum erro é gerado** por não
 haver socket conectado. Não existe fila offline nesta etapa: a mensagem é
 recuperada depois via REST (`GET /api/messages/:userId`).
 
 ### Erros
+
 Validações e violações de regra de negócio resultam em evento `exception` com
 mensagem pública e genérica (ex.: `Não autorizado.`, `Dados inválidos.` ou a
 mensagem de regra já usada pelo REST). Não são expostos stack trace, SQL, JWT,
 senha ou hash.
 
 ### Fora do escopo desta etapa
+
 Comando de exclusão via WebSocket, leitura e `unread-count` via socket,
 sincronização de leitura em tempo real, fila offline, presença online/offline,
 typing indicator, Redis, filas, push, e-mail, WhatsApp, anexos e edição.
@@ -1042,20 +1073,21 @@ O gateway revalida a autorização ao registrar a conexão, antes de responder a
 privada (`message:sent`, `message:received` e `message:deleted`):
 
 1. **Expiração do JWT** — o handshake guarda no socket apenas o instante de
-expiração (`exp`), **nunca o token**. Se o JWT expirar durante a conexão, o
-envio é recusado e o socket é encerrado.
+   expiração (`exp`), **nunca o token**. Se o JWT expirar durante a conexão, o
+   envio é recusado e o socket é encerrado.
 2. **Estado atual da conta/perfil** — a autorização é reconferida pelo mesmo
-`UsersService.findAuthorizationStateById` usado pelo `RolesGuard`: usuário
-desativado após a conexão ou BARBEIRO cujo perfil foi desativado deixa de
-poder enviar.
+   `UsersService.findAuthorizationStateById` usado pelo `RolesGuard`: usuário
+   desativado após a conexão ou BARBEIRO cujo perfil foi desativado deixa de
+   poder enviar.
 
 Nenhuma configuração de JWT é duplicada, nada é persistido (sem Redis, sem
 sessões, sem tabelas) e nenhuma regra de autorização é reescrita.
 
 Quando a autorização deixa de valer:
+
 - o socket recebe o evento `exception` com `Não autorizado.`;
 - o socket é **desconectado** e **removido do registro** (não recebe mais
-entregas como destinatário);
+  entregas como destinatário);
 - **nada é persistido** pela tentativa recusada.
 
 A recusa é comunicada antes da desconexão, para que o motivo chegue ao
@@ -1070,6 +1102,7 @@ autorização antes de uma nova entrega privada impede que sockets obsoletos
 recebam esses eventos quando a instância consulta o estado atualizado.
 
 ### Observação de integração (futuro)
+
 O servidor HTTP atual não configura CORS; quando o frontend (browser)
 conectar de outra origem, o CORS do gateway WebSocket deverá ser habilitado
 na integração do frontend.
@@ -1132,11 +1165,11 @@ Usuário autenticado (`CLIENTE` ou `BARBEIRO`).
 
 Todos os campos são opcionais; ao menos um deve ser enviado.
 
-| Campo      | Tipo             | Regras                                          |
-| ---------- | ---------------- | ----------------------------------------------- |
-| `nome`     | `string`         | 2 a 120 caracteres                              |
-| `telefone` | `string`         | Apenas dígitos, 10 ou 11 caracteres             |
-| `email`    | `string \| null` | E-mail válido; `null` remove o e-mail da conta  |
+| Campo      | Tipo             | Regras                                         |
+| ---------- | ---------------- | ---------------------------------------------- |
+| `nome`     | `string`         | 2 a 120 caracteres                             |
+| `telefone` | `string`         | Apenas dígitos, 10 ou 11 caracteres            |
+| `email`    | `string \| null` | E-mail válido; `null` remove o e-mail da conta |
 
 ### Resultado
 
@@ -1166,13 +1199,13 @@ normalizado, ou alterar somente nome/telefone, não revoga sessões.
 
 ### Erros
 
-| Situação                                              | Status | Observação                              |
-| ----------------------------------------------------- | ------ | --------------------------------------- |
-| Autenticação ausente ou inválida                       | `401`  | Token ausente, expirado ou malformado  |
-| Conta ou perfil inativo                               | `403`  | Revalidação a cada requisição           |
-| Corpo sem campos válidos ou campo não permitido        | `400`  | Validação do DTO                        |
-| Telefone ou e-mail já usado por outra conta           | `409`  | Conflito de unicidade                   |
-| Perfil ou `authVersion` alterado durante a atualização | `409`  | Reenvie os dados atuais do perfil       |
+| Situação                                               | Status | Observação                            |
+| ------------------------------------------------------ | ------ | ------------------------------------- |
+| Autenticação ausente ou inválida                       | `401`  | Token ausente, expirado ou malformado |
+| Conta ou perfil inativo                                | `403`  | Revalidação a cada requisição         |
+| Corpo sem campos válidos ou campo não permitido        | `400`  | Validação do DTO                      |
+| Telefone ou e-mail já usado por outra conta            | `409`  | Conflito de unicidade                 |
+| Perfil ou `authVersion` alterado durante a atualização | `409`  | Reenvie os dados atuais do perfil     |
 
 Observação sobre o `409`: a mensagem nomeia o campo em conflito apenas quando
 ele pode ser determinado com segurança a partir do erro de unicidade do
@@ -1218,10 +1251,38 @@ criação; a chave de idempotência não é exportada.
 
 Falhas inesperadas de geração retornam uma mensagem genérica; detalhes da
 exceção não são enviados na resposta nem incluídos no log específico da rota.
+O backend mantém um lock Redis distribuído por titular durante toda a geração e
+até a resposta HTTP terminar. Outra exportação simultânea do mesmo titular
+retorna `409 Conflict`; se o Redis estiver indisponível, a solicitação falha
+fechado com `503 Service Unavailable`. Perda do lock cancela a geração ou
+interrompe a resposta em andamento. Desconexão do cliente cancela a geração
+após as consultas já iniciadas terminarem.
 
-O endpoint não cria arquivo persistente no servidor. A interface gera o arquivo
-JSON no navegador a partir da resposta. O arquivo baixado fica sob controle do
-dispositivo/navegador do usuário.
+A geração lê todas as coleções em uma única transação interativa PostgreSQL com
+isolamento `REPEATABLE READ`; as páginas usam cursores compostos determinísticos
+e carregam no máximo 100 registros por consulta. O timeout da transação é de
+60 segundos. Erros, timeout e cancelamento rejeitam o callback transacional,
+impedindo que um resultado parcial seja devolvido; a transação termina antes de
+a resposta HTTP começar a ser enviada.
+
+O `AbortSignal` é verificado antes e depois de cada consulta e entre páginas,
+mas não cancela uma consulta Prisma que já esteja em andamento. Nesse caso, a
+geração aguarda a consulta terminar ou o timeout da transação e então aborta,
+sem devolver os dados. Cada página é serializada e gravada de forma sequencial
+em arquivo temporário privado, respeitando o limite configurado por arquivo e
+por instância. O arquivo `.part` só é promovido atomicamente após o callback e
+o commit da transação terminarem e o JSON completo ter sido escrito. O snapshot
+e a transação terminam antes do início do download.
+
+O download lê somente o arquivo final e usa streaming HTTP com backpressure; o
+lock permanece ativo até o término ou interrupção da resposta. A limpeza dos
+arquivos temporários é tentada após sucesso, falha ou cancelamento, com
+retentativas limitadas para erros transitórios. Falhas persistentes podem deixar
+arquivos registrados e contabilizados no processo, exigindo intervenção
+operacional; após reinício, arquivos remanescentes não entram na quota em
+memória do novo processo. Uma desconexão ou falha durante o streaming encerra a
+resposta, sem substituir bytes já enviados por uma resposta JSON de erro.
+Nenhum caminho ou identificador interno é exposto ao cliente.
 
 Esta cópia é parcial e não substitui o processo de atendimento de solicitações
 de titulares. A API registra e lista pedidos, mas não existe ainda canal
