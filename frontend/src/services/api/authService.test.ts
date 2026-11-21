@@ -5,19 +5,24 @@ import { http } from './http.ts'
 
 type PostCall = [string, unknown, unknown]
 type GetCall = [string, unknown]
+type StreamCall = [string, unknown]
 
 const originalPost = http.post
 const originalGet = http.get
+const originalGetStream = http.getStream
 const mutableHttp = http as unknown as {
   post: (path: string, body?: unknown, options?: unknown) => Promise<unknown>
   get: (path: string, options?: unknown) => Promise<unknown>
+  getStream: typeof http.getStream
 }
 let calls: PostCall[]
 let getCalls: GetCall[]
+let streamCalls: StreamCall[]
 
 beforeEach(() => {
   calls = []
   getCalls = []
+  streamCalls = []
   mutableHttp.post = async (path, body, options) => {
     calls.push([path, body, options])
     return { message: 'ok' }
@@ -26,14 +31,29 @@ beforeEach(() => {
     getCalls.push([path, options])
     return { formato: 'Barbearia-App personal data v1' }
   }
+  mutableHttp.getStream = async (path, options) => {
+    streamCalls.push([path, options])
+    return new Response('{}', {
+      headers: { 'content-type': 'application/json' },
+    })
+  }
 })
 
 afterEach(() => {
   mutableHttp.post = originalPost as unknown as typeof mutableHttp.post
   mutableHttp.get = originalGet as unknown as typeof mutableHttp.get
+  mutableHttp.getStream = originalGetStream
 })
 
 describe('authService endpoint contracts', () => {
+  it('marks /auth/me as the canonical session-validation request', async () => {
+    await authService.me()
+
+    assert.deepEqual(getCalls, [
+      ['/auth/me', { sessionValidation: true, signal: undefined }],
+    ])
+  })
+
   it('sends registration e-mail without an existing bearer token', async () => {
     const input = {
       nome: 'Cliente',
@@ -101,8 +121,12 @@ describe('authService endpoint contracts', () => {
   })
 
   it('exports the current account data through the authenticated endpoint', async () => {
-    await authService.exportPersonalData()
+    const controller = new AbortController()
+    await authService.exportPersonalData(controller.signal)
 
-    assert.deepEqual(getCalls, [['/users/me/export', undefined]])
+    assert.deepEqual(getCalls, [])
+    assert.deepEqual(streamCalls, [
+      ['/users/me/export', { signal: controller.signal }],
+    ])
   })
 })

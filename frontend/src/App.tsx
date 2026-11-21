@@ -2,6 +2,8 @@ import { BrowserRouter } from 'react-router-dom'
 import { AuthProvider } from './contexts/AuthContext'
 import { ToastProvider } from './contexts/ToastContext'
 import { AppRouter } from './routes/AppRouter'
+import { PwaUpdatePrompt } from './components/pwa/PwaUpdatePrompt'
+import { ConnectionStatus } from './components/pwa/ConnectionStatus'
 
 /**
  * Raiz do app: provedores globais (sessão + feedback) e a árvore de rotas.
@@ -12,6 +14,8 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
+          <ConnectionStatus />
+          <PwaUpdatePrompt />
           <AppRouter />
         </ToastProvider>
       </AuthProvider>

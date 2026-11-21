@@ -335,11 +335,12 @@ com o tipo `WAITLIST_OPPORTUNITY`. Quando um claim válido é criado, deve
 existir uma notificação correspondente para o usuário da entrada, criada na
 mesma transação. A notificação não é push nem substitui o aceite do claim.
 
-A criação de um agendamento confirmado gera uma notificação de confirmação e o
-cancelamento de um agendamento confirmado gera uma notificação de cancelamento,
-ambas para o usuário do cliente dono do agendamento e criadas na mesma
-transação da operação correspondente. Tentativas repetidas ou corridas não
-geram notificações duplicadas.
+A criação de um agendamento confirmado gera uma notificação interna para o
+cliente e outra para o barbeiro, na mesma transação. O cancelamento feito pelo
+cliente gera notificações internas para o cliente e o barbeiro; o cancelamento
+feito pelo barbeiro gera uma notificação para o cliente afetado. As notificações
+são criadas na mesma transação da operação correspondente. Tentativas repetidas
+ou corridas não geram notificações duplicadas.
 
 ---
 
@@ -356,7 +357,53 @@ agendamento. Os lembretes são processados automaticamente a cada 5 minutos; o
 motor continua idempotente e o scheduler não envia comunicação externa,
 apenas cria notificações internas.
 
-O mecanismo técnico utilizado para enviar o lembrete será definido posteriormente na documentação técnica.
+O canal push para lembretes foi aprovado como opcional; sua implementação
+técnica e operacional seguirá as decisões registradas nesta seção e em
+`ARQUITETURA.md`. Atualmente o scheduler continua criando somente notificações
+internas.
+
+### 18.1. Notificações push — decisão aprovada, ainda não implementada
+
+As notificações internas persistidas no PostgreSQL continuam sendo o registro
+principal. Web Push será somente um canal adicional e opcional, sem substituir
+as notificações internas. A indisponibilidade, recusa ou falha de entrega push
+nunca poderá desfazer nem impedir a confirmação de uma operação de negócio.
+
+A instalação da PWA não será obrigatória para clientes acessarem o sistema
+pelo link. A permissão push só poderá ser solicitada após uma ação consciente
+do usuário, sem solicitação automática ao abrir o aplicativo.
+
+O escopo inicial do canal push fica limitado a:
+
+- Agendamento confirmado;
+- Agendamento cancelado, notificado ao cliente afetado;
+- Lembrete de agendamento;
+- Vaga disponível na lista de espera;
+- Novo agendamento para o barbeiro;
+- Cancelamento feito pelo cliente que afete a agenda do barbeiro, notificado ao
+  barbeiro afetado.
+
+O conteúdo apresentado pelo sistema operacional deve ser genérico e não pode
+incluir dados pessoais, tokens, nomes, horários, serviços ou detalhes de
+agendamento. A notificação interna autenticada continua sendo a fonte para
+consultar os detalhes.
+
+As entregas deverão ser processadas por uma outbox idempotente, fora da
+transação da operação de negócio. Inscrições inválidas devem ser revogadas.
+Endpoints e chaves de inscrição são dados confidenciais: não devem aparecer em
+logs nem ser aceitos como destinos arbitrários de requisições do servidor; a
+implementação deve prevenir SSRF.
+
+No logout explícito, a inscrição do dispositivo atual será revogada e a
+inscrição local será cancelada quando possível. Se o logout ocorrer sem
+conexão, o cancelamento local ocorrerá imediatamente e a revogação no servidor
+será tentada novamente quando houver conexão. No login seguinte será exigida
+nova autorização; uma inscrição nunca será transferida automaticamente entre
+contas.
+
+Push não altera JWT, autenticação, autorização nem comunicação Socket.IO.
+Essas regras foram aprovadas para planejamento, mas ainda não estão
+implementadas.
 
 ---
 

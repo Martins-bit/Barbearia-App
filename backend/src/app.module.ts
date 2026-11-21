@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule as NestScheduleModule } from '@nestjs/schedule';
 import { RedisThrottlerStorage } from './common/throttling/redis-throttler-storage';
 import { RedisThrottlerStorageModule } from './common/throttling/redis-throttler-storage.module';
+import { RedisModule } from './common/redis/redis.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { PrismaModule } from './prisma/prisma.module';
@@ -22,6 +23,7 @@ import { BarbersModule } from './barbers/barbers.module';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    RedisModule,
     // O guard continua aplicado somente nas rotas que usam @UseGuards.
     // Storage Redis compartilhado evita contadores independentes por instância.
     ThrottlerModule.forRootAsync({

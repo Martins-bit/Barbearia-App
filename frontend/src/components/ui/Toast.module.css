@@ -1,7 +1,7 @@
 .container {
   position: fixed;
-  right: var(--space-4);
-  bottom: var(--space-4);
+  right: calc(var(--space-4) + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--space-4) + env(safe-area-inset-bottom, 0px));
   z-index: 1100;
   display: flex;
   flex-direction: column;
@@ -100,8 +100,8 @@
 
 @media (max-width: 640px) {
   .container {
-    left: var(--space-4);
-    right: var(--space-4);
+    left: calc(var(--space-4) + env(safe-area-inset-left, 0px));
+    right: calc(var(--space-4) + env(safe-area-inset-right, 0px));
     width: auto;
   }
 }

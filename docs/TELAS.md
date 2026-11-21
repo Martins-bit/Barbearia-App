@@ -576,6 +576,11 @@ observações livres, mensagens apagadas/ocultadas e textos livres de notificaç
 não são exportados para reduzir exposição de dados de terceiros. O download
 não cria um arquivo persistente no servidor.
 
+O navegador deverá gravar o arquivo progressivamente quando oferecer suporte.
+Sem esse recurso, o fallback em memória fica limitado a 10 MiB; arquivos maiores
+exigem um navegador compatível com gravação progressiva. A mesma regra vale para
+os downloads na área de privacidade.
+
 ### Validação
 
 O sistema deverá validar as informações antes de salvar alterações.
@@ -1173,6 +1178,9 @@ próprio titular pelo JWT. A primeira fase oferece as mesmas categorias fechadas
 e exibe categoria, status e data de criação; o status permanece `RECEBIDA` até
 que um processo futuro seja aprovado e implementado. Não é permitido alterar
 status ou excluir solicitações pela tela.
+
+O download de dados do barbeiro segue o mesmo fluxo progressivo e o limite de
+fallback em memória de 10 MiB definidos para o perfil do cliente.
 
 # 3. TELAS DE AUTENTICAÇÃO
 

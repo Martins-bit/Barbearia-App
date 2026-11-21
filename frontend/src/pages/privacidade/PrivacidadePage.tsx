@@ -6,19 +6,14 @@ import { Button } from '../../components/ui/Button'
 import { Card } from '../../components/ui/Card'
 import { Select } from '../../components/ui/Field'
 import { useAuth } from '../../contexts/useAuth'
-import { useToast } from '../../contexts/useToast'
+import { usePersonalDataExport } from '../../hooks/usePersonalDataExport'
 import { ApiError } from '../../services/api/ApiError'
-import { authService } from '../../services/api/authService'
 import { privacyRequestsService } from '../../services/api/privacyRequestsService'
 import type {
   CategoriaSolicitacaoTitular,
   SolicitacaoTitular,
 } from '../../types/domain'
 import { ROUTES } from '../../routes/routes'
-import {
-  downloadJsonFile,
-  personalDataExportFilename,
-} from '../../utils/downloadJson'
 import {
   getOrCreatePrivacyRequestAttempt,
   privacyRequestCreatedMessage,
@@ -54,10 +49,8 @@ const etapasFuturas = [
 export function PrivacidadePage() {
   const navigate = useNavigate()
   const { user } = useAuth()
-  const toast = useToast()
+  const personalDataExport = usePersonalDataExport()
   const titularId = user?.id ?? null
-  const [exportando, setExportando] = useState(false)
-  const exportEmAndamento = useRef(false)
   const [categoria, setCategoria] = useState<CategoriaSolicitacaoTitular | ''>(
     '',
   )
@@ -127,26 +120,6 @@ export function PrivacidadePage() {
       controller.abort()
     }
   }, [titularId, versaoLista])
-
-  async function handleExportarDados() {
-    if (exportEmAndamento.current) return
-    exportEmAndamento.current = true
-    setExportando(true)
-
-    try {
-      const dados = await authService.exportPersonalData()
-      downloadJsonFile(dados, personalDataExportFilename())
-      toast.success('Sua cópia JSON foi baixada.', 'Dados exportados')
-    } catch {
-      toast.error(
-        'Não foi possível exportar seus dados. Tente novamente.',
-        'Falha ao exportar',
-      )
-    } finally {
-      exportEmAndamento.current = false
-      setExportando(false)
-    }
-  }
 
   function handleCategoriaChange(value: string) {
     const selectedCategory = privacyRequestCategories.find(
@@ -283,12 +256,21 @@ export function PrivacidadePage() {
               conteúdo de mensagens nem textos livres.
             </p>
             <Button
-              onClick={() => void handleExportarDados()}
-              loading={exportando}
-              disabled={exportando}
+              onClick={personalDataExport.start}
+              loading={personalDataExport.isExporting}
+              disabled={personalDataExport.isExporting}
             >
-              {exportando ? 'Preparando arquivo' : 'Baixar meus dados'}
+              {personalDataExport.phase === 'choosing'
+                ? 'Escolha onde salvar'
+                : personalDataExport.isExporting
+                  ? 'Preparando arquivo'
+                  : 'Baixar meus dados'}
             </Button>
+            {personalDataExport.canCancel && (
+              <Button variant="secondary" onClick={personalDataExport.cancel}>
+                Cancelar download
+              </Button>
+            )}
           </Card>
 
           <Card className={styles.rightCard}>

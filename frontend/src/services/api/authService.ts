@@ -1,7 +1,6 @@
 import { http, authTokenStorage } from './http.ts'
 import type {
   LoginResponse,
-  PersonalDataExport,
   Usuario,
   UpdateUserInput,
 } from '../../types/domain'
@@ -85,7 +84,7 @@ export const authService = {
   },
 
   me(signal?: AbortSignal): Promise<Usuario> {
-    return http.get<Usuario>('/auth/me', { signal })
+    return http.get<Usuario>('/auth/me', { signal, sessionValidation: true })
   },
 
   /** PATCH /users/me — atualiza nome, telefone e/ou e-mail da própria conta. */
@@ -93,9 +92,9 @@ export const authService = {
     return http.patch<Usuario>('/users/me', input)
   },
 
-  /** GET /users/me/export — gera uma cópia JSON dos dados acessíveis da conta. */
-  exportPersonalData(): Promise<PersonalDataExport> {
-    return http.get<PersonalDataExport>('/users/me/export')
+  /** GET /users/me/export — retorna o corpo JSON autenticado sem materializá-lo. */
+  exportPersonalData(signal?: AbortSignal): Promise<Response> {
+    return http.getStream('/users/me/export', { signal })
   },
 
   logout(): void {

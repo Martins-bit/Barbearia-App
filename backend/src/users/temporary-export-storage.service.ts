@@ -42,6 +42,8 @@ const FILE_ID_PATTERN =
 const FILE_NAME_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:part|ready)$/;
 const WRITE_CHUNK_BYTES = 64 * 1024;
+const FILE_CLEANUP_RETRY_DELAYS_MS = [25, 100] as const;
+const PENDING_CLEANUP_RETRY_DELAYS_MS = [1_000, 5_000, 15_000] as const;
 
 /**
  * Provisional defaults only. Calibrate against production disk capacity and
@@ -57,6 +59,7 @@ export interface TemporaryExportStorageOptions {
 }
 
 export interface TemporaryExportFile {
+  readonly sizeBytes: number;
   write(chunk: Uint8Array): Promise<void>;
   finalize(): Promise<void>;
   openReadStream(): Promise<Readable>;
@@ -68,6 +71,13 @@ export class TemporaryExportStorageError extends Error {
   constructor(message: string) {
     super(message);
     this.name = TemporaryExportStorageError.name;
+  }
+}
+
+export class TemporaryExportCleanupError extends TemporaryExportStorageError {
+  constructor(readonly errors: readonly unknown[]) {
+    super('Não foi possível confirmar a limpeza do arquivo temporário.');
+    this.name = TemporaryExportCleanupError.name;
   }
 }
 
@@ -99,6 +109,8 @@ interface ManagedFile {
   writeFailure?: unknown;
   writer?: Awaited<ReturnType<typeof open>>;
   cleanupPromise?: Promise<void>;
+  cleanupRetryTimer?: NodeJS.Timeout;
+  scheduledCleanupRetries: number;
   externalAbortSignal?: AbortSignal;
   externalAbortHandler?: () => void;
 }
@@ -166,13 +178,17 @@ export class TemporaryExportStorageService
     }
 
     let cleanupFailures = 0;
-    for (const file of this.files.values()) {
+    for (const file of [...this.files.values()]) {
+      this.clearCleanupRetry(file);
       try {
         await this.cleanupFile(file);
-      } catch {
+      } catch (error) {
         cleanupFailures += 1;
-        this.logger.warn(
-          'Não foi possível remover um arquivo temporário durante o encerramento.',
+        this.logCleanupFailure(
+          file,
+          error,
+          'A limpeza do arquivo temporário falhou durante o encerramento.',
+          true,
         );
       }
     }
@@ -184,16 +200,22 @@ export class TemporaryExportStorageService
     }
 
     try {
-      await this.removeRegularFile(join(this.instanceDirectory, OWNER_FILE));
-      await rmdir(this.instanceDirectory);
+      const entries = await readdir(this.instanceDirectory);
+      if (entries.length !== 1 || entries[0] !== OWNER_FILE) {
+        throw new Error('unexpected contents in temporary export directory');
+      }
+      await this.removeRegularFileWithRetries(
+        join(this.instanceDirectory, OWNER_FILE),
+      );
+      await this.removeDirectoryWithRetries(this.instanceDirectory);
       this.instanceDirectory = undefined;
       this.instanceId = undefined;
     } catch {
       this.logger.warn(
-        'O diretório temporário da instância foi preservado para limpeza posterior.',
+        'O diretório temporário da instância não pôde ser removido; entradas com dados foram preservadas.',
       );
       throw new TemporaryExportStorageError(
-        'Não foi possível limpar o diretório temporário no encerramento.',
+        'Não foi possível confirmar a limpeza do diretório temporário no encerramento.',
       );
     }
   }
@@ -232,6 +254,7 @@ export class TemporaryExportStorageService
       readerOpened: false,
       reservedBytes: 0,
       writeQueue: Promise.resolve(),
+      scheduledCleanupRetries: 0,
       writer,
       externalAbortSignal: signal,
     };
@@ -255,6 +278,9 @@ export class TemporaryExportStorageService
     }
 
     return {
+      get sizeBytes() {
+        return file.reservedBytes;
+      },
       write: (chunk) => this.write(file, chunk),
       finalize: () => this.finalize(file),
       openReadStream: () => this.openReadStream(file),
@@ -431,6 +457,18 @@ export class TemporaryExportStorageService
       const directory = join(this.rootDirectory, entry.name);
       const owner = await this.readOwnerMarker(directory, entry.name);
       if (!owner) {
+        try {
+          const contents = await readdir(directory);
+          if (contents.length === 0) {
+            await this.removeDirectoryWithRetries(directory);
+            continue;
+          }
+        } catch {
+          this.logger.warn(
+            'Um diretório temporário vazio sem marcador não pôde ser removido.',
+          );
+          continue;
+        }
         this.logger.warn(
           'Um diretório temporário sem identificação confiável foi preservado.',
         );
@@ -565,7 +603,8 @@ export class TemporaryExportStorageService
       return false;
     }
 
-    const removable: string[] = [];
+    const dataFiles: string[] = [];
+    let ownerPath: string | undefined;
     for (const entry of entries) {
       if (
         entry.isSymbolicLink() ||
@@ -582,14 +621,29 @@ export class TemporaryExportStorageService
       } catch {
         return false;
       }
-      removable.push(filePath);
+      if (entry.name === OWNER_FILE) {
+        ownerPath = filePath;
+      } else {
+        dataFiles.push(filePath);
+      }
+    }
+    if (!ownerPath) return false;
+
+    const removalErrors: unknown[] = [];
+    for (const filePath of dataFiles) {
+      try {
+        await this.removeRegularFileWithRetries(filePath);
+      } catch (error) {
+        removalErrors.push(error);
+      }
+    }
+    if (removalErrors.length > 0) {
+      return false;
     }
 
     try {
-      for (const filePath of removable) {
-        await unlink(filePath);
-      }
-      await rmdir(directory);
+      await this.removeRegularFileWithRetries(ownerPath);
+      await this.removeDirectoryWithRetries(directory);
       return true;
     } catch {
       return false;
@@ -660,11 +714,20 @@ export class TemporaryExportStorageService
         await yieldToEventLoop();
       }
     } catch (error) {
-      await this.cleanupFile(file, false).catch(() => {
-        this.logger.warn(
-          'Não foi possível limpar um arquivo após falha de escrita.',
+      let cleanupError: unknown;
+      try {
+        await this.cleanupFile(file, false);
+      } catch (failure) {
+        cleanupError = failure;
+        this.logCleanupFailure(
+          file,
+          failure,
+          'A limpeza após falha de escrita não foi confirmada.',
         );
-      });
+      }
+      if (cleanupError !== undefined) {
+        throw new TemporaryExportCleanupError([error, cleanupError]);
+      }
       if (
         error instanceof TemporaryExportStorageError ||
         error instanceof TemporaryExportLimitError
@@ -691,11 +754,16 @@ export class TemporaryExportStorageService
     file: ManagedFile,
     error: TemporaryExportStorageError,
   ): Promise<void> {
-    await this.cancelFile(file).catch(() => {
-      this.logger.warn(
-        'Não foi possível limpar um arquivo após uma gravação inválida.',
+    try {
+      await this.cancelFile(file);
+    } catch (cleanupError) {
+      this.logCleanupFailure(
+        file,
+        cleanupError,
+        'A limpeza após uma gravação inválida não foi confirmada.',
       );
-    });
+      throw new TemporaryExportCleanupError([error, cleanupError]);
+    }
     throw error;
   }
 
@@ -729,11 +797,16 @@ export class TemporaryExportStorageService
       await unlink(file.partPath);
       file.state = 'ready';
     } catch (error) {
-      await this.cleanupFile(file, false).catch(() => {
-        this.logger.warn(
-          'Não foi possível limpar um arquivo após falha de finalização.',
+      try {
+        await this.cleanupFile(file, false);
+      } catch (cleanupError) {
+        this.logCleanupFailure(
+          file,
+          cleanupError,
+          'A limpeza após falha de finalização não foi confirmada.',
         );
-      });
+        throw new TemporaryExportCleanupError([error, cleanupError]);
+      }
       if (error instanceof TemporaryExportStorageError) {
         throw error;
       }
@@ -802,24 +875,34 @@ export class TemporaryExportStorageService
       });
       stream.once('close', () => {
         file.streams.delete(stream);
-        void this.cleanupFile(file).catch(() => {
+        void this.cleanupFile(file).catch((error: unknown) => {
+          this.logCleanupFailure(
+            file,
+            error,
+            'A limpeza automática após a leitura não foi confirmada.',
+          );
           this.logger.warn(
             'Não foi possível remover um arquivo após a leitura.',
           );
         });
       });
       return stream;
-    } catch {
+    } catch (error) {
       if (fd !== undefined) {
         await new Promise<void>((resolveClose) => {
           closeCallback(fd!, () => resolveClose());
         });
       }
-      await this.cleanupFile(file).catch(() => {
-        this.logger.warn(
-          'Não foi possível limpar um arquivo após falha de leitura.',
+      try {
+        await this.cleanupFile(file);
+      } catch (cleanupError) {
+        this.logCleanupFailure(
+          file,
+          cleanupError,
+          'A limpeza após falha de leitura não foi confirmada.',
         );
-      });
+        throw new TemporaryExportCleanupError([error, cleanupError]);
+      }
       throw new TemporaryExportStorageError(
         'Não foi possível abrir o arquivo temporário para leitura.',
       );
@@ -853,6 +936,7 @@ export class TemporaryExportStorageService
     if (file.cleanupPromise) {
       return file.cleanupPromise;
     }
+    this.clearCleanupRetry(file);
 
     file.state = 'disposing';
     file.writeClosing = true;
@@ -863,6 +947,7 @@ export class TemporaryExportStorageService
     );
 
     const cleanup = (async () => {
+      const errors: unknown[] = [];
       if (waitForWrites) {
         await file.writeQueue;
       }
@@ -878,11 +963,27 @@ export class TemporaryExportStorageService
         }
       }
       if (file.writer) {
-        await file.writer.close();
-        file.writer = undefined;
+        try {
+          await file.writer.close();
+          file.writer = undefined;
+        } catch (error) {
+          errors.push(error);
+        }
       }
-      await this.removeRegularFile(file.partPath);
-      await this.removeRegularFile(file.readyPath);
+      for (const filePath of [file.partPath, file.readyPath]) {
+        try {
+          await this.removeRegularFileWithRetries(filePath);
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(
+          errors,
+          'Uma ou mais operações de limpeza do arquivo falharam.',
+        );
+      }
+
       this.allocatedBytes -= file.reservedBytes;
       file.reservedBytes = 0;
       file.state = 'disposed';
@@ -891,29 +992,132 @@ export class TemporaryExportStorageService
     file.cleanupPromise = cleanup;
     try {
       await cleanup;
-    } catch {
+    } catch (error) {
       file.cleanupPromise = undefined;
-      this.logger.warn(
-        'Um arquivo temporário foi preservado porque sua remoção não pôde ser confirmada.',
+      this.scheduleCleanupRetry(file);
+      this.logCleanupFailure(
+        file,
+        error,
+        'Um arquivo temporário permanece pendente de limpeza.',
+        file.scheduledCleanupRetries >= PENDING_CLEANUP_RETRY_DELAYS_MS.length,
       );
-      throw new TemporaryExportStorageError(
-        'Não foi possível remover o arquivo temporário.',
-      );
+      throw new TemporaryExportCleanupError([error]);
     }
   }
 
-  private async removeRegularFile(filePath: string): Promise<void> {
-    try {
-      const info = await lstat(filePath);
-      if (!info.isFile() || info.isSymbolicLink()) {
-        throw new Error('refusing to remove non-regular file');
-      }
-      await unlink(filePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+  private async removeRegularFileWithRetries(filePath: string): Promise<void> {
+    for (
+      let attempt = 0;
+      attempt <= FILE_CLEANUP_RETRY_DELAYS_MS.length;
+      attempt++
+    ) {
+      try {
+        const info = await lstat(filePath);
+        if (!info.isFile() || info.isSymbolicLink()) {
+          throw new Error('refusing to remove non-regular file');
+        }
+        await unlink(filePath);
         return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return;
+        }
+        if (
+          attempt === FILE_CLEANUP_RETRY_DELAYS_MS.length ||
+          !this.isRetryableCleanupError(error)
+        ) {
+          throw error;
+        }
+        await this.waitForCleanupRetry(FILE_CLEANUP_RETRY_DELAYS_MS[attempt]!);
       }
-      throw error;
+    }
+  }
+
+  private async removeDirectoryWithRetries(directory: string): Promise<void> {
+    for (
+      let attempt = 0;
+      attempt <= FILE_CLEANUP_RETRY_DELAYS_MS.length;
+      attempt++
+    ) {
+      try {
+        await rmdir(directory);
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          return;
+        }
+        if (
+          attempt === FILE_CLEANUP_RETRY_DELAYS_MS.length ||
+          !this.isRetryableCleanupError(error)
+        ) {
+          throw error;
+        }
+        await this.waitForCleanupRetry(FILE_CLEANUP_RETRY_DELAYS_MS[attempt]!);
+      }
+    }
+  }
+
+  private isRetryableCleanupError(error: unknown): boolean {
+    if (!error || typeof error !== 'object' || !('code' in error)) {
+      return false;
+    }
+    return ['EACCES', 'EBUSY', 'EIO', 'EPERM'].includes(String(error.code));
+  }
+
+  private waitForCleanupRetry(delayMs: number): Promise<void> {
+    return new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+  }
+
+  private scheduleCleanupRetry(file: ManagedFile): void {
+    if (
+      this.shuttingDown ||
+      file.cleanupRetryTimer ||
+      file.scheduledCleanupRetries >= PENDING_CLEANUP_RETRY_DELAYS_MS.length
+    ) {
+      return;
+    }
+
+    const delay =
+      PENDING_CLEANUP_RETRY_DELAYS_MS[file.scheduledCleanupRetries]!;
+    file.scheduledCleanupRetries++;
+    file.cleanupRetryTimer = setTimeout(() => {
+      file.cleanupRetryTimer = undefined;
+      void this.cleanupFile(file).catch(() => undefined);
+    }, delay);
+    file.cleanupRetryTimer.unref?.();
+  }
+
+  private clearCleanupRetry(file: ManagedFile): void {
+    if (file.cleanupRetryTimer) {
+      clearTimeout(file.cleanupRetryTimer);
+      file.cleanupRetryTimer = undefined;
+    }
+  }
+
+  private logCleanupFailure(
+    file: ManagedFile,
+    error: unknown,
+    message: string,
+    exhausted = false,
+  ): void {
+    const errors = error instanceof AggregateError ? error.errors : [error];
+    const codes = errors
+      .map((item) => {
+        if (item && typeof item === 'object' && 'code' in item) {
+          return String(item.code);
+        }
+        return undefined;
+      })
+      .filter((code): code is string => code !== undefined);
+    const detail =
+      codes.length > 0 ? ` (code=${[...new Set(codes)].join(',')})` : '';
+    const suffix = ` (file=${file.id}, retry=${file.scheduledCleanupRetries}/${PENDING_CLEANUP_RETRY_DELAYS_MS.length})${detail}`;
+    if (exhausted) {
+      this.logger.error(
+        `${message}${suffix}; intervenção operacional necessária.`,
+      );
+    } else {
+      this.logger.warn(`${message}${suffix}`);
     }
   }
 }

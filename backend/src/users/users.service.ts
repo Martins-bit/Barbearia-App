@@ -17,10 +17,12 @@ import { normalizeEmail } from '../common/utils/email.util';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserResponseDto } from './dto/user-response.dto';
 import { BarberResponseDto } from '../barbers/dto/barber-response.dto';
+import { dateKeyFromUtcMidnight, formatLocalHHmm } from '../schedule/tz.util';
 import {
-  dateKeyFromUtcMidnight,
-  formatLocalHHmm,
-} from '../schedule/tz.util';
+  TemporaryExportCleanupError,
+  TemporaryExportStorageService,
+  type TemporaryExportFile,
+} from './temporary-export-storage.service';
 
 export interface PersonalDataExport {
   formato: 'Barbearia-App personal data v1';
@@ -92,10 +94,49 @@ export interface PersonalDataExport {
   }>;
 }
 
+export class PersonalDataExportCancelledError extends Error {
+  constructor() {
+    super('A geração da exportação foi cancelada.');
+    this.name = 'PersonalDataExportCancelledError';
+  }
+}
+
+const PERSONAL_DATA_EXPORT_PAGE_SIZE = 100;
+const PERSONAL_DATA_EXPORT_TRANSACTION_TIMEOUT_MS = 60_000;
+
+type ExportScheduleCursor = {
+  diaSemana: number;
+  horaInicio: string;
+  id: number;
+};
+
+type ExportDateAndTimeCursor = {
+  data: Date;
+  horaInicio: Date;
+  id: number;
+};
+
+type ExportDateCursor = {
+  dataInicio: Date;
+  id: number;
+};
+
+type ExportWaitlistCursor = {
+  dataDesejada: Date;
+  dataEntrada: Date;
+  id: number;
+};
+
+type ExportCreatedAtCursor = {
+  dataCriacao: Date;
+  id: number;
+};
+
 @Injectable()
 export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly temporaryExportStorage: TemporaryExportStorageService,
     @Optional() private readonly moduleRef?: ModuleRef,
   ) {}
 
@@ -137,8 +178,67 @@ export class UsersService {
     return this.sanitizeUser(usuario);
   }
 
-  async exportPersonalData(userId: number): Promise<PersonalDataExport> {
-    const user = await this.prisma.usuario.findUnique({
+  async exportPersonalData(
+    userId: number,
+    signal?: AbortSignal,
+  ): Promise<TemporaryExportFile> {
+    return this.exportPersonalDataToTemporaryFile(userId, signal);
+  }
+
+  async exportPersonalDataToTemporaryFile(
+    userId: number,
+    signal?: AbortSignal,
+  ): Promise<TemporaryExportFile> {
+    this.throwIfExportCancelled(signal);
+    const file = await this.temporaryExportStorage.create(signal);
+
+    try {
+      await this.prisma.$transaction(
+        (transaction) =>
+          this.writePersonalDataExport(transaction, userId, file, signal),
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+          timeout: PERSONAL_DATA_EXPORT_TRANSACTION_TIMEOUT_MS,
+        },
+      );
+      this.throwIfExportCancelled(signal);
+      await file.finalize();
+      return file;
+    } catch (error) {
+      try {
+        await file.cancel();
+      } catch (cleanupError) {
+        throw new TemporaryExportCleanupError([error, cleanupError]);
+      }
+      throw error instanceof TemporaryExportCleanupError
+        ? (error.errors[0] ?? error)
+        : error;
+    }
+  }
+
+  private async writePersonalDataExport(
+    transaction: Prisma.TransactionClient,
+    userId: number,
+    file: TemporaryExportFile,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const write = async (value: string): Promise<void> => {
+      this.throwIfExportCancelled(signal);
+      await file.write(Buffer.from(value, 'utf8'));
+      this.throwIfExportCancelled(signal);
+    };
+    const writeJson = (value: unknown): Promise<void> => {
+      const serialized = JSON.stringify(value);
+      if (serialized === undefined) {
+        throw new TypeError(
+          'Não foi possível serializar um trecho da exportação.',
+        );
+      }
+      return write(serialized);
+    };
+
+    this.throwIfExportCancelled(signal);
+    const user = await transaction.usuario.findUnique({
       where: { id: userId },
       select: {
         id: true,
@@ -164,51 +264,362 @@ export class UsersService {
             ativo: true,
             dataCriacao: true,
             dataAtualizacao: true,
-            horarios: {
-              select: {
-                diaSemana: true,
-                horaInicio: true,
-                horaFim: true,
-                ativo: true,
-              },
-              orderBy: [{ diaSemana: 'asc' }, { horaInicio: 'asc' }],
-            },
-            bloqueios: {
-              select: {
-                data: true,
-                horaInicio: true,
-                horaFim: true,
-                ativo: true,
-                dataCriacao: true,
-              },
-              orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }],
-            },
-            emergencias: {
-              select: {
-                dataInicio: true,
-                dataFim: true,
-                status: true,
-                dataCriacao: true,
-              },
-              orderBy: { dataInicio: 'asc' },
-            },
           },
         },
       },
     });
-
+    this.throwIfExportCancelled(signal);
     if (!user) {
       throw new NotFoundException('Usuário não encontrado.');
     }
 
-    const appointmentOwnership = [
+    await write(
+      `{"formato":${JSON.stringify('Barbearia-App personal data v1')},` +
+        `"geradoEm":${JSON.stringify(new Date().toISOString())},` +
+        `"limitacoes":${JSON.stringify([
+          'O conteúdo das mensagens, observações de agendamentos, motivos de bloqueios/emergências e textos livres de notificações foram omitidos para reduzir a exposição de dados de terceiros; o escopo ainda depende de decisão do responsável pelo tratamento.',
+          'Mensagens apagadas para todos ou ocultadas para este usuário não são incluídas.',
+          'Tokens, hashes de senha, identificadores internos de autenticação, credenciais e segredos não são incluídos.',
+          'Preferências não persistidas não estão disponíveis para exportação.',
+          'Notificações já limpas não são incluídas, pois não são exibidas pelo endpoint atual do usuário.',
+        ])},"conta":{` +
+        `"nome":${JSON.stringify(user.nome)},` +
+        `"telefone":${JSON.stringify(user.telefone)},` +
+        `"email":${JSON.stringify(user.email)},` +
+        `"tipoUsuario":${JSON.stringify(user.tipoUsuario)},` +
+        `"ativo":${JSON.stringify(user.ativo)},` +
+        `"criadoEm":${JSON.stringify(user.dataCriacao.toISOString())},` +
+        `"atualizadoEm":${JSON.stringify(user.dataAtualizacao.toISOString())},` +
+        `"confirmacaoEmail":${JSON.stringify({
+          confirmadoEm: user.emailVerificadoEm?.toISOString() ?? null,
+          confirmacaoObrigatoria: user.emailConfirmacaoObrigatoria,
+        })},"perfil":`,
+    );
+
+    if (user.barbeiro) {
+      const barberId = user.barbeiro.id;
+      await write(
+        `{"ativo":${JSON.stringify(user.barbeiro.ativo)},` +
+          `"criadoEm":${JSON.stringify(user.barbeiro.dataCriacao.toISOString())},` +
+          `"atualizadoEm":${JSON.stringify(user.barbeiro.dataAtualizacao.toISOString())},` +
+          '"horarios":',
+      );
+      await this.writePagedExportArray(
+        file,
+        signal,
+        (cursor: ExportScheduleCursor | undefined) =>
+          transaction.horarioFuncionamento.findMany({
+            where: cursor
+              ? {
+                  barbeiroId: barberId,
+                  OR: [
+                    { diaSemana: { gt: cursor.diaSemana } },
+                    {
+                      diaSemana: cursor.diaSemana,
+                      horaInicio: { gt: cursor.horaInicio },
+                    },
+                    {
+                      diaSemana: cursor.diaSemana,
+                      horaInicio: cursor.horaInicio,
+                      id: { gt: cursor.id },
+                    },
+                  ],
+                }
+              : { barbeiroId: barberId },
+            orderBy: [
+              { diaSemana: 'asc' },
+              { horaInicio: 'asc' },
+              { id: 'asc' },
+            ],
+            take: PERSONAL_DATA_EXPORT_PAGE_SIZE,
+            select: {
+              id: true,
+              diaSemana: true,
+              horaInicio: true,
+              horaFim: true,
+              ativo: true,
+            },
+          }),
+        (hour) => ({
+          diaSemana: hour.diaSemana,
+          horaInicio: hour.horaInicio,
+          id: hour.id,
+        }),
+        (hour) =>
+          writeJson({
+            diaSemana: hour.diaSemana,
+            horaInicio: hour.horaInicio,
+            horaFim: hour.horaFim,
+            ativo: hour.ativo,
+          }),
+      );
+      await write(',"bloqueios":');
+      await this.writePagedExportArray(
+        file,
+        signal,
+        (cursor: ExportDateAndTimeCursor | undefined) =>
+          transaction.bloqueioAgenda.findMany({
+            where: cursor
+              ? {
+                  barbeiroId: barberId,
+                  OR: [
+                    { data: { gt: cursor.data } },
+                    {
+                      data: cursor.data,
+                      horaInicio: { gt: cursor.horaInicio },
+                    },
+                    {
+                      data: cursor.data,
+                      horaInicio: cursor.horaInicio,
+                      id: { gt: cursor.id },
+                    },
+                  ],
+                }
+              : { barbeiroId: barberId },
+            orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }, { id: 'asc' }],
+            take: PERSONAL_DATA_EXPORT_PAGE_SIZE,
+            select: {
+              id: true,
+              data: true,
+              horaInicio: true,
+              horaFim: true,
+              ativo: true,
+              dataCriacao: true,
+            },
+          }),
+        (block) => ({
+          data: block.data,
+          horaInicio: block.horaInicio,
+          id: block.id,
+        }),
+        (block) =>
+          writeJson({
+            data: dateKeyFromUtcMidnight(block.data),
+            horaInicio: formatLocalHHmm(block.horaInicio),
+            horaFim: formatLocalHHmm(block.horaFim),
+            ativo: block.ativo,
+            dataCriacao: block.dataCriacao.toISOString(),
+          }),
+      );
+      await write(',"emergencias":');
+      await this.writePagedExportArray(
+        file,
+        signal,
+        (cursor: ExportDateCursor | undefined) =>
+          transaction.emergencia.findMany({
+            where: cursor
+              ? {
+                  barbeiroId: barberId,
+                  OR: [
+                    { dataInicio: { gt: cursor.dataInicio } },
+                    {
+                      dataInicio: cursor.dataInicio,
+                      id: { gt: cursor.id },
+                    },
+                  ],
+                }
+              : { barbeiroId: barberId },
+            orderBy: [{ dataInicio: 'asc' }, { id: 'asc' }],
+            take: PERSONAL_DATA_EXPORT_PAGE_SIZE,
+            select: {
+              id: true,
+              dataInicio: true,
+              dataFim: true,
+              status: true,
+              dataCriacao: true,
+            },
+          }),
+        (emergency) => ({
+          dataInicio: emergency.dataInicio,
+          id: emergency.id,
+        }),
+        (emergency) =>
+          writeJson({
+            dataInicio: emergency.dataInicio.toISOString(),
+            dataFim: emergency.dataFim.toISOString(),
+            status: emergency.status,
+            dataCriacao: emergency.dataCriacao.toISOString(),
+          }),
+      );
+      await write('}');
+    } else {
+      await writeJson(
+        user.cliente
+          ? {
+              criadoEm: user.cliente.dataCriacao.toISOString(),
+              atualizadoEm: user.cliente.dataAtualizacao.toISOString(),
+            }
+          : {},
+      );
+    }
+
+    await write('},"agendamentos":');
+    const ownership = [
       ...(user.cliente ? [{ clienteId: user.cliente.id }] : []),
       ...(user.barbeiro ? [{ barbeiroId: user.barbeiro.id }] : []),
     ];
-    const waitlistOwnership = [
-      ...(user.cliente ? [{ clienteId: user.cliente.id }] : []),
-      ...(user.barbeiro ? [{ barbeiroId: user.barbeiro.id }] : []),
-    ];
+    await this.writePagedExportArray(
+      file,
+      signal,
+      (cursor: ExportDateAndTimeCursor | undefined) =>
+        transaction.agendamento.findMany({
+          where: cursor
+            ? {
+                AND: [
+                  { OR: ownership },
+                  {
+                    OR: [
+                      { data: { gt: cursor.data } },
+                      {
+                        data: cursor.data,
+                        horaInicio: { gt: cursor.horaInicio },
+                      },
+                      {
+                        data: cursor.data,
+                        horaInicio: cursor.horaInicio,
+                        id: { gt: cursor.id },
+                      },
+                    ],
+                  },
+                ],
+              }
+            : { OR: ownership },
+          orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }, { id: 'asc' }],
+          take: PERSONAL_DATA_EXPORT_PAGE_SIZE,
+          select: {
+            id: true,
+            data: true,
+            horaInicio: true,
+            horaFim: true,
+            status: true,
+            dataCriacao: true,
+            dataAtualizacao: true,
+            servico: { select: { nome: true, duracaoMinutos: true } },
+          },
+        }),
+      (appointment) => ({
+        data: appointment.data,
+        horaInicio: appointment.horaInicio,
+        id: appointment.id,
+      }),
+      (appointment) =>
+        writeJson({
+          data: dateKeyFromUtcMidnight(appointment.data),
+          horaInicio: formatLocalHHmm(appointment.horaInicio),
+          horaFim: formatLocalHHmm(appointment.horaFim),
+          status: appointment.status,
+          criadoEm: appointment.dataCriacao.toISOString(),
+          atualizadoEm: appointment.dataAtualizacao.toISOString(),
+          servico: appointment.servico,
+        }),
+    );
+
+    await write(',"listaEspera":');
+    await this.writePagedExportArray(
+      file,
+      signal,
+      (cursor: ExportWaitlistCursor | undefined) =>
+        transaction.listaEspera.findMany({
+          where: cursor
+            ? {
+                AND: [
+                  { OR: ownership },
+                  {
+                    OR: [
+                      { dataDesejada: { gt: cursor.dataDesejada } },
+                      {
+                        dataDesejada: cursor.dataDesejada,
+                        dataEntrada: { gt: cursor.dataEntrada },
+                      },
+                      {
+                        dataDesejada: cursor.dataDesejada,
+                        dataEntrada: cursor.dataEntrada,
+                        id: { gt: cursor.id },
+                      },
+                    ],
+                  },
+                ],
+              }
+            : { OR: ownership },
+          orderBy: [
+            { dataDesejada: 'asc' },
+            { dataEntrada: 'asc' },
+            { id: 'asc' },
+          ],
+          take: PERSONAL_DATA_EXPORT_PAGE_SIZE,
+          select: {
+            id: true,
+            dataDesejada: true,
+            horaInicio: true,
+            horaFim: true,
+            status: true,
+            dataEntrada: true,
+            dataAtualizacao: true,
+            servico: { select: { nome: true } },
+          },
+        }),
+      (entry) => ({
+        dataDesejada: entry.dataDesejada,
+        dataEntrada: entry.dataEntrada,
+        id: entry.id,
+      }),
+      async (entry) => {
+        const base = JSON.stringify({
+          dataDesejada: dateKeyFromUtcMidnight(entry.dataDesejada),
+          horaInicio: entry.horaInicio,
+          horaFim: entry.horaFim,
+          status: entry.status,
+          dataEntrada: entry.dataEntrada.toISOString(),
+          atualizadoEm: entry.dataAtualizacao.toISOString(),
+          servico: entry.servico,
+        });
+        await write(`${base.slice(0, -1)},"claims":`);
+        await this.writePagedExportArray(
+          file,
+          signal,
+          (cursor: ExportCreatedAtCursor | undefined) =>
+            transaction.waitlistClaim.findMany({
+              where: {
+                listaEsperaId: entry.id,
+                ...(cursor
+                  ? {
+                      OR: [
+                        { dataCriacao: { gt: cursor.dataCriacao } },
+                        {
+                          dataCriacao: cursor.dataCriacao,
+                          id: { gt: cursor.id },
+                        },
+                      ],
+                    }
+                  : {}),
+              },
+              orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
+              take: PERSONAL_DATA_EXPORT_PAGE_SIZE,
+              select: {
+                id: true,
+                data: true,
+                horaInicio: true,
+                horaFim: true,
+                status: true,
+                expiraEm: true,
+                dataCriacao: true,
+              },
+            }),
+          (claim) => ({ dataCriacao: claim.dataCriacao, id: claim.id }),
+          (claim) =>
+            writeJson({
+              data: dateKeyFromUtcMidnight(claim.data),
+              horaInicio: claim.horaInicio,
+              horaFim: claim.horaFim,
+              status: claim.status,
+              expiraEm: claim.expiraEm.toISOString(),
+              criadoEm: claim.dataCriacao.toISOString(),
+            }),
+        );
+        await write('}');
+      },
+    );
+
     const counterpart =
       user.tipoUsuario === TipoUsuario.CLIENTE
         ? {
@@ -217,72 +628,47 @@ export class UsersService {
             barbeiro: { is: { ativo: true } },
           }
         : { ativo: true, tipoUsuario: TipoUsuario.CLIENTE };
-
-    const [
-      appointments,
-      waitlist,
-      messages,
-      notifications,
-      privacyRequests,
-    ] =
-      await Promise.all([
-        this.prisma.agendamento.findMany({
-          where: { OR: appointmentOwnership },
-          orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }, { id: 'asc' }],
-          select: {
-            data: true,
-            horaInicio: true,
-            horaFim: true,
-            status: true,
-            dataCriacao: true,
-            dataAtualizacao: true,
-            servico: {
-              select: { nome: true, duracaoMinutos: true },
-            },
-          },
-        }),
-        this.prisma.listaEspera.findMany({
-          where: { OR: waitlistOwnership },
-          orderBy: [{ dataDesejada: 'asc' }, { dataEntrada: 'asc' }, { id: 'asc' }],
-          select: {
-            dataDesejada: true,
-            horaInicio: true,
-            horaFim: true,
-            status: true,
-            dataEntrada: true,
-            dataAtualizacao: true,
-            servico: { select: { nome: true } },
-            claims: {
-              select: {
-                data: true,
-                horaInicio: true,
-                horaFim: true,
-                status: true,
-                expiraEm: true,
-                dataCriacao: true,
-              },
-              orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
-            },
-          },
-        }),
-        this.prisma.mensagem.findMany({
+    const messageOwnership = [
+      {
+        remetenteId: userId,
+        excluidaPeloRemetente: false,
+        destinatario: { is: counterpart },
+      },
+      {
+        destinatarioId: userId,
+        excluidaPeloDestinatario: false,
+        remetente: { is: counterpart },
+      },
+    ];
+    await write(',"mensagens":{"conteudoIncluido":false,"registros":');
+    await this.writePagedExportArray(
+      file,
+      signal,
+      (cursor: ExportCreatedAtCursor | undefined) =>
+        transaction.mensagem.findMany({
           where: {
             apagadaParaTodos: false,
-            OR: [
-              {
-                remetenteId: userId,
-                excluidaPeloRemetente: false,
-                destinatario: { is: counterpart },
-              },
-              {
-                destinatarioId: userId,
-                excluidaPeloDestinatario: false,
-                remetente: { is: counterpart },
-              },
-            ],
+            OR: messageOwnership,
+            ...(cursor
+              ? {
+                  AND: [
+                    {
+                      OR: [
+                        { dataCriacao: { gt: cursor.dataCriacao } },
+                        {
+                          dataCriacao: cursor.dataCriacao,
+                          id: { gt: cursor.id },
+                        },
+                      ],
+                    },
+                  ],
+                }
+              : {}),
           },
           orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
+          take: PERSONAL_DATA_EXPORT_PAGE_SIZE,
           select: {
+            id: true,
             remetenteId: true,
             lida: true,
             dataCriacao: true,
@@ -291,136 +677,156 @@ export class UsersService {
             dataExclusao: true,
           },
         }),
-        this.prisma.notificacao.findMany({
-          where: { usuarioId: userId, limpa: false },
-          orderBy: [{ dataCriacao: 'desc' }, { id: 'desc' }],
-          select: {
-            tipo: true,
-            lida: true,
-            dataCriacao: true,
-            dataLeitura: true,
-            claim: {
-              select: { status: true, expiraEm: true },
-            },
-          },
-        }),
-        this.prisma.solicitacaoTitular.findMany({
-          where: { titularId: userId },
-          orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
-          select: {
-            categoria: true,
-            status: true,
-            dataCriacao: true,
-          },
-        }),
-      ]);
-
-    const barberProfile = user.barbeiro
-      ? {
-          ativo: user.barbeiro.ativo,
-          criadoEm: user.barbeiro.dataCriacao.toISOString(),
-          atualizadoEm: user.barbeiro.dataAtualizacao.toISOString(),
-          horarios: user.barbeiro.horarios,
-          bloqueios: user.barbeiro.bloqueios.map((block) => ({
-            data: dateKeyFromUtcMidnight(block.data),
-            horaInicio: formatLocalHHmm(block.horaInicio),
-            horaFim: formatLocalHHmm(block.horaFim),
-            ativo: block.ativo,
-            dataCriacao: block.dataCriacao.toISOString(),
-          })),
-          emergencias: user.barbeiro.emergencias.map((emergency) => ({
-            dataInicio: emergency.dataInicio.toISOString(),
-            dataFim: emergency.dataFim.toISOString(),
-            status: emergency.status,
-            dataCriacao: emergency.dataCriacao.toISOString(),
-          })),
-        }
-      : user.cliente
-        ? {
-            criadoEm: user.cliente.dataCriacao.toISOString(),
-            atualizadoEm: user.cliente.dataAtualizacao.toISOString(),
-          }
-        : {};
-
-    return {
-      formato: 'Barbearia-App personal data v1',
-      geradoEm: new Date().toISOString(),
-      limitacoes: [
-        'O conteúdo das mensagens, observações de agendamentos, motivos de bloqueios/emergências e textos livres de notificações foram omitidos para reduzir a exposição de dados de terceiros; o escopo ainda depende de decisão do responsável pelo tratamento.',
-        'Mensagens apagadas para todos ou ocultadas para este usuário não são incluídas.',
-        'Tokens, hashes de senha, identificadores internos de autenticação, credenciais e segredos não são incluídos.',
-        'Preferências não persistidas não estão disponíveis para exportação.',
-        'Notificações já limpas não são incluídas, pois não são exibidas pelo endpoint atual do usuário.',
-      ],
-      conta: {
-        nome: user.nome,
-        telefone: user.telefone,
-        email: user.email,
-        tipoUsuario: user.tipoUsuario,
-        ativo: user.ativo,
-        criadoEm: user.dataCriacao.toISOString(),
-        atualizadoEm: user.dataAtualizacao.toISOString(),
-        confirmacaoEmail: {
-          confirmadoEm: user.emailVerificadoEm?.toISOString() ?? null,
-          confirmacaoObrigatoria: user.emailConfirmacaoObrigatoria,
-        },
-        perfil: barberProfile,
-      },
-      agendamentos: appointments.map((appointment) => ({
-        data: dateKeyFromUtcMidnight(appointment.data),
-        horaInicio: formatLocalHHmm(appointment.horaInicio),
-        horaFim: formatLocalHHmm(appointment.horaFim),
-        status: appointment.status,
-        criadoEm: appointment.dataCriacao.toISOString(),
-        atualizadoEm: appointment.dataAtualizacao.toISOString(),
-        servico: appointment.servico,
-      })),
-      listaEspera: waitlist.map((entry) => ({
-        dataDesejada: dateKeyFromUtcMidnight(entry.dataDesejada),
-        horaInicio: entry.horaInicio,
-        horaFim: entry.horaFim,
-        status: entry.status,
-        dataEntrada: entry.dataEntrada.toISOString(),
-        atualizadoEm: entry.dataAtualizacao.toISOString(),
-        servico: entry.servico,
-        claims: entry.claims.map((claim) => ({
-          data: dateKeyFromUtcMidnight(claim.data),
-          horaInicio: claim.horaInicio,
-          horaFim: claim.horaFim,
-          status: claim.status,
-          expiraEm: claim.expiraEm.toISOString(),
-          criadoEm: claim.dataCriacao.toISOString(),
-        })),
-      })),
-      mensagens: {
-        conteudoIncluido: false,
-        registros: messages.map((message) => ({
+      (message) => ({ dataCriacao: message.dataCriacao, id: message.id }),
+      (message) =>
+        writeJson({
           direcao: message.remetenteId === userId ? 'ENVIADA' : 'RECEBIDA',
           dataCriacao: message.dataCriacao.toISOString(),
           dataLeitura: message.dataLeitura?.toISOString() ?? null,
           lida: message.lida,
           apagadaParaTodos: message.apagadaParaTodos,
           dataExclusao: message.dataExclusao?.toISOString() ?? null,
-        })),
+        }),
+    );
+    await write('},"notificacoes":');
+    await this.writePagedExportArray(
+      file,
+      signal,
+      (cursor: ExportCreatedAtCursor | undefined) =>
+        transaction.notificacao.findMany({
+          where: {
+            usuarioId: userId,
+            limpa: false,
+            ...(cursor
+              ? {
+                  OR: [
+                    { dataCriacao: { lt: cursor.dataCriacao } },
+                    {
+                      dataCriacao: cursor.dataCriacao,
+                      id: { lt: cursor.id },
+                    },
+                  ],
+                }
+              : {}),
+          },
+          orderBy: [{ dataCriacao: 'desc' }, { id: 'desc' }],
+          take: PERSONAL_DATA_EXPORT_PAGE_SIZE,
+          select: {
+            id: true,
+            tipo: true,
+            lida: true,
+            dataCriacao: true,
+            dataLeitura: true,
+            claim: { select: { status: true, expiraEm: true } },
+          },
+        }),
+      (notification) => ({
+        dataCriacao: notification.dataCriacao,
+        id: notification.id,
+      }),
+      (notification) => {
+        const serialized = JSON.stringify({
+          tipo: notification.tipo,
+          lida: notification.lida,
+          dataCriacao: notification.dataCriacao.toISOString(),
+          dataLeitura: notification.dataLeitura?.toISOString() ?? null,
+          ...(notification.claim
+            ? {
+                claimStatus: notification.claim.status,
+                claimExpiraEm: notification.claim.expiraEm.toISOString(),
+              }
+            : {}),
+        });
+        return write(serialized);
       },
-      notificacoes: notifications.map((notification) => ({
-        tipo: notification.tipo,
-        lida: notification.lida,
-        dataCriacao: notification.dataCriacao.toISOString(),
-        dataLeitura: notification.dataLeitura?.toISOString() ?? null,
-        ...(notification.claim
-          ? {
-              claimStatus: notification.claim.status,
-              claimExpiraEm: notification.claim.expiraEm.toISOString(),
-            }
-          : {}),
-      })),
-      solicitacoes: privacyRequests.map((request) => ({
-        categoria: request.categoria,
-        status: request.status,
-        dataCriacao: request.dataCriacao.toISOString(),
-      })),
+    );
+    await write(',"solicitacoes":');
+    await this.writePagedExportArray(
+      file,
+      signal,
+      (cursor: ExportCreatedAtCursor | undefined) =>
+        transaction.solicitacaoTitular.findMany({
+          where: {
+            titularId: userId,
+            ...(cursor
+              ? {
+                  OR: [
+                    { dataCriacao: { gt: cursor.dataCriacao } },
+                    {
+                      dataCriacao: cursor.dataCriacao,
+                      id: { gt: cursor.id },
+                    },
+                  ],
+                }
+              : {}),
+          },
+          orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
+          take: PERSONAL_DATA_EXPORT_PAGE_SIZE,
+          select: {
+            id: true,
+            categoria: true,
+            status: true,
+            dataCriacao: true,
+          },
+        }),
+      (request) => ({ dataCriacao: request.dataCriacao, id: request.id }),
+      (request) =>
+        writeJson({
+          categoria: request.categoria,
+          status: request.status,
+          dataCriacao: request.dataCriacao.toISOString(),
+        }),
+    );
+    await write('}');
+  }
+
+  private async writePagedExportArray<T, TCursor>(
+    file: TemporaryExportFile,
+    signal: AbortSignal | undefined,
+    fetchPage: (cursor: TCursor | undefined) => Promise<T[]>,
+    getCursor: (last: T) => TCursor,
+    writeRow: (row: T) => Promise<void>,
+  ): Promise<void> {
+    const write = async (value: string): Promise<void> => {
+      this.throwIfExportCancelled(signal);
+      await file.write(Buffer.from(value, 'utf8'));
+      this.throwIfExportCancelled(signal);
     };
+    await write('[');
+    let cursor: TCursor | undefined;
+    let first = true;
+
+    while (true) {
+      this.throwIfExportCancelled(signal);
+      const page = await fetchPage(cursor);
+      this.throwIfExportCancelled(signal);
+
+      for (const row of page) {
+        this.throwIfExportCancelled(signal);
+        if (!first) {
+          await write(',');
+        }
+        await writeRow(row);
+        first = false;
+      }
+
+      if (page.length < PERSONAL_DATA_EXPORT_PAGE_SIZE) {
+        break;
+      }
+      const last = page[page.length - 1];
+      if (!last) {
+        break;
+      }
+      cursor = getCursor(last);
+    }
+
+    await write(']');
+  }
+
+  private throwIfExportCancelled(signal?: AbortSignal): void {
+    if (signal?.aborted) {
+      throw new PersonalDataExportCancelledError();
+    }
   }
 
   async findAuthorizationStateById(userId: number): Promise<{
@@ -678,8 +1084,7 @@ export class UsersService {
     if (data.nome !== undefined) updates.nome = data.nome;
     if (data.telefone !== undefined) updates.telefone = data.telefone;
     if (data.email !== undefined) {
-      updates.email =
-        data.email === null ? null : normalizeEmail(data.email);
+      updates.email = data.email === null ? null : normalizeEmail(data.email);
     }
 
     if (Object.keys(updates).length === 0) {
@@ -710,9 +1115,7 @@ export class UsersService {
           });
 
           if (!currentUser) {
-            throw new NotFoundException(
-              `Usuário com ID ${id} não encontrado.`,
-            );
+            throw new NotFoundException(`Usuário com ID ${id} não encontrado.`);
           }
 
           const currentAuthVersion = currentUser.authVersion ?? 0;
@@ -844,7 +1247,9 @@ export class UsersService {
     }>('MESSAGES_GATEWAY', { strict: false });
 
     if (!gateway || typeof gateway.revokeUserSessions !== 'function') {
-      throw new Error('Gateway de mensagens indisponível para revogar sessões.');
+      throw new Error(
+        'Gateway de mensagens indisponível para revogar sessões.',
+      );
     }
 
     gateway.revokeUserSessions(usuarioId);
@@ -885,8 +1290,7 @@ export class UsersService {
             senhaHash: data.senhaHash,
             tipoUsuario: data.tipoUsuario,
             email: data.email || null,
-            emailConfirmacaoObrigatoria:
-              data.requireEmailVerification ?? false,
+            emailConfirmacaoObrigatoria: data.requireEmailVerification ?? false,
             ativo: true,
             cliente: {
               create: {},
@@ -906,8 +1310,7 @@ export class UsersService {
           senhaHash: data.senhaHash,
           tipoUsuario: data.tipoUsuario,
           email: data.email || null,
-          emailConfirmacaoObrigatoria:
-            data.requireEmailVerification ?? false,
+          emailConfirmacaoObrigatoria: data.requireEmailVerification ?? false,
           ativo: true,
         },
         select: this.publicUserSelect,

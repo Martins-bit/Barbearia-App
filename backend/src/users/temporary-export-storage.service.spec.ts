@@ -15,10 +15,26 @@ import { tmpdir } from 'node:os';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import {
+  TemporaryExportCleanupError,
   TemporaryExportLimitError,
   TemporaryExportStorageError,
   TemporaryExportStorageService,
 } from './temporary-export-storage.service';
+
+const mockUnlink = jest.fn();
+const mockRmdir = jest.fn();
+
+jest.mock('node:fs/promises', () => {
+  const actual = jest.requireActual('node:fs/promises');
+  return {
+    ...actual,
+    unlink: (...args: unknown[]) => mockUnlink(...args),
+    rmdir: (...args: unknown[]) => mockRmdir(...args),
+  };
+});
+
+const actualFsPromises =
+  jest.requireActual<typeof import('node:fs/promises')>('node:fs/promises');
 
 const INSTANCE_DIRECTORY_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -30,6 +46,8 @@ describe('TemporaryExportStorageService', () => {
   let services: TemporaryExportStorageService[];
 
   beforeEach(async () => {
+    mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+    mockRmdir.mockReset().mockImplementation(actualFsPromises.rmdir);
     rootDirectory = await mkdtemp(
       join(tmpdir(), 'barbearia-export-storage-test-'),
     );
@@ -37,6 +55,8 @@ describe('TemporaryExportStorageService', () => {
   });
 
   afterEach(async () => {
+    mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+    mockRmdir.mockReset().mockImplementation(actualFsPromises.rmdir);
     for (const service of services) {
       await service.onModuleDestroy().catch(() => undefined);
     }
@@ -81,33 +101,147 @@ describe('TemporaryExportStorageService', () => {
     return child.pid;
   }
 
-  function runCommand(executable: string, args: string[]): Promise<string> {
+  function runCommand(
+    executable: string,
+    args: string[],
+  ): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolveOutput, reject) => {
       execFile(
         executable,
         args,
         { encoding: 'utf8', maxBuffer: 16 * 1024, windowsHide: true },
-        (error, stdout) => {
+        (error, stdout, stderr) => {
           if (error) {
-            reject(error);
+            const code = (error as NodeJS.ErrnoException).code ?? 'unknown';
+            reject(
+              new Error(
+                `Command "${executable}" failed with code ${code}${
+                  stderr.trim() ? `; stderr: ${stderr.trim()}` : ''
+                }`,
+                { cause: error },
+              ),
+            );
           } else {
-            resolveOutput(stdout);
+            resolveOutput({ stdout, stderr });
           }
         },
       );
     });
   }
 
-  async function windowsAclSids(directory: string): Promise<string[]> {
+  interface WindowsAclEntry {
+    sid: string;
+    rights: string;
+    accessType: string;
+    inheritanceFlags: string;
+    propagationFlags: string;
+    isInherited: boolean;
+  }
+
+  interface WindowsAcl {
+    isProtected: boolean;
+    entries: WindowsAclEntry[];
+  }
+
+  async function windowsAcl(directory: string): Promise<WindowsAcl> {
     const encodedPath = Buffer.from(directory, 'utf16le').toString('base64');
-    const script = `$path = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('${encodedPath}')); $acl = Get-Acl -LiteralPath $path; $acl.Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value }`;
-    const output = await runCommand('powershell.exe', [
+    const script = [
+      '$ErrorActionPreference = "Stop"',
+      'try {',
+      `  $path = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('${encodedPath}'))`,
+      '  if ([System.IO.Directory]::Exists($path)) { $acl = [System.IO.Directory]::GetAccessControl($path) } else { $acl = [System.IO.File]::GetAccessControl($path) }',
+      '  $rules = $acl.GetAccessRules($true, $true, [System.Security.Principal.NTAccount])',
+      '  $entries = @($rules | ForEach-Object {',
+      '    $identity = $_.IdentityReference.Value',
+      '    try {',
+      '      $sid = $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value',
+      '    } catch {',
+      '      throw "Cannot translate ACL identity $identity to SID: $($_.Exception.Message)"',
+      '    }',
+      '    [pscustomobject]@{',
+      '      sid = $sid',
+      '      rights = [string]$_.FileSystemRights',
+      '      accessType = [string]$_.AccessControlType',
+      '      inheritanceFlags = [string]$_.InheritanceFlags',
+      '      propagationFlags = [string]$_.PropagationFlags',
+      '      isInherited = [bool]$_.IsInherited',
+      '    }',
+      '  })',
+      '  if ($entries.Count -eq 0) { throw "ACL API returned no access control entries" }',
+      '  [pscustomobject]@{ isProtected = [bool]$acl.AreAccessRulesProtected; entries = $entries } | ConvertTo-Json -Depth 4 -Compress',
+      '} catch {',
+      '  [Console]::Error.WriteLine($_.Exception.Message)',
+      '  exit 1',
+      '}',
+    ].join('\n');
+    const { stdout, stderr } = await runCommand('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-EncodedCommand',
       Buffer.from(script, 'utf16le').toString('base64'),
     ]);
-    return output.split(/\r?\n/).filter(Boolean).sort();
+    const stderrOutput = stderr.trim();
+    const startupProgressOnly =
+      stderrOutput.startsWith('#< CLIXML') &&
+      /<Obj S="progress"/i.test(stderrOutput) &&
+      !/<Obj S="(?:error|warning)"/i.test(stderrOutput);
+    if (stderrOutput && !startupProgressOnly) {
+      throw new Error(`PowerShell ACL query wrote to stderr: ${stderr.trim()}`);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch (error) {
+      throw new Error(
+        `PowerShell ACL query returned invalid JSON: ${stdout.trim() || '<empty output>'}`,
+        { cause: error },
+      );
+    }
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      !('isProtected' in parsed) ||
+      typeof parsed.isProtected !== 'boolean' ||
+      !('entries' in parsed)
+    ) {
+      throw new Error('PowerShell ACL query returned an invalid result shape.');
+    }
+
+    const entries = Array.isArray(parsed.entries)
+      ? parsed.entries
+      : [parsed.entries];
+    if (entries.length === 0) {
+      throw new Error('PowerShell ACL query returned no usable ACEs.');
+    }
+    for (const entry of entries) {
+      if (
+        !entry ||
+        typeof entry !== 'object' ||
+        !('sid' in entry) ||
+        typeof entry.sid !== 'string' ||
+        !/^S-\d+(?:-\d+)+$/.test(entry.sid) ||
+        !('rights' in entry) ||
+        typeof entry.rights !== 'string' ||
+        !('accessType' in entry) ||
+        typeof entry.accessType !== 'string' ||
+        !('inheritanceFlags' in entry) ||
+        typeof entry.inheritanceFlags !== 'string' ||
+        !('propagationFlags' in entry) ||
+        typeof entry.propagationFlags !== 'string' ||
+        !('isInherited' in entry) ||
+        typeof entry.isInherited !== 'boolean'
+      ) {
+        throw new Error(
+          `PowerShell ACL query returned an unusable ACE: ${JSON.stringify(entry)}`,
+        );
+      }
+    }
+
+    return {
+      isProtected: parsed.isProtected,
+      entries: entries as WindowsAclEntry[],
+    };
   }
 
   async function ownerMarker(instanceId: string, pid: number): Promise<string> {
@@ -159,7 +293,7 @@ describe('TemporaryExportStorageService', () => {
     const storage = await createStorage();
     const file = await storage.create();
     const [instanceDirectory] = await instanceDirectories();
-    const identity = await runCommand('whoami.exe', [
+    const { stdout: identity } = await runCommand('whoami.exe', [
       '/user',
       '/fo',
       'csv',
@@ -168,17 +302,58 @@ describe('TemporaryExportStorageService', () => {
     const serviceSid = identity.match(/"(S-\d+(?:-\d+)+)"/)?.[1];
     expect(serviceSid).toBeDefined();
     const expectedSids = [serviceSid!, 'S-1-5-18', 'S-1-5-32-544'].sort();
-    const [partName] = (await instanceFiles(instanceDirectory)).filter((name) =>
+    const partName = (await instanceFiles(instanceDirectory)).find((name) =>
       name.endsWith('.part'),
     );
+    if (!partName) {
+      throw new Error('The partial export file was not created.');
+    }
+    await file.write(Buffer.from('complete'));
+    const partAcl = await windowsAcl(join(instanceDirectory, partName));
 
-    await expect(windowsAclSids(rootDirectory)).resolves.toEqual(expectedSids);
-    await expect(windowsAclSids(instanceDirectory)).resolves.toEqual(
-      expectedSids,
+    const directories = [
+      await windowsAcl(rootDirectory),
+      await windowsAcl(instanceDirectory),
+    ];
+    for (const acl of directories) {
+      expect(acl.isProtected).toBe(true);
+      expect(acl.entries.map((entry) => entry.sid).sort()).toEqual(
+        expectedSids,
+      );
+      for (const entry of acl.entries) {
+        expect(entry).toMatchObject({
+          rights: 'FullControl',
+          accessType: 'Allow',
+          inheritanceFlags: 'ContainerInherit, ObjectInherit',
+          propagationFlags: 'None',
+          isInherited: false,
+        });
+      }
+    }
+
+    const assertPrivateFileAcl = (acl: WindowsAcl): void => {
+      expect(acl.entries.map((entry) => entry.sid).sort()).toEqual(
+        expectedSids,
+      );
+      for (const entry of acl.entries) {
+        expect(entry).toMatchObject({
+          rights: 'FullControl',
+          accessType: 'Allow',
+          propagationFlags: 'None',
+          isInherited: true,
+        });
+      }
+    };
+    assertPrivateFileAcl(partAcl);
+
+    await file.finalize();
+    const readyName = (await instanceFiles(instanceDirectory)).find((name) =>
+      name.endsWith('.ready'),
     );
-    await expect(
-      windowsAclSids(join(instanceDirectory, partName)),
-    ).resolves.toEqual(expectedSids);
+    if (!readyName) {
+      throw new Error('The finalized export file was not created.');
+    }
+    assertPrivateFileAcl(await windowsAcl(join(instanceDirectory, readyName)));
     await file.cancel();
   }, 30_000);
 
@@ -204,6 +379,7 @@ describe('TemporaryExportStorageService', () => {
     const file = await storage.create();
     await file.write(Buffer.from('first-'));
     await file.write(Buffer.from('second'));
+    expect(file.sizeBytes).toBe(Buffer.byteLength('first-second'));
 
     const [directory] = await instanceDirectories();
     expect(
@@ -313,6 +489,207 @@ describe('TemporaryExportStorageService', () => {
     expect(await instanceFiles(directory)).toEqual(['owner.json']);
   });
 
+  it('attempts to remove .ready even when removing .part fails', async () => {
+    const storage = await createStorage();
+    const file = await storage.create();
+    await file.write(Buffer.from('partial'));
+    const [directory] = await instanceDirectories();
+    const partName = (await instanceFiles(directory)).find((name) =>
+      name.endsWith('.part'),
+    );
+    if (!partName) throw new Error('The partial export file was not created.');
+    const partPath = join(directory, partName);
+    const readyPath = join(
+      directory,
+      `${partName.slice(0, -'.part'.length)}.ready`,
+    );
+    await writeFile(readyPath, 'ready');
+    const unlinkSpy = mockUnlink.mockImplementation((path: unknown) => {
+      if (String(path) === partPath) {
+        return Promise.reject(
+          Object.assign(new Error('file busy'), { code: 'EBUSY' }),
+        );
+      }
+      return actualFsPromises.unlink(path as string);
+    });
+
+    try {
+      await expect(file.dispose()).rejects.toBeInstanceOf(
+        TemporaryExportCleanupError,
+      );
+      expect(unlinkSpy).toHaveBeenCalledWith(readyPath);
+      await expect(lstat(partPath)).resolves.toBeDefined();
+      await expect(lstat(readyPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+      await file.dispose();
+    }
+  });
+
+  it('keeps a finalized .ready file tracked when its removal fails', async () => {
+    const storage = await createStorage();
+    const file = await storage.create();
+    await file.write(Buffer.from('ready'));
+    await file.finalize();
+    const [directory] = await instanceDirectories();
+    const readyName = (await instanceFiles(directory)).find((name) =>
+      name.endsWith('.ready'),
+    );
+    if (!readyName) throw new Error('The finalized file was not created.');
+    const readyPath = join(directory, readyName);
+    const unlinkSpy = mockUnlink.mockImplementation((path: unknown) =>
+      String(path) === readyPath
+        ? Promise.reject(
+            Object.assign(new Error('file busy'), { code: 'EBUSY' }),
+          )
+        : actualFsPromises.unlink(path as string),
+    );
+
+    try {
+      await expect(file.dispose()).rejects.toBeInstanceOf(
+        TemporaryExportCleanupError,
+      );
+      await expect(lstat(readyPath)).resolves.toBeDefined();
+      expect(unlinkSpy).toHaveBeenCalledWith(readyPath);
+      expect(file.sizeBytes).toBe(Buffer.byteLength('ready'));
+    } finally {
+      mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+      await file.dispose();
+    }
+  });
+
+  it('treats ENOENT as an already completed file removal', async () => {
+    const storage = await createStorage();
+    const file = await storage.create();
+    await file.write(Buffer.from('partial'));
+    const [directory] = await instanceDirectories();
+    const partName = (await instanceFiles(directory)).find((name) =>
+      name.endsWith('.part'),
+    );
+    if (!partName) throw new Error('The partial export file was not created.');
+
+    await actualFsPromises.unlink(join(directory, partName));
+    await expect(file.dispose()).resolves.toBeUndefined();
+    expect(file.sizeBytes).toBe(0);
+  });
+
+  it('retries a transient unlink failure and completes cleanup', async () => {
+    const storage = await createStorage();
+    const file = await storage.create();
+    await file.write(Buffer.from('partial'));
+    const [directory] = await instanceDirectories();
+    const partName = (await instanceFiles(directory)).find((name) =>
+      name.endsWith('.part'),
+    );
+    if (!partName) throw new Error('The partial export file was not created.');
+    const partPath = join(directory, partName);
+    let attempts = 0;
+    const unlinkSpy = mockUnlink.mockImplementation((path: unknown) => {
+      if (String(path) === partPath && attempts++ === 0) {
+        return Promise.reject(
+          Object.assign(new Error('temporary sharing violation'), {
+            code: 'EPERM',
+          }),
+        );
+      }
+      return actualFsPromises.unlink(path as string);
+    });
+
+    try {
+      await expect(file.dispose()).resolves.toBeUndefined();
+      expect(attempts).toBe(2);
+      expect(unlinkSpy).toHaveBeenCalledTimes(2);
+      await expect(lstat(partPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+    }
+  });
+
+  it('keeps persistent cleanup failures accounted until a later retry succeeds', async () => {
+    const storage = await createStorage({
+      maxFileSizeBytes: 3,
+      maxTotalSizeBytes: 3,
+    });
+    const file = await storage.create();
+    await file.write(Buffer.from('123'));
+    const [directory] = await instanceDirectories();
+    const partName = (await instanceFiles(directory)).find((name) =>
+      name.endsWith('.part'),
+    );
+    if (!partName) throw new Error('The partial export file was not created.');
+    const partPath = join(directory, partName);
+    const unlinkSpy = mockUnlink.mockImplementation((path: unknown) =>
+      String(path) === partPath
+        ? Promise.reject(
+            Object.assign(new Error('access denied'), { code: 'EACCES' }),
+          )
+        : actualFsPromises.unlink(path as string),
+    );
+
+    try {
+      await expect(file.dispose()).rejects.toBeInstanceOf(
+        TemporaryExportCleanupError,
+      );
+      expect(unlinkSpy.mock.calls).toHaveLength(3);
+      await expect(lstat(partPath)).resolves.toBeDefined();
+      const blocked = await storage.create();
+      await expect(blocked.write(Buffer.from('1'))).rejects.toBeInstanceOf(
+        TemporaryExportLimitError,
+      );
+
+      mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+      await file.dispose();
+      expect(file.sizeBytes).toBe(0);
+      const replacement = await storage.create();
+      await expect(
+        replacement.write(Buffer.from('123')),
+      ).resolves.toBeUndefined();
+      await replacement.dispose();
+    } finally {
+      mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+    }
+  });
+
+  it('retries a pending cleanup automatically during the same process', async () => {
+    const storage = await createStorage();
+    const file = await storage.create();
+    await file.write(Buffer.from('partial'));
+    const [directory] = await instanceDirectories();
+    const partName = (await instanceFiles(directory)).find((name) =>
+      name.endsWith('.part'),
+    );
+    if (!partName) throw new Error('The partial export file was not created.');
+    const partPath = join(directory, partName);
+    let attempts = 0;
+    let retrySucceeded!: () => void;
+    const retryCompleted = new Promise<void>((resolveRetry) => {
+      retrySucceeded = resolveRetry;
+    });
+    const unlinkSpy = mockUnlink.mockImplementation(async (path: unknown) => {
+      if (String(path) === partPath && attempts++ < 3) {
+        throw Object.assign(new Error('temporary sharing violation'), {
+          code: 'EBUSY',
+        });
+      }
+      await actualFsPromises.unlink(path as string);
+      if (String(path) === partPath) retrySucceeded();
+    });
+
+    try {
+      await expect(file.dispose()).rejects.toBeInstanceOf(
+        TemporaryExportCleanupError,
+      );
+      expect(attempts).toBe(3);
+      await retryCompleted;
+      await file.dispose();
+      expect(unlinkSpy).toHaveBeenCalledTimes(4);
+      await expect(lstat(partPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(file.sizeBytes).toBe(0);
+    } finally {
+      mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+    }
+  });
+
   it('removes its files and instance directory on normal module shutdown', async () => {
     const storage = await createStorage();
     const file = await storage.create();
@@ -323,6 +700,32 @@ describe('TemporaryExportStorageService', () => {
 
     await expect(lstat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readdir(rootDirectory)).toEqual([]);
+  });
+
+  it('preserves a safely retryable empty instance directory after shutdown removal fails', async () => {
+    const storage = await createStorage();
+    const [directory] = await instanceDirectories();
+    const rmdirSpy = mockRmdir.mockImplementation((path: unknown) =>
+      String(path) === directory
+        ? Promise.reject(
+            Object.assign(new Error('directory busy'), { code: 'EBUSY' }),
+          )
+        : actualFsPromises.rmdir(path as string),
+    );
+
+    try {
+      await expect(storage.onModuleDestroy()).rejects.toBeInstanceOf(
+        TemporaryExportStorageError,
+      );
+      expect(rmdirSpy).toHaveBeenCalledTimes(3);
+      expect(await readdir(directory)).toEqual([]);
+    } finally {
+      mockRmdir.mockReset().mockImplementation(actualFsPromises.rmdir);
+    }
+
+    const nextStorage = await createStorage();
+    await expect(lstat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
+    await nextStorage.onModuleDestroy();
   });
 
   it('cleans a file if its read stream is cancelled', async () => {
@@ -450,6 +853,63 @@ describe('TemporaryExportStorageService', () => {
 
     await expect(lstat(abandonedDirectory)).resolves.toBeDefined();
     await expect(readFile(targetPath, 'utf8')).resolves.toBe('must remain');
+  });
+
+  it('preserves the owner marker after abandoned data removal fails and retries on initialization', async () => {
+    const deadPid = await deadProcessId();
+    const instanceId = randomUUID();
+    const abandonedDirectory = join(rootDirectory, instanceId);
+    const partPath = join(abandonedDirectory, `${randomUUID()}.part`);
+    await mkdir(abandonedDirectory, { mode: 0o700 });
+    await writeFile(
+      join(abandonedDirectory, 'owner.json'),
+      await ownerMarker(instanceId, deadPid),
+      { mode: 0o600 },
+    );
+    await writeFile(partPath, 'abandoned', { mode: 0o600 });
+    const unlinkSpy = mockUnlink.mockImplementation((path: unknown) =>
+      String(path) === partPath
+        ? Promise.reject(
+            Object.assign(new Error('file busy'), { code: 'EBUSY' }),
+          )
+        : actualFsPromises.unlink(path as string),
+    );
+
+    try {
+      await createStorage();
+      expect(unlinkSpy).toHaveBeenCalledTimes(3);
+      await expect(
+        lstat(join(abandonedDirectory, 'owner.json')),
+      ).resolves.toBeDefined();
+      await expect(lstat(partPath)).resolves.toBeDefined();
+
+      mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+      await createStorage();
+      await expect(lstat(abandonedDirectory)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    } finally {
+      mockUnlink.mockReset().mockImplementation(actualFsPromises.unlink);
+    }
+  });
+
+  it('preserves abandoned files whose names do not match the storage pattern', async () => {
+    const deadPid = await deadProcessId();
+    const instanceId = randomUUID();
+    const directory = join(rootDirectory, instanceId);
+    const unexpectedPath = join(directory, 'unexpected.tmp');
+    await mkdir(directory, { mode: 0o700 });
+    await writeFile(
+      join(directory, 'owner.json'),
+      await ownerMarker(instanceId, deadPid),
+      { mode: 0o600 },
+    );
+    await writeFile(unexpectedPath, 'must remain', { mode: 0o600 });
+
+    await createStorage();
+
+    await expect(lstat(directory)).resolves.toBeDefined();
+    await expect(readFile(unexpectedPath, 'utf8')).resolves.toBe('must remain');
   });
 
   it('preserves directories whose owner marker cannot be validated', async () => {

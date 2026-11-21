@@ -3,9 +3,10 @@
 > **Rascunho para revisão. Não publicar antes de preencher e validar todos os
 > itens marcados como `[PENDENTE DE DEFINIÇÃO]`.**
 >
-> Este texto descreve os tratamentos identificados no código e na
-> documentação do projeto em 12/11/2026. Não é uma declaração de conformidade
-> com a LGPD nem substitui revisão pelo controlador e assessoria jurídica.
+> Este texto descreve os tratamentos identificados no código até 12/11/2026 e
+> as decisões de planejamento documentadas em 20/11/2026. Não é uma declaração
+> de conformidade com a LGPD nem substitui revisão pelo controlador e
+> assessoria jurídica.
 
 ## 1. Quem é responsável pelos dados
 
@@ -121,6 +122,29 @@ relacionados à conta e aos serviços solicitados. O sistema limita a consulta
 
 A limpeza de uma notificação não confirma, por si só, a eliminação física do
 registro. Prazo e forma de descarte estão **[PENDENTE DE DEFINIÇÃO]**.
+
+#### Notificações push — planejadas, ainda indisponíveis
+
+O aplicativo ainda não envia notificações push nem compartilha inscrições com
+serviços push. Foi aprovada apenas a preparação dessa funcionalidade. Se
+implementada, será opcional, e a permissão será solicitada somente após uma
+ação consciente do usuário. A instalação da PWA não será exigida para
+continuar usando o site pelo link; a disponibilidade de push depende do
+navegador e do sistema operacional. Em dispositivos Apple, o recebimento pode
+exigir que o usuário adicione a aplicação à tela inicial.
+
+O escopo planejado inclui confirmações e cancelamentos de agendamento,
+lembretes, oportunidades da lista de espera, novo agendamento para o barbeiro
+e cancelamento que afete a agenda do barbeiro. As mensagens exibidas pelo
+sistema operacional deverão ser genéricas, sem dados pessoais, tokens ou
+detalhes do agendamento. As notificações internas continuarão sendo a fonte
+principal para consultar informações.
+
+Antes de disponibilizar esse canal, este aviso deverá ser complementado com a
+identificação dos dados e serviços push envolvidos, operadores, localização,
+base legal, direitos e prazos de retenção. Esses pontos permanecem
+**[PENDENTE DE DEFINIÇÃO]**; este rascunho não deve ser interpretado como
+aviso de uma funcionalidade já ativa.
 
 ### Confirmação de e-mail
 

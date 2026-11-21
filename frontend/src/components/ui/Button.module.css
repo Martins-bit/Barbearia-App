@@ -44,6 +44,21 @@
   font-size: var(--text-md);
 }
 
+@media (max-width: 640px), (pointer: coarse) {
+  .sm,
+  .md {
+    min-height: 44px;
+  }
+
+  .sm {
+    height: 44px;
+  }
+
+  .md {
+    height: 44px;
+  }
+}
+
 .fullWidth {
   width: 100%;
 }

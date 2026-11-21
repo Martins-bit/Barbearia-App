@@ -11,11 +11,11 @@ ser definido ao publicar atrás de um proxy/CDN.
 
 ## 1. Três camadas distintas (não se confundem)
 
-| Camada | O que faz | Onde vive | O que **não** faz |
-|---|---|---|---|
-| **CORS** | Controla **qual origem** (domínio do navegador) pode chamar a API e usar credenciais. | `common/config/cors.config.ts` (REST + handshake Socket.IO) | Não autentica ninguém; não limita volume. |
-| **Autenticação JWT** | Prova **quem** é o usuário (identidade e papel) a cada requisição/handshake. | `auth/` (guard REST) + middleware do gateway (socket) | Não valida a origem nem limita volume. |
-| **Rate limiting** | Limita **quantas** requisições por janela de tempo por cliente/usuário. | `@nestjs/throttler` (REST) + janela deslizante (socket) | Não identifica origem nem autentica. |
+| Camada               | O que faz                                                                             | Onde vive                                                   | O que **não** faz                         |
+| -------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------- |
+| **CORS**             | Controla **qual origem** (domínio do navegador) pode chamar a API e usar credenciais. | `common/config/cors.config.ts` (REST + handshake Socket.IO) | Não autentica ninguém; não limita volume. |
+| **Autenticação JWT** | Prova **quem** é o usuário (identidade e papel) a cada requisição/handshake.          | `auth/` (guard REST) + middleware do gateway (socket)       | Não valida a origem nem limita volume.    |
+| **Rate limiting**    | Limita **quantas** requisições por janela de tempo por cliente/usuário.               | `@nestjs/throttler` (REST) + janela deslizante (socket)     | Não identifica origem nem autentica.      |
 
 Uma camada **não** substitui a outra. Desligar CORS não concede acesso (o JWT
 exige token válido); passar do limite gera `429`, não `401/403`.
@@ -49,14 +49,18 @@ camadas aceitam **exatamente as mesmas origens**.
 Variável: **`CORS_ALLOWED_ORIGINS`** (lista separada por vírgulas).
 
 ### Desenvolvimento
+
 - Se `CORS_ALLOWED_ORIGINS` **não** estiver definida, valem as origens locais
-  padrão: `http://localhost:5173` e `http://localhost:5174`.
+  padrão: `http://localhost:4173`, `http://127.0.0.1:4173`,
+  `http://localhost:5173`, `http://127.0.0.1:5173`,
+  `http://localhost:5174` e `http://localhost:5175`.
 - Para customizar, defina no `backend/.env`:
   ```
-  CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:5174
+  CORS_ALLOWED_ORIGINS=http://localhost:4173,http://127.0.0.1:4173,http://localhost:5173,http://127.0.0.1:5173,http://localhost:5174
   ```
 
 ### Produção (`NODE_ENV=production`)
+
 - **Obrigatório** definir `CORS_ALLOWED_ORIGINS` com o(s) domínio(s) real(is) do
   frontend. Exemplo (trocar pelo domínio verdadeiro):
   ```
@@ -69,6 +73,7 @@ Variável: **`CORS_ALLOWED_ORIGINS`** (lista separada por vírgulas).
   são rejeitadas na validação.
 
 ### Normalização e validação
+
 - Cada entrada é normalizada (sem barra final, sem espaços) e validada como URL
   absoluta `http(s)`.
 - Entradas vazias ou inválidas **não** são aceitas silenciosamente: em produção,
@@ -80,17 +85,17 @@ Implementado com `@nestjs/throttler` **sem guard global** — o `ThrottlerGuard`
 aplicado pontualmente via `@UseGuards(ThrottlerGuard)` + `@Throttle(...)` apenas
 nas operações sensíveis. Leituras e demais rotas legítimas **não** são limitadas.
 
-| Operação | Limite | Janela | Rastreador |
-|---|---|---|---|
-| `POST /auth/login` | 10 | 60 s | IP do cliente |
-| `POST /auth/register` | 5 | 60 s | IP do cliente |
-| `POST /auth/email/verification/request` | 3 | 60 s | IP do cliente; também 3 por usuário/hora |
-| `POST /auth/email/verification/resend` | 3 | 60 s | IP do cliente; além de intervalo de 60 s e 3 por endereço/hora |
-| `POST /auth/email/verification/confirm` | 5 | 60 s | IP do cliente |
-| `POST /auth/password-recovery` | 5 | 60 s | IP do cliente; também 3 tentativas por identificador normalizado/hora |
-| `POST /auth/password-reset` | 10 | 60 s | IP do cliente |
-| `POST /messages` (REST) | 30 | 60 s | **usuário autenticado** (`sub` do JWT) |
-| Socket.IO `message:send` | 30 | 60 s | usuário autenticado (`sub`) |
+| Operação                                | Limite | Janela | Rastreador                                                            |
+| --------------------------------------- | ------ | ------ | --------------------------------------------------------------------- |
+| `POST /auth/login`                      | 10     | 60 s   | IP do cliente                                                         |
+| `POST /auth/register`                   | 5      | 60 s   | IP do cliente                                                         |
+| `POST /auth/email/verification/request` | 3      | 60 s   | IP do cliente; também 3 por usuário/hora                              |
+| `POST /auth/email/verification/resend`  | 3      | 60 s   | IP do cliente; além de intervalo de 60 s e 3 por endereço/hora        |
+| `POST /auth/email/verification/confirm` | 5      | 60 s   | IP do cliente                                                         |
+| `POST /auth/password-recovery`          | 5      | 60 s   | IP do cliente; também 3 tentativas por identificador normalizado/hora |
+| `POST /auth/password-reset`             | 10     | 60 s   | IP do cliente                                                         |
+| `POST /messages` (REST)                 | 30     | 60 s   | **usuário autenticado** (`sub` do JWT)                                |
+| Socket.IO `message:send`                | 30     | 60 s   | usuário autenticado (`sub`)                                           |
 
 - O limite de mensagens é por **usuário autenticado** (não por IP), o que é mais
   justo atrás de NAT/proxy e evita que um IP compartilhado derrube vários
@@ -132,9 +137,64 @@ nas operações sensíveis. Leituras e demais rotas legítimas **não** são lim
   por processo).
 
 ### Testes automatizados e o limite
+
 - Cada suíte e2e sobe uma aplicação isolada, com estado de throttling próprio;
 - os volumes por suíte ficam **abaixo** dos limites (login ≤ 2, register 0,
   `POST /messages` ≤ 2), portanto não há falso `429` nos testes existentes.
+
+### Lock distribuído para exportação LGPD
+
+A infraestrutura Redis usa um cliente compartilhado, com conexão e
+encerramento centralizados. O `UserExportLockService` implementa o lock
+distribuído por identificador interno do titular, em namespace separado do
+rate limit, integrado ao endpoint `GET /users/me/export`. A aquisição usa
+`SET NX PX` e um token aleatório de 32 bytes. Renovação e liberação usam scripts
+Lua que comparam o token proprietário antes de alterar a chave.
+
+O controlador adquire o lock antes de gerar o arquivo, cancela a operação se a
+propriedade for perdida e destrói uma resposta parcial quando necessário.
+Depois da transmissão, ele libera o lock somente após confirmar a limpeza do
+arquivo temporário. Se a limpeza persistir pendente, interrompe a renovação e
+não executa a liberação condicional; o lease expira pelo TTL. A interrupção da
+renovação remove o timer local e aguarda uma renovação em andamento.
+
+TTL não garante exclusão perfeita durante failover, partições ou perda de
+conexão com Redis: uma instância pode perder conectividade enquanto o lease
+expira e outra adquirir o lock. Renovação ambígua sinaliza perda de propriedade
+e cancela a exportação; uma falha de aquisição torna o endpoint indisponível.
+Essa proteção foi revisada no código e em testes com Redis simulado, mas **não
+foi validada contra Redis real nem contra a topologia de failover de produção**.
+A implantação ainda deve validar disponibilidade, failover e comportamento de
+rede do Redis.
+
+### Armazenamento e limpeza de arquivos temporários LGPD
+
+Os limites padrão atuais são **256 MiB por arquivo** e **512 MiB de bytes
+contabilizados pelo processo**. O total é mantido em memória por instância do
+serviço; não é uma quota global entre processos ou réplicas, inclusive quando
+elas compartilham um volume. Ambos os valores são provisórios e precisam ser
+calibrados com capacidade de disco, concorrência e carga do ambiente real.
+
+Arquivos `.part` e `.ready` só deixam de ser contabilizados depois que a remoção
+de ambos é confirmada. `ENOENT` equivale a já removido; outros erros são
+propagados e os caminhos são tentados independentemente. Erros transitórios
+selecionados recebem até duas retentativas curtas, além da tentativa inicial.
+Se a limpeza continuar falhando, o arquivo permanece registrado e contabilizado
+no processo; são agendadas até três novas tentativas com intervalos limitados
+de 1, 5 e 15 segundos. Ao esgotá-las, o serviço registra erro operacional sem
+incluir caminho ou dados pessoais. No encerramento, os timers pendentes são
+cancelados e uma falha impede remover o marcador de proprietário enquanto
+houver arquivos de dados.
+
+Na inicialização seguinte, diretórios abandonados só são removidos quando a
+identidade do proprietário e o encerramento do processo podem ser confirmados,
+e todas as entradas correspondem a arquivos regulares com nomes esperados.
+Arquivos sem remoção confirmada ficam preservados para nova tentativa posterior.
+Um diretório sem marcador só é removido automaticamente se estiver vazio.
+Essas medidas não garantem remoção diante de falhas persistentes do sistema de
+arquivos; nesses casos é necessária intervenção operacional. Arquivos
+remanescentes após reinício também não entram na quota total em memória do novo
+processo.
 
 ## 5. Confiança no proxy (Cloudflare) — atenção ao publicar
 
@@ -212,6 +272,14 @@ e qualquer execução manual também exige validação E2E.
 - `backend/src/app.module.ts` — registro do `ThrottlerModule` (throttler `default`).
 - `backend/src/common/throttling/redis-throttler-storage.ts` — storage Redis
   atômico e compartilhado do `ThrottlerGuard` HTTP.
+- `backend/src/common/redis/redis.module.ts` — cliente Redis compartilhado e
+  ciclo de vida centralizado.
+- `backend/src/common/redis/user-export-lock.service.ts` — lock Redis
+  condicionado por token para exportações LGPD.
+- `backend/src/users/temporary-export-storage.service.ts` — arquivos temporários
+  LGPD, limites locais e limpeza com retentativas limitadas.
+- `backend/src/users/users.controller.ts` — ciclo de vida do lock e da limpeza
+  no endpoint de exportação.
 - `backend/src/auth/auth.controller.ts` — `@Throttle` em login/register.
 - `backend/src/messages/messages.controller.ts` — `@Throttle` (por usuário) no envio REST.
 - `backend/src/messages/messages.gateway.ts` — CORS do handshake + limite do `message:send`.
@@ -224,16 +292,16 @@ e qualquer execução manual também exige validação E2E.
 
 ## 7. Configuração de variáveis (resumo)
 
-| Variável | Dev | Produção |
-|---|---|---|
-| `CORS_ALLOWED_ORIGINS` | opcional (padrão localhost 5173/5174) | **obrigatório**, domínio(s) real(is), sem `*` |
-| `TRUST_PROXY` | desligado | definir nº de hops do proxy/CDN (ex.: `1` p/ Cloudflare) |
-| `NODE_ENV` | `development` | `production` (ativa exigências de CORS) |
-| `EMAIL_PROVIDER` | `disabled` por padrão; `brevo` para ativar | selecionar explicitamente `brevo` |
-| `BREVO_API_KEY` | obrigatória somente com `EMAIL_PROVIDER=brevo` | segredo do painel Brevo; não versionar |
-| `BREVO_SENDER_EMAIL` | obrigatória somente com `EMAIL_PROVIDER=brevo` | remetente autorizado no Brevo |
-| `BREVO_SENDER_NAME` | opcional; usa `Barbearia do Bruno` por padrão | nome exibido do remetente |
-| `EMAIL_TIMEOUT_MS` | padrão `10000` ms | inteiro positivo; limita a chamada à API |
+| Variável               | Dev                                            | Produção                                                 |
+| ---------------------- | ---------------------------------------------- | -------------------------------------------------------- |
+| `CORS_ALLOWED_ORIGINS` | opcional (padrão loopback 4173/5173, 5174/5175) | **obrigatório**, domínio(s) real(is), sem `*`            |
+| `TRUST_PROXY`          | desligado                                      | definir nº de hops do proxy/CDN (ex.: `1` p/ Cloudflare) |
+| `NODE_ENV`             | `development`                                  | `production` (ativa exigências de CORS)                  |
+| `EMAIL_PROVIDER`       | `disabled` por padrão; `brevo` para ativar     | selecionar explicitamente `brevo`                        |
+| `BREVO_API_KEY`        | obrigatória somente com `EMAIL_PROVIDER=brevo` | segredo do painel Brevo; não versionar                   |
+| `BREVO_SENDER_EMAIL`   | obrigatória somente com `EMAIL_PROVIDER=brevo` | remetente autorizado no Brevo                            |
+| `BREVO_SENDER_NAME`    | opcional; usa `Barbearia do Bruno` por padrão  | nome exibido do remetente                                |
+| `EMAIL_TIMEOUT_MS`     | padrão `10000` ms                              | inteiro positivo; limita a chamada à API                 |
 
 Consulte `backend/.env.example` para os nomes exatos e o `.env` local para os
 valores do seu ambiente (o conteúdo do `.env` **não** é versionado).

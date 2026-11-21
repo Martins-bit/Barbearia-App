@@ -56,6 +56,7 @@ test('renders the request form and approved options for clients and barbers', as
         isBarbeiro: tipoUsuario === 'BARBEIRO',
         login: async () => user,
         logout: () => {},
+        retrySessionValidation: () => {},
       }
       const markup = renderToStaticMarkup(
         createElement(
@@ -79,6 +80,8 @@ test('renders the request form and approved options for clients and barbers', as
       assert.match(markup, /Correção/)
       assert.match(markup, /Exclusão ou anonimização/)
       assert.match(markup, /Outras solicitações/)
+      assert.match(markup, /Baixar meus dados/)
+      assert.doesNotMatch(markup, /Cancelar download/)
     }
 
     const emptyHistory = renderToStaticMarkup(

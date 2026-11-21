@@ -1,10 +1,4 @@
-import {
-  Inject,
-  Injectable,
-  Logger,
-  OnModuleDestroy,
-  OnModuleInit,
-} from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import type { ThrottlerStorage } from '@nestjs/throttler';
 import { randomUUID } from 'node:crypto';
 import { REDIS_THROTTLER_CLIENT } from './redis-throttler.tokens';
@@ -65,35 +59,11 @@ return { hits, timeToExpire, 0, 0 }
 `;
 
 @Injectable()
-export class RedisThrottlerStorage
-  implements ThrottlerStorage, OnModuleInit, OnModuleDestroy
-{
-  private readonly logger = new Logger(RedisThrottlerStorage.name);
-
+export class RedisThrottlerStorage implements ThrottlerStorage {
   constructor(
     @Inject(REDIS_THROTTLER_CLIENT)
     private readonly client: RedisThrottlerClient,
-  ) {
-    this.client.on('error', () => {
-      this.logger.error('Redis indisponível para o rate limit.');
-    });
-  }
-
-  async onModuleInit(): Promise<void> {
-    try {
-      await this.client.connect();
-    } catch {
-      this.client.destroy();
-      this.logger.error('Não foi possível conectar ao Redis obrigatório.');
-      throw new Error('Redis obrigatório para rate limiting indisponível.');
-    }
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    if (this.client.isOpen) {
-      await this.client.close();
-    }
-  }
+  ) {}
 
   async increment(
     key: string,

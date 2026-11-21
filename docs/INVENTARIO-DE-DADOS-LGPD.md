@@ -4,6 +4,7 @@
 projeto e do controlador efetivo.
 
 **Data da revisão do código:** 12/11/2026.
+**Data da atualização das decisões documentadas:** 20/11/2026.
 
 ## 1. Escopo, método e limites
 
@@ -218,7 +219,9 @@ isso pode ocorrer na prática e definir salvaguardas caso aplicável.
 - **Acesso:** somente usuário proprietário conforme consultas da API; o conteúdo
   pode refletir dados de agendamento ou de oportunidade.
 - **Compartilhamento:** dentro da aplicação para o usuário destinatário; não foi
-  identificado envio de notificações push/SMS por terceiro nesta auditoria.
+  identificado no código envio de notificações push/SMS por terceiro. O canal
+  push foi aprovado para planejamento, mas ainda não está implementado nem
+  ativo; não há atualmente esse compartilhamento.
 - **Base legal a avaliar:** execução do serviço solicitado para notificações
   necessárias; interesse legítimo para comunicações operacionais auxiliares,
   se aplicável, com transparência.
@@ -226,6 +229,26 @@ isso pode ocorrer na prática e definir salvaguardas caso aplicável.
   encerrados.
 - **Situação:** leitura e limpeza estão implementadas; limpeza não comprova
   eliminação física nem prazo de retenção.
+
+#### Web Push (planejado; não implementado)
+
+Foi aprovada a implementação futura de push como canal opcional, adicional às
+notificações internas. Atualmente não há inscrição, envio push nem
+compartilhamento com serviço push identificado no código.
+
+O tratamento futuro poderá envolver endpoint de inscrição, chaves técnicas,
+identificador do usuário, datas de ativação/revogação e metadados mínimos de
+tentativas de entrega. O endpoint é uma URL-capacidade e as chaves devem ser
+protegidas; detalhes de armazenamento, criptografia, operador/provedor,
+localização e eventuais transferências ainda não estão definidos. O payload
+deverá ser genérico e não conter dados pessoais, tokens ou detalhes do
+agendamento.
+
+A permissão do navegador será solicitada somente após ação consciente do
+usuário e não será obrigatória para continuar acessando o site por link. A
+permissão técnica do navegador, por si só, não define nem comprova a base legal
+do tratamento. Base legal, transparência, fornecedores, retenção e direitos
+aplicáveis devem ser avaliados pelo controlador antes da ativação.
 
 ### 4.8 Confirmação de e-mail
 
@@ -380,6 +403,7 @@ compartilhamento. Hipóteses a avaliar, sem conclusão jurídica:
 | Lista de espera, claims e outbox | Claims podem ter expiração funcional; outbox mantém tentativas e erro. | **Pendente.** |
 | Mensagens | Flags e data de exclusão lógica; conteúdo original pode permanecer. | **Pendente.** |
 | Notificações | Leitura/limpeza registradas. | **Pendente.** |
+| Inscrições push e registros de entrega (planejados) | Não existem no código atual. | **Pendente antes da ativação**, inclusive revogadas, tentativas, erros e registros associados. |
 | Tokens de confirmação | Expiração funcional de 30 minutos. | **Pendente** para remoção física após uso/expiração. |
 | Tokens de recuperação | Validade funcional definida no serviço. | **Pendente** para remoção física após uso/expiração. |
 | Rate limits | Alguns registros antigos são removidos durante solicitações. | **Pendente** para política completa, demais rate limits e prazo abrangente. |
@@ -462,11 +486,18 @@ fundamento legítimo de conservação.
 11. Quais prazos de retenção e critérios de anonimização/expurgo serão adotados
     para cada categoria, inclusive dados de contas encerradas e solicitações
     abandonadas?
-12. Como tratar a exclusão de mensagens, conta, histórico e dados relacionados,
+12. Para o Web Push planejado, qual base legal será adotada, como será
+    explicada a participação dos serviços push do navegador/OS e quais prazos
+    serão aplicados a inscrições, tentativas de entrega e revogações?
+13. Qual será o procedimento para rotação das chaves VAPID e qual o limite de
+    dispositivos inscritos por usuário?
+14. Como serão limitadas e eliminadas as tentativas de revogação pendentes
+    quando o logout ocorrer offline?
+15. Como tratar a exclusão de mensagens, conta, histórico e dados relacionados,
     considerando registros que precisem ser conservados por fundamento válido?
-13. Qual é o canal e o processo interno para direitos dos titulares, incidentes
+16. Qual é o canal e o processo interno para direitos dos titulares, incidentes
     de segurança e solicitações de autoridades?
-14. Há uso futuro planejado para marketing, análise ou métricas? Nenhum fluxo
+17. Há uso futuro planejado para marketing, análise ou métricas? Nenhum fluxo
     desse tipo foi comprovado nesta revisão; se existir fora do repositório,
     deve ser incluído no inventário e avaliado separadamente.
 

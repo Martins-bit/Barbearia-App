@@ -2,11 +2,23 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../prisma/prisma.service';
-import { UsersService } from './users.service';
+import {
+  PersonalDataExportCancelledError,
+  UsersService,
+} from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { Prisma } from '../generated/prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Readable } from 'node:stream';
+import type { TemporaryExportFile } from './temporary-export-storage.service';
+import {
+  TemporaryExportCleanupError,
+  TemporaryExportStorageService,
+} from './temporary-export-storage.service';
 
 /**
  * Constrói um P2002 realista do Prisma 7 + @prisma/adapter-pg.
@@ -47,10 +59,51 @@ function buildDriverAdapterCause(
   };
 }
 
+function exportUserFixture(userId = 21) {
+  const date = new Date('2026-01-02T03:04:05.000Z');
+  return {
+    id: userId,
+    nome: 'Cliente',
+    telefone: '11999999999',
+    email: null,
+    emailVerificadoEm: null,
+    emailConfirmacaoObrigatoria: false,
+    tipoUsuario: 'CLIENTE',
+    ativo: true,
+    dataCriacao: date,
+    dataAtualizacao: date,
+    cliente: {
+      id: userId + 10,
+      dataCriacao: date,
+      dataAtualizacao: date,
+    },
+    barbeiro: null,
+  };
+}
+
+async function readExportJson(file: TemporaryExportFile): Promise<any> {
+  const stream = await file.openReadStream();
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe('UsersService', () => {
   let service: UsersService;
   let moduleRef: { get: jest.Mock };
   let sessionRevoker: { revokeUserSessions: jest.Mock };
+  let temporaryStorage: { create: jest.Mock };
+  let createdFile: (TemporaryExportFile & { chunks: Buffer[] }) | undefined;
   let prisma: {
     $transaction: jest.Mock;
     $queryRaw: jest.Mock;
@@ -72,11 +125,47 @@ describe('UsersService', () => {
     mensagem: { findMany: jest.Mock };
     notificacao: { findMany: jest.Mock };
     solicitacaoTitular: { findMany: jest.Mock };
+    waitlistClaim: { findMany: jest.Mock };
+    horarioFuncionamento: { findMany: jest.Mock };
+    bloqueioAgenda: { findMany: jest.Mock };
+    emergencia: { findMany: jest.Mock };
   };
 
   beforeEach(async () => {
     sessionRevoker = { revokeUserSessions: jest.fn() };
     moduleRef = { get: jest.fn().mockReturnValue(sessionRevoker) };
+    createdFile = undefined;
+    temporaryStorage = {
+      create: jest.fn(async (signal?: AbortSignal) => {
+        const chunks: Buffer[] = [];
+        let finalized = false;
+        const file = {
+          get sizeBytes() {
+            return chunks.reduce((size, chunk) => size + chunk.byteLength, 0);
+          },
+          chunks,
+          write: jest.fn(async (chunk: Uint8Array) => {
+            if (signal?.aborted) {
+              throw new Error('cancelled');
+            }
+            chunks.push(Buffer.from(chunk));
+          }),
+          finalize: jest.fn(async () => {
+            finalized = true;
+          }),
+          openReadStream: jest.fn(async () => {
+            if (!finalized) {
+              throw new Error('not finalized');
+            }
+            return Readable.from(chunks);
+          }),
+          cancel: jest.fn(async () => undefined),
+          dispose: jest.fn(async () => undefined),
+        };
+        createdFile = file;
+        return file;
+      }),
+    };
     prisma = {
       $transaction: jest.fn((callback) => callback(prisma)),
       $queryRaw: jest.fn().mockResolvedValue([{ id: 1 }]),
@@ -98,6 +187,10 @@ describe('UsersService', () => {
       mensagem: { findMany: jest.fn().mockResolvedValue([]) },
       notificacao: { findMany: jest.fn().mockResolvedValue([]) },
       solicitacaoTitular: { findMany: jest.fn().mockResolvedValue([]) },
+      waitlistClaim: { findMany: jest.fn().mockResolvedValue([]) },
+      horarioFuncionamento: { findMany: jest.fn().mockResolvedValue([]) },
+      bloqueioAgenda: { findMany: jest.fn().mockResolvedValue([]) },
+      emergencia: { findMany: jest.fn().mockResolvedValue([]) },
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -106,6 +199,10 @@ describe('UsersService', () => {
         {
           provide: PrismaService,
           useValue: prisma,
+        },
+        {
+          provide: TemporaryExportStorageService,
+          useValue: temporaryStorage,
         },
         { provide: ModuleRef, useValue: moduleRef },
       ],
@@ -238,7 +335,7 @@ describe('UsersService', () => {
       },
     ]);
 
-    const result = await service.exportPersonalData(21);
+    const result = await readExportJson(await service.exportPersonalData(21));
 
     expect(prisma.usuario.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 21 } }),
@@ -246,9 +343,9 @@ describe('UsersService', () => {
     expect(prisma.agendamento.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { OR: [{ clienteId: 31 }] } }),
     );
-    expect(prisma.agendamento.findMany.mock.calls[0][0].select).not.toHaveProperty(
-      'observacoes',
-    );
+    expect(
+      prisma.agendamento.findMany.mock.calls[0][0].select,
+    ).not.toHaveProperty('observacoes');
     expect(prisma.listaEspera.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { OR: [{ clienteId: 31 }] } }),
     );
@@ -274,17 +371,17 @@ describe('UsersService', () => {
         where: { usuarioId: 21, limpa: false },
       }),
     );
-    expect(prisma.notificacao.findMany.mock.calls[0][0].select).not.toHaveProperty(
-      'mensagem',
-    );
+    expect(
+      prisma.notificacao.findMany.mock.calls[0][0].select,
+    ).not.toHaveProperty('mensagem');
     expect(prisma.solicitacaoTitular.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { titularId: 21 },
-        select: {
+        select: expect.objectContaining({
           categoria: true,
           status: true,
           dataCriacao: true,
-        },
+        }),
       }),
     );
     expect(result.conta).toMatchObject({
@@ -305,7 +402,9 @@ describe('UsersService', () => {
         dataCriacao: createdAt.toISOString(),
       },
     ]);
-    expect(JSON.stringify(result)).not.toContain('texto que não deve ser exportado');
+    expect(JSON.stringify(result)).not.toContain(
+      'texto que não deve ser exportado',
+    );
     expect(JSON.stringify(result)).not.toContain('terceiro@example.com');
     expect(JSON.stringify(result)).not.toContain('Detalhe privado de terceiro');
     expect(JSON.stringify(result)).not.toContain('secret-password-hash');
@@ -328,6 +427,616 @@ describe('UsersService', () => {
     expect(prisma.listaEspera.findMany).not.toHaveBeenCalled();
   });
 
+  it('does not continue the export after cancellation during data queries', async () => {
+    const createdAt = new Date('2026-01-02T03:04:05.000Z');
+    prisma.usuario.findUnique.mockResolvedValue({
+      id: 21,
+      nome: 'Cliente',
+      telefone: '11999999999',
+      email: null,
+      emailVerificadoEm: null,
+      emailConfirmacaoObrigatoria: false,
+      tipoUsuario: 'CLIENTE',
+      ativo: true,
+      dataCriacao: createdAt,
+      dataAtualizacao: createdAt,
+      cliente: {
+        id: 31,
+        dataCriacao: createdAt,
+        dataAtualizacao: createdAt,
+      },
+      barbeiro: null,
+    });
+
+    let resolveAppointments!: (value: never[]) => void;
+    prisma.agendamento.findMany.mockReturnValue(
+      new Promise((resolve) => {
+        resolveAppointments = resolve;
+      }),
+    );
+
+    const cancellation = new AbortController();
+    const exportPromise = service.exportPersonalData(21, cancellation.signal);
+    await Promise.resolve();
+    cancellation.abort();
+    resolveAppointments([]);
+
+    await expect(exportPromise).rejects.toBeInstanceOf(
+      PersonalDataExportCancelledError,
+    );
+  });
+
+  it('uses one RepeatableRead transaction client for every export query', async () => {
+    const date = new Date('2026-01-02T03:04:05.000Z');
+    const tx = {
+      usuario: {
+        findUnique: jest.fn().mockResolvedValue({
+          ...exportUserFixture(27),
+          cliente: null,
+          barbeiro: {
+            id: 37,
+            ativo: true,
+            dataCriacao: date,
+            dataAtualizacao: date,
+          },
+        }),
+      },
+      agendamento: { findMany: jest.fn().mockResolvedValue([]) },
+      listaEspera: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 57,
+            dataDesejada: date,
+            horaInicio: null,
+            horaFim: null,
+            status: 'ATIVA',
+            dataEntrada: date,
+            dataAtualizacao: date,
+            servico: { nome: 'Corte' },
+          },
+        ]),
+      },
+      waitlistClaim: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 67,
+            data: date,
+            horaInicio: '07:00',
+            horaFim: '07:30',
+            status: 'ATIVO',
+            expiraEm: date,
+            dataCriacao: date,
+          },
+        ]),
+      },
+      mensagem: { findMany: jest.fn().mockResolvedValue([]) },
+      notificacao: { findMany: jest.fn().mockResolvedValue([]) },
+      solicitacaoTitular: { findMany: jest.fn().mockResolvedValue([]) },
+      horarioFuncionamento: { findMany: jest.fn().mockResolvedValue([]) },
+      bloqueioAgenda: { findMany: jest.fn().mockResolvedValue([]) },
+      emergencia: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    prisma.$transaction.mockImplementation((callback, options) => {
+      expect(options).toEqual({
+        isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+        timeout: 60_000,
+      });
+      return callback(tx);
+    });
+
+    const result = await readExportJson(await service.exportPersonalData(27));
+
+    expect(tx.usuario.findUnique).toHaveBeenCalledTimes(1);
+    expect(tx.agendamento.findMany).toHaveBeenCalled();
+    expect(tx.listaEspera.findMany).toHaveBeenCalled();
+    expect(tx.waitlistClaim.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { listaEsperaId: 57 } }),
+    );
+    expect(tx.mensagem.findMany).toHaveBeenCalled();
+    expect(tx.notificacao.findMany).toHaveBeenCalled();
+    expect(tx.solicitacaoTitular.findMany).toHaveBeenCalled();
+    expect(tx.horarioFuncionamento.findMany).toHaveBeenCalled();
+    expect(tx.bloqueioAgenda.findMany).toHaveBeenCalled();
+    expect(tx.emergencia.findMany).toHaveBeenCalled();
+    for (const findMany of [
+      prisma.agendamento.findMany,
+      prisma.listaEspera.findMany,
+      prisma.waitlistClaim.findMany,
+      prisma.mensagem.findMany,
+      prisma.notificacao.findMany,
+      prisma.solicitacaoTitular.findMany,
+      prisma.horarioFuncionamento.findMany,
+      prisma.bloqueioAgenda.findMany,
+      prisma.emergencia.findMany,
+    ]) {
+      expect(findMany).not.toHaveBeenCalled();
+    }
+    for (const findMany of [
+      tx.agendamento.findMany,
+      tx.listaEspera.findMany,
+      tx.waitlistClaim.findMany,
+      tx.mensagem.findMany,
+      tx.notificacao.findMany,
+      tx.solicitacaoTitular.findMany,
+      tx.horarioFuncionamento.findMany,
+      tx.bloqueioAgenda.findMany,
+      tx.emergencia.findMany,
+    ]) {
+      expect(findMany.mock.calls[0][0].take).toBe(100);
+      expect(findMany.mock.calls[0][0].skip).toBeUndefined();
+    }
+    expect(tx.horarioFuncionamento.findMany.mock.calls[0][0].where).toEqual({
+      barbeiroId: 37,
+    });
+    expect(tx.bloqueioAgenda.findMany.mock.calls[0][0].where).toEqual({
+      barbeiroId: 37,
+    });
+    expect(tx.emergencia.findMany.mock.calls[0][0].where).toEqual({
+      barbeiroId: 37,
+    });
+    expect(prisma.usuario.findUnique).not.toHaveBeenCalled();
+    expect(result.listaEspera[0].claims).toHaveLength(1);
+  });
+
+  it('exports a customer profile with valid empty collections', async () => {
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture(27));
+
+    const result = await readExportJson(await service.exportPersonalData(27));
+
+    expect(result.conta.perfil).toEqual({
+      criadoEm: '2026-01-02T03:04:05.000Z',
+      atualizadoEm: '2026-01-02T03:04:05.000Z',
+    });
+    expect(result.agendamentos).toEqual([]);
+    expect(result.listaEspera).toEqual([]);
+    expect(result.mensagens).toEqual({
+      conteudoIncluido: false,
+      registros: [],
+    });
+    expect(result.notificacoes).toEqual([]);
+    expect(result.solicitacoes).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('undefined');
+  });
+
+  it('writes valid JSON progressively across pages without exposing internal IDs', async () => {
+    const date = new Date('2026-03-04T00:00:00.000Z');
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      data: date,
+      horaInicio: new Date(
+        new Date('2026-03-04T10:00:00.000Z').getTime() + index * 60_000,
+      ),
+      horaFim: new Date(
+        new Date('2026-03-04T10:30:00.000Z').getTime() + index * 60_000,
+      ),
+      status: 'CONCLUIDO',
+      dataCriacao: new Date(date.getTime() + index),
+      dataAtualizacao: date,
+      servico: { nome: 'Corte', duracaoMinutos: 30 },
+    }));
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    prisma.agendamento.findMany
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([
+        {
+          ...firstPage[99],
+          id: 101,
+          horaInicio: new Date('2026-03-04T11:40:00.000Z'),
+          horaFim: new Date('2026-03-04T12:10:00.000Z'),
+          dataCriacao: new Date(date.getTime() + 100),
+        },
+      ]);
+
+    const file = await service.exportPersonalDataToTemporaryFile(21);
+    const json = Buffer.concat(createdFile!.chunks).toString('utf8');
+    const result = JSON.parse(json) as {
+      formato: string;
+      agendamentos: unknown[];
+      listaEspera: unknown[];
+      solicitacoes: unknown[];
+    };
+
+    expect(temporaryStorage.create).toHaveBeenCalledTimes(1);
+    expect(createdFile!.write.mock.calls.length).toBeGreaterThan(10);
+    expect(file.sizeBytes).toBe(Buffer.byteLength(json));
+    expect(result.formato).toBe('Barbearia-App personal data v1');
+    expect(result.agendamentos).toHaveLength(101);
+    expect(
+      new Set(result.agendamentos.map(({ horaInicio }) => horaInicio)).size,
+    ).toBe(101);
+    expect(result.listaEspera).toEqual([]);
+    expect(result.solicitacoes).toEqual([]);
+    expect(json).not.toContain('"id"');
+    expect(createdFile!.finalize).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction.mock.calls[0][1]).toEqual({
+      isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+      timeout: 60_000,
+    });
+  });
+
+  it('generates, finalizes, and rereads a complete JSON file using real storage', async () => {
+    const rootDirectory = await mkdtemp(
+      join(tmpdir(), 'barbearia-export-service-integration-'),
+    );
+    const realStorage = new TemporaryExportStorageService({
+      rootDirectory,
+      maxFileSizeBytes: 1024 * 1024,
+      maxTotalSizeBytes: 2 * 1024 * 1024,
+    });
+    let exportFile: TemporaryExportFile | undefined;
+
+    try {
+      await realStorage.onModuleInit();
+      prisma.usuario.findUnique.mockResolvedValue(exportUserFixture(27));
+      prisma.agendamento.findMany.mockResolvedValue([
+        {
+          id: 101,
+          data: new Date('2026-03-04T00:00:00.000Z'),
+          horaInicio: new Date('2026-03-04T10:00:00.000Z'),
+          horaFim: new Date('2026-03-04T10:30:00.000Z'),
+          status: 'CONCLUIDO',
+          dataCriacao: new Date('2026-03-04T11:00:00.000Z'),
+          dataAtualizacao: new Date('2026-03-04T11:30:00.000Z'),
+          servico: { nome: 'Corte', duracaoMinutos: 30 },
+        },
+      ]);
+
+      const realService = new UsersService(
+        prisma as unknown as PrismaService,
+        realStorage,
+        moduleRef as unknown as ModuleRef,
+      );
+      exportFile = await realService.exportPersonalDataToTemporaryFile(27);
+      const result = await readExportJson(exportFile);
+
+      expect(exportFile.sizeBytes).toBeGreaterThan(0);
+      expect(result).toMatchObject({
+        formato: 'Barbearia-App personal data v1',
+        conta: { nome: 'Cliente', perfil: expect.any(Object) },
+        agendamentos: [
+          {
+            data: '2026-03-04',
+            horaInicio: '07:00',
+            horaFim: '07:30',
+            status: 'CONCLUIDO',
+            servico: { nome: 'Corte', duracaoMinutos: 30 },
+          },
+        ],
+        listaEspera: [],
+        mensagens: { conteudoIncluido: false, registros: [] },
+        notificacoes: [],
+        solicitacoes: [],
+      });
+    } finally {
+      await exportFile?.dispose();
+      await realStorage.onModuleDestroy();
+      await rm(rootDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it('cancels the partial file and does not start another page after cancellation', async () => {
+    const cancellation = new AbortController();
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      data: new Date('2026-03-04T00:00:00.000Z'),
+      horaInicio: new Date('2026-03-04T10:00:00.000Z'),
+      horaFim: new Date('2026-03-04T10:30:00.000Z'),
+      status: 'CONCLUIDO',
+      dataCriacao: new Date('2026-03-04T00:00:00.000Z'),
+      dataAtualizacao: new Date('2026-03-04T00:00:00.000Z'),
+      servico: { nome: 'Corte', duracaoMinutos: 30 },
+    }));
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    prisma.agendamento.findMany.mockImplementationOnce(() => {
+      cancellation.abort();
+      return Promise.resolve(firstPage);
+    });
+
+    await expect(
+      service.exportPersonalDataToTemporaryFile(21, cancellation.signal),
+    ).rejects.toBeInstanceOf(PersonalDataExportCancelledError);
+    expect(prisma.agendamento.findMany).toHaveBeenCalledTimes(1);
+    expect(createdFile!.finalize).not.toHaveBeenCalled();
+    expect(createdFile!.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the partial file when a write fails', async () => {
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    temporaryStorage.create.mockImplementationOnce(async () => {
+      const file = {
+        sizeBytes: 0,
+        write: jest.fn().mockRejectedValue(new Error('disk full')),
+        finalize: jest.fn(),
+        openReadStream: jest.fn(),
+        cancel: jest.fn().mockResolvedValue(undefined),
+        dispose: jest.fn(),
+      };
+      createdFile = file as typeof createdFile;
+      return file;
+    });
+
+    await expect(service.exportPersonalDataToTemporaryFile(21)).rejects.toThrow(
+      'disk full',
+    );
+    expect(createdFile!.finalize).not.toHaveBeenCalled();
+    expect(createdFile!.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves both generation and cleanup errors when cancellation also fails', async () => {
+    const writeError = new Error('disk full');
+    const cleanupError = new Error('cleanup denied');
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    temporaryStorage.create.mockImplementationOnce(async () => {
+      const file = {
+        sizeBytes: 0,
+        write: jest.fn().mockRejectedValue(writeError),
+        finalize: jest.fn(),
+        openReadStream: jest.fn(),
+        cancel: jest.fn().mockRejectedValue(cleanupError),
+        dispose: jest.fn(),
+      };
+      createdFile = file as typeof createdFile;
+      return file;
+    });
+
+    let thrown: unknown;
+    try {
+      await service.exportPersonalDataToTemporaryFile(21);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TemporaryExportCleanupError);
+    if (thrown instanceof TemporaryExportCleanupError) {
+      expect(thrown.errors).toEqual([writeError, cleanupError]);
+    }
+    expect(createdFile!.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not expose the file if finalization fails after the transaction', async () => {
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    temporaryStorage.create.mockImplementationOnce(async () => {
+      const file = {
+        sizeBytes: 0,
+        write: jest.fn().mockResolvedValue(undefined),
+        finalize: jest.fn().mockRejectedValue(new Error('finalize failed')),
+        openReadStream: jest.fn(),
+        cancel: jest.fn().mockResolvedValue(undefined),
+        dispose: jest.fn(),
+      };
+      createdFile = file as typeof createdFile;
+      return file;
+    });
+
+    await expect(service.exportPersonalDataToTemporaryFile(21)).rejects.toThrow(
+      'finalize failed',
+    );
+    expect(createdFile!.openReadStream).not.toHaveBeenCalled();
+    expect(createdFile!.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels the partial file when the interactive transaction times out', async () => {
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    prisma.$transaction.mockRejectedValueOnce(new Error('transaction timeout'));
+
+    await expect(service.exportPersonalDataToTemporaryFile(21)).rejects.toThrow(
+      'transaction timeout',
+    );
+    expect(createdFile!.finalize).not.toHaveBeenCalled();
+    expect(createdFile!.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('finalizes the file only after the transaction has committed', async () => {
+    const lifecycle: string[] = [];
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    prisma.$transaction.mockImplementation(async (callback, options) => {
+      expect(options).toEqual({
+        isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+        timeout: 60_000,
+      });
+      await callback(prisma);
+      lifecycle.push('committed');
+      return undefined;
+    });
+    temporaryStorage.create.mockImplementationOnce(async () => {
+      const file = {
+        sizeBytes: 0,
+        write: jest.fn().mockResolvedValue(undefined),
+        finalize: jest.fn(async () => {
+          lifecycle.push('finalized');
+        }),
+        openReadStream: jest.fn(),
+        cancel: jest.fn().mockResolvedValue(undefined),
+        dispose: jest.fn(),
+      };
+      createdFile = file as typeof createdFile;
+      return file;
+    });
+
+    await service.exportPersonalDataToTemporaryFile(21);
+
+    expect(lifecycle).toEqual(['committed', 'finalized']);
+  });
+
+  it('waits for each file write before starting the next write', async () => {
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    const firstWrite = deferred<void>();
+    const firstWriteStarted = deferred<void>();
+    let writeCount = 0;
+    temporaryStorage.create.mockImplementationOnce(async () => {
+      const file = {
+        sizeBytes: 0,
+        write: jest.fn(() => {
+          writeCount += 1;
+          if (writeCount === 1) {
+            firstWriteStarted.resolve();
+          }
+          return writeCount === 1
+            ? firstWrite.promise
+            : Promise.resolve(undefined);
+        }),
+        finalize: jest.fn().mockResolvedValue(undefined),
+        openReadStream: jest.fn(),
+        cancel: jest.fn().mockResolvedValue(undefined),
+        dispose: jest.fn(),
+      };
+      createdFile = file as typeof createdFile;
+      return file;
+    });
+
+    const exportPromise = service.exportPersonalDataToTemporaryFile(21);
+    await firstWriteStarted.promise;
+    expect(writeCount).toBe(1);
+    firstWrite.resolve();
+    await exportPromise;
+    expect(writeCount).toBeGreaterThan(1);
+  });
+
+  it('uses keyset pages with an ID tie-breaker and no growing offset', async () => {
+    const date = new Date('2026-03-04T00:00:00.000Z');
+    const horaInicio = new Date('2026-03-04T10:00:00.000Z');
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      data: date,
+      horaInicio,
+      horaFim: new Date('2026-03-04T10:30:00.000Z'),
+      status: 'CONCLUIDO',
+      dataCriacao: new Date(date.getTime() + index),
+      dataAtualizacao: date,
+      servico: { nome: 'Corte', duracaoMinutos: 30 },
+    }));
+    const lastRecord = {
+      ...firstPage[99],
+      id: 101,
+      dataCriacao: new Date(date.getTime() + 100),
+    };
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    prisma.agendamento.findMany
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([lastRecord]);
+
+    const result = await readExportJson(await service.exportPersonalData(21));
+    const calls = prisma.agendamento.findMany.mock.calls;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0][0]).toMatchObject({
+      take: 100,
+      orderBy: [{ data: 'asc' }, { horaInicio: 'asc' }, { id: 'asc' }],
+    });
+    expect(calls[1][0].skip).toBeUndefined();
+    expect(calls[1][0].take).toBe(100);
+    expect(calls[1][0].where.AND[1].OR).toEqual([
+      { data: { gt: date } },
+      { data: date, horaInicio: { gt: horaInicio } },
+      { data: date, horaInicio, id: { gt: 100 } },
+    ]);
+    expect(result.agendamentos).toHaveLength(101);
+    expect(
+      new Set(result.agendamentos.map(({ criadoEm }) => criadoEm)).size,
+    ).toBe(101);
+    expect(JSON.stringify(result)).not.toContain('"id"');
+  });
+
+  it('paginates waitlist claims by creation date and ID within their parent list', async () => {
+    const date = new Date('2026-03-04T00:00:00.000Z');
+    const entry = {
+      id: 58,
+      dataDesejada: date,
+      horaInicio: null,
+      horaFim: null,
+      status: 'ATIVA',
+      dataEntrada: date,
+      dataAtualizacao: date,
+      servico: { nome: 'Corte' },
+    };
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      data: date,
+      horaInicio: '10:00',
+      horaFim: '10:30',
+      status: 'ATIVO',
+      expiraEm: date,
+      dataCriacao: new Date(date.getTime() + index),
+    }));
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    prisma.listaEspera.findMany.mockResolvedValue([entry]);
+    prisma.waitlistClaim.findMany
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([
+        {
+          ...firstPage[99],
+          id: 101,
+          dataCriacao: new Date(date.getTime() + 100),
+        },
+      ]);
+
+    const result = await readExportJson(await service.exportPersonalData(21));
+    const calls = prisma.waitlistClaim.findMany.mock.calls;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0][0]).toMatchObject({
+      where: { listaEsperaId: 58 },
+      orderBy: [{ dataCriacao: 'asc' }, { id: 'asc' }],
+      take: 100,
+    });
+    const lastPageCreatedAt = new Date(date.getTime() + 99);
+    expect(calls[1][0].where).toMatchObject({
+      listaEsperaId: 58,
+      OR: [
+        { dataCriacao: { gt: lastPageCreatedAt } },
+        { dataCriacao: lastPageCreatedAt, id: { gt: 100 } },
+      ],
+    });
+    expect(calls[1][0].skip).toBeUndefined();
+    expect(result.listaEspera[0].claims).toHaveLength(101);
+    expect(JSON.stringify(result)).not.toContain('"id"');
+  });
+
+  it('checks cancellation between pages before starting another query', async () => {
+    const cancellation = new AbortController();
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      id: index + 1,
+      data: new Date('2026-03-04T00:00:00.000Z'),
+      horaInicio: new Date('2026-03-04T10:00:00.000Z'),
+      horaFim: new Date('2026-03-04T10:30:00.000Z'),
+      status: 'CONCLUIDO',
+      dataCriacao: new Date('2026-03-04T00:00:00.000Z'),
+      dataAtualizacao: new Date('2026-03-04T00:00:00.000Z'),
+      servico: { nome: 'Corte', duracaoMinutos: 30 },
+    }));
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    prisma.agendamento.findMany.mockImplementationOnce(() => {
+      cancellation.abort();
+      return Promise.resolve(firstPage);
+    });
+
+    await expect(
+      service.exportPersonalData(21, cancellation.signal),
+    ).rejects.toBeInstanceOf(PersonalDataExportCancelledError);
+    expect(prisma.agendamento.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.mensagem.findMany).not.toHaveBeenCalled();
+  });
+
+  it('does not open a transaction when already cancelled', async () => {
+    const cancellation = new AbortController();
+    cancellation.abort();
+
+    await expect(
+      service.exportPersonalData(21, cancellation.signal),
+    ).rejects.toBeInstanceOf(PersonalDataExportCancelledError);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('propagates query failures from the transaction without returning partial data', async () => {
+    const failure = new Error('query failed');
+    prisma.usuario.findUnique.mockResolvedValue(exportUserFixture());
+    prisma.agendamento.findMany.mockRejectedValue(failure);
+
+    await expect(service.exportPersonalData(21)).rejects.toBe(failure);
+    expect(prisma.$transaction).toHaveBeenCalled();
+    expect(prisma.mensagem.findMany).not.toHaveBeenCalled();
+    expect(prisma.notificacao.findMany).not.toHaveBeenCalled();
+  });
+
   it('should scope a barber export to their own agenda and profile data', async () => {
     const date = new Date('2026-03-04T00:00:00.000Z');
     prisma.usuario.findUnique.mockResolvedValue({
@@ -347,30 +1056,40 @@ describe('UsersService', () => {
         ativo: true,
         dataCriacao: date,
         dataAtualizacao: date,
-        horarios: [],
-        bloqueios: [
-          {
-            data: date,
-            horaInicio: new Date('2026-03-04T10:00:00.000Z'),
-            horaFim: new Date('2026-03-04T11:00:00.000Z'),
-            motivo: 'Pessoa de terceiro - 11999999999',
-            ativo: true,
-            dataCriacao: date,
-          },
-        ],
-        emergencias: [
-          {
-            dataInicio: date,
-            dataFim: date,
-            motivo: 'Detalhe de terceiro',
-            status: 'ATIVA',
-            dataCriacao: date,
-          },
-        ],
       },
     });
+    prisma.bloqueioAgenda.findMany.mockResolvedValue([
+      {
+        id: 51,
+        data: date,
+        horaInicio: new Date('2026-03-04T10:00:00.000Z'),
+        horaFim: new Date('2026-03-04T11:00:00.000Z'),
+        motivo: 'Pessoa de terceiro - 11999999999',
+        ativo: true,
+        dataCriacao: date,
+      },
+    ]);
+    prisma.emergencia.findMany.mockResolvedValue([
+      {
+        id: 52,
+        dataInicio: date,
+        dataFim: date,
+        motivo: 'Detalhe de terceiro',
+        status: 'ATIVA',
+        dataCriacao: date,
+      },
+    ]);
+    prisma.horarioFuncionamento.findMany.mockResolvedValue([
+      {
+        id: 53,
+        diaSemana: 'SEGUNDA',
+        horaInicio: '09:00',
+        horaFim: '18:00',
+        ativo: true,
+      },
+    ]);
 
-    const result = await service.exportPersonalData(22);
+    const result = await readExportJson(await service.exportPersonalData(22));
 
     expect(prisma.agendamento.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { OR: [{ barbeiroId: 32 }] } }),
@@ -378,14 +1097,34 @@ describe('UsersService', () => {
     expect(prisma.listaEspera.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { OR: [{ barbeiroId: 32 }] } }),
     );
-    expect(result.conta.perfil).toMatchObject({ ativo: true, horarios: [] });
+    expect(result.conta.perfil).toMatchObject({
+      ativo: true,
+      horarios: [
+        {
+          diaSemana: 'SEGUNDA',
+          horaInicio: '09:00',
+          horaFim: '18:00',
+          ativo: true,
+        },
+      ],
+      bloqueios: [{ ativo: true }],
+      emergencias: [{ status: 'ATIVA' }],
+    });
+    expect(Array.isArray(result.agendamentos)).toBe(true);
+    expect(Array.isArray(result.listaEspera)).toBe(true);
+    expect(Array.isArray(result.notificacoes)).toBe(true);
     expect(result.conta.perfil).not.toHaveProperty('usuarioId');
     expect(JSON.stringify(result)).not.toContain('11999999999');
     expect(JSON.stringify(result)).not.toContain('Detalhe de terceiro');
     const barberSelect =
       prisma.usuario.findUnique.mock.calls[0][0].select.barbeiro.select;
-    expect(barberSelect.bloqueios.select).not.toHaveProperty('motivo');
-    expect(barberSelect.emergencias.select).not.toHaveProperty('motivo');
+    expect(barberSelect).not.toHaveProperty('horarios');
+    expect(
+      prisma.bloqueioAgenda.findMany.mock.calls[0][0].select,
+    ).not.toHaveProperty('motivo');
+    expect(
+      prisma.emergencia.findMany.mock.calls[0][0].select,
+    ).not.toHaveProperty('motivo');
   });
 
   it('should find a user by phone without exposing senhaHash', async () => {
@@ -483,7 +1222,9 @@ describe('UsersService', () => {
 
   it('should map a duplicate e-mail during user creation to a conflict', async () => {
     prisma.usuario.create.mockRejectedValue(
-      buildP2002(buildDriverAdapterCause('Unique constraint Usuario_email_key')),
+      buildP2002(
+        buildDriverAdapterCause('Unique constraint Usuario_email_key'),
+      ),
     );
 
     await expect(
@@ -578,39 +1319,42 @@ describe('UsersService', () => {
   it.each<[string, Partial<UpdateUserDto>]>([
     ['name', { nome: 'João Atualizado' }],
     ['phone', { telefone: '11999999998' }],
-  ])('does not revoke sessions when only the %s changes', async (_, updates) => {
-    prisma.usuario.findUnique.mockResolvedValue({
-      id: 1,
-      nome: 'João',
-      telefone: '11999999999',
-      email: 'joao@email.com',
-      senhaHash: 'hash-secreta',
-      tipoUsuario: 'CLIENTE',
-      ativo: true,
-      dataCriacao: new Date(),
-      dataAtualizacao: new Date(),
-    });
-    prisma.usuario.update.mockResolvedValue({
-      id: 1,
-      ...updates,
-      telefone: updates.telefone ?? '11999999999',
-      email: 'joao@email.com',
-      senhaHash: 'hash-secreta',
-      tipoUsuario: 'CLIENTE',
-      ativo: true,
-      dataCriacao: new Date(),
-      dataAtualizacao: new Date(),
-    });
+  ])(
+    'does not revoke sessions when only the %s changes',
+    async (_, updates) => {
+      prisma.usuario.findUnique.mockResolvedValue({
+        id: 1,
+        nome: 'João',
+        telefone: '11999999999',
+        email: 'joao@email.com',
+        senhaHash: 'hash-secreta',
+        tipoUsuario: 'CLIENTE',
+        ativo: true,
+        dataCriacao: new Date(),
+        dataAtualizacao: new Date(),
+      });
+      prisma.usuario.update.mockResolvedValue({
+        id: 1,
+        ...updates,
+        telefone: updates.telefone ?? '11999999999',
+        email: 'joao@email.com',
+        senhaHash: 'hash-secreta',
+        tipoUsuario: 'CLIENTE',
+        ativo: true,
+        dataCriacao: new Date(),
+        dataAtualizacao: new Date(),
+      });
 
-    await service.updateUser(1, updates);
+      await service.updateUser(1, updates);
 
-    const updateData = prisma.usuario.update.mock.calls[0][0].data;
-    expect(updateData).not.toHaveProperty('authVersion');
-    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(prisma.emailVerificationToken.updateMany).not.toHaveBeenCalled();
-    expect(prisma.passwordResetToken.updateMany).not.toHaveBeenCalled();
-    expect(sessionRevoker.revokeUserSessions).not.toHaveBeenCalled();
-  });
+      const updateData = prisma.usuario.update.mock.calls[0][0].data;
+      expect(updateData).not.toHaveProperty('authVersion');
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.emailVerificationToken.updateMany).not.toHaveBeenCalled();
+      expect(prisma.passwordResetToken.updateMany).not.toHaveBeenCalled();
+      expect(sessionRevoker.revokeUserSessions).not.toHaveBeenCalled();
+    },
+  );
 
   it('should prepare an internal list method without exposing it publicly', async () => {
     prisma.usuario.findMany.mockResolvedValue([

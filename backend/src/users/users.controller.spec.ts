@@ -1,6 +1,8 @@
 import {
+  ConflictException,
   InternalServerErrorException,
   Logger,
+  ServiceUnavailableException,
   ValidationPipe,
 } from '@nestjs/common';
 import {
@@ -18,11 +20,125 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
+import { EventEmitter } from 'node:events';
+import { Readable, Writable } from 'node:stream';
+import type { Request, Response } from 'express';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { PrivacyRequestsService } from './privacy-requests/privacy-requests.service';
 import { CategoriaSolicitacaoTitular } from '../generated/prisma/enums';
 import { UpdateUserDto } from './dto/update-user.dto';
+import {
+  UserExportLockService,
+  type UserExportLock,
+  type UserExportLockAcquisition,
+} from '../common/redis/user-export-lock.service';
+import type { TemporaryExportFile } from './temporary-export-storage.service';
+
+jest.mock('../generated/prisma/enums', () => ({
+  ...jest.requireActual('../generated/prisma/enums'),
+  CategoriaSolicitacaoTitular: {
+    ACESSO: 'ACESSO',
+    CORRECAO: 'CORRECAO',
+    EXCLUSAO: 'EXCLUSAO',
+    PORTABILIDADE: 'PORTABILIDADE',
+    OPOSICAO: 'OPOSICAO',
+    INFORMACAO: 'INFORMACAO',
+  },
+}));
+
+class MockExportResponse extends Writable {
+  headersSent = false;
+  statusCode = 200;
+  readonly headers = new Map<string, string>();
+  readonly chunks: Buffer[] = [];
+  pauseWrites = false;
+  private pendingWrite?: (error?: Error | null) => void;
+
+  constructor() {
+    super();
+  }
+
+  _write(
+    chunk: Buffer | string,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ): void {
+    this.headersSent = true;
+    this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    if (this.pauseWrites) {
+      this.pendingWrite = callback;
+    } else {
+      callback();
+    }
+  }
+
+  setHeader(name: string, value: string): this {
+    this.headers.set(name.toLowerCase(), value);
+    return this;
+  }
+
+  status(statusCode: number): this {
+    this.statusCode = statusCode;
+    return this;
+  }
+
+  finish(): void {
+    this.pauseWrites = false;
+    this.pendingWrite?.();
+    this.pendingWrite = undefined;
+  }
+
+  get body(): string {
+    return Buffer.concat(this.chunks).toString('utf8');
+  }
+}
+
+function createExportFile(content: string): TemporaryExportFile {
+  const buffer = Buffer.from(content, 'utf8');
+  return {
+    sizeBytes: buffer.byteLength,
+    write: jest.fn().mockResolvedValue(undefined),
+    finalize: jest.fn().mockResolvedValue(undefined),
+    openReadStream: jest.fn(async () => Readable.from([buffer])),
+    cancel: jest.fn().mockResolvedValue(undefined),
+    dispose: jest.fn().mockResolvedValue(undefined),
+  };
+}
+
+function createExportLock(
+  acquisition: UserExportLockAcquisition = {
+    acquired: true,
+    lock: {
+      lost: new AbortController().signal,
+      renew: jest.fn().mockResolvedValue(undefined),
+      stopRenewal: jest.fn().mockResolvedValue(undefined),
+      release: jest.fn().mockResolvedValue(true),
+    },
+  },
+) {
+  const service = {
+    tryAcquire: jest.fn().mockResolvedValue(acquisition),
+  } as unknown as UserExportLockService;
+  return { service, acquisition };
+}
+
+function createHttpMocks() {
+  return {
+    request: new EventEmitter() as unknown as Request,
+    response: new MockExportResponse() as unknown as Response,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 describe('UsersController', () => {
   const exportHandler = UsersController.prototype.exportMe;
@@ -42,15 +158,505 @@ describe('UsersController', () => {
       geradoEm: new Date().toISOString(),
     };
     const usersService = {
-      exportPersonalData: jest.fn().mockResolvedValue(exportData),
+      exportPersonalDataToTemporaryFile: jest
+        .fn()
+        .mockResolvedValue(createExportFile(JSON.stringify(exportData))),
+    } as unknown as UsersService;
+    const exportLock = createExportLock();
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+
+    await expect(controller.exportMe(42, request, response)).resolves.toBe(
+      undefined,
+    );
+    expect(exportLock.service.tryAcquire).toHaveBeenCalledWith(42, {
+      ttlMs: 60_000,
+    });
+    expect(usersService.exportPersonalDataToTemporaryFile).toHaveBeenCalledWith(
+      42,
+      expect.any(AbortSignal),
+    );
+    expect(
+      JSON.parse((response as unknown as MockExportResponse).body),
+    ).toEqual(exportData);
+    expect(
+      (response as unknown as MockExportResponse).headers.get('content-type'),
+    ).toBe('application/json; charset=utf-8');
+    expect(
+      (response as unknown as MockExportResponse).headers.get('content-length'),
+    ).toBe(String(Buffer.byteLength(JSON.stringify(exportData))));
+    expect(exportLock.acquisition.acquired).toBe(true);
+    if (exportLock.acquisition.acquired) {
+      expect(exportLock.acquisition.lock.release).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('returns conflict without generating data when the titular lock is busy', async () => {
+    const exportLock = createExportLock({ acquired: false, reason: 'LOCKED' });
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest.fn(),
     } as unknown as UsersService;
     const controller = new UsersController(
       usersService,
       createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+
+    await expect(
+      controller.exportMe(42, request, response),
+    ).rejects.toBeInstanceOf(ConflictException);
+    expect(
+      usersService.exportPersonalDataToTemporaryFile,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when Redis acquisition is unavailable', async () => {
+    const exportLock = createExportLock();
+    jest
+      .spyOn(exportLock.service, 'tryAcquire')
+      .mockRejectedValue(new Error('Redis unavailable'));
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest.fn(),
+    } as unknown as UsersService;
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+
+    await expect(
+      controller.exportMe(42, request, response),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(
+      usersService.exportPersonalDataToTemporaryFile,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('retains the lock until the HTTP response finishes and releases it once', async () => {
+    const exportLock = createExportLock();
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest
+        .fn()
+        .mockResolvedValue(createExportFile('{"formato":"v1"}')),
+    } as unknown as UsersService;
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+    const mockResponse = response as unknown as MockExportResponse;
+    mockResponse.pauseWrites = true;
+
+    const operation = controller.exportMe(42, request, response);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(mockResponse.body).toEqual('{"formato":"v1"}');
+    if (exportLock.acquisition.acquired) {
+      expect(exportLock.acquisition.lock.release).not.toHaveBeenCalled();
+    }
+
+    mockResponse.finish();
+    await operation;
+
+    if (exportLock.acquisition.acquired) {
+      expect(exportLock.acquisition.lock.release).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('cancels data generation and returns unavailable if lock ownership is lost', async () => {
+    const lostController = new AbortController();
+    const lock: UserExportLock = {
+      lost: lostController.signal,
+      renew: jest.fn().mockResolvedValue(undefined),
+      stopRenewal: jest.fn().mockResolvedValue(undefined),
+      release: jest.fn().mockResolvedValue(false),
+    };
+    const exportLock = createExportLock({ acquired: true, lock });
+    let exportSignal: AbortSignal | undefined;
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest.fn(
+        (_userId: number, signal: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            exportSignal = signal;
+            signal.addEventListener(
+              'abort',
+              () => reject(new Error('generation cancelled')),
+              { once: true },
+            );
+          }),
+      ),
+    } as unknown as UsersService;
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+
+    const operation = controller.exportMe(42, request, response);
+    await Promise.resolve();
+    lostController.abort(new Error('lease lost'));
+
+    await expect(operation).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(exportSignal?.aborted).toBe(true);
+    expect((response as unknown as MockExportResponse).body).toBe('');
+    expect(lock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('destroys an in-progress HTTP response if the lock is lost', async () => {
+    const lostController = new AbortController();
+    const lock: UserExportLock = {
+      lost: lostController.signal,
+      renew: jest.fn().mockResolvedValue(undefined),
+      stopRenewal: jest.fn().mockResolvedValue(undefined),
+      release: jest.fn().mockResolvedValue(false),
+    };
+    const exportLock = createExportLock({ acquired: true, lock });
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest
+        .fn()
+        .mockResolvedValue(createExportFile('{"formato":"v1"}')),
+    } as unknown as UsersService;
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+    const mockResponse = response as unknown as MockExportResponse;
+    mockResponse.pauseWrites = true;
+
+    const operation = controller.exportMe(42, request, response);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(mockResponse.headersSent).toBe(true);
+
+    lostController.abort(new Error('lease lost'));
+    await operation;
+
+    expect(mockResponse.destroyed).toBe(true);
+    expect(mockResponse.writableFinished).toBe(false);
+    expect(lock.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('destroys a partial download on stream failure and still cleans up', async () => {
+    const exportFile = createExportFile('{}');
+    let sent = false;
+    exportFile.openReadStream = jest.fn(
+      async () =>
+        new Readable({
+          read() {
+            if (sent) {
+              return;
+            }
+            sent = true;
+            this.push(Buffer.from('{"partial":'));
+            setImmediate(() => this.destroy(new Error('disk read failed')));
+          },
+        }),
+    );
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest
+        .fn()
+        .mockResolvedValue(exportFile),
+    } as unknown as UsersService;
+    const exportLock = createExportLock();
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+    const mockResponse = response as unknown as MockExportResponse;
+
+    await expect(controller.exportMe(42, request, response)).resolves.toBe(
+      undefined,
     );
 
-    await expect(controller.exportMe(42)).resolves.toBe(exportData);
-    expect(usersService.exportPersonalData).toHaveBeenCalledWith(42);
+    expect(mockResponse.destroyed).toBe(true);
+    expect(mockResponse.body).toBe('{"partial":');
+    expect(exportFile.dispose).toHaveBeenCalledTimes(1);
+    if (exportLock.acquisition.acquired) {
+      expect(exportLock.acquisition.lock.release).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('cancels a disconnected download, cleans the file, and then releases the lock', async () => {
+    const exportFile = createExportFile('{"large":"file"}');
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest
+        .fn()
+        .mockResolvedValue(exportFile),
+    } as unknown as UsersService;
+    const exportLock = createExportLock();
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+    const mockResponse = response as unknown as MockExportResponse;
+    mockResponse.pauseWrites = true;
+
+    const operation = controller.exportMe(42, request, response);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(mockResponse.headersSent).toBe(true);
+
+    mockResponse.destroy();
+    await operation;
+
+    expect(exportFile.dispose).toHaveBeenCalledTimes(1);
+    if (exportLock.acquisition.acquired) {
+      expect(exportLock.acquisition.lock.release).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('stops lock renewal without releasing the lease when file disposal fails', async () => {
+    const exportFile = createExportFile('{}');
+    exportFile.dispose = jest
+      .fn()
+      .mockRejectedValue(new Error('cleanup could not be confirmed'));
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest
+        .fn()
+        .mockResolvedValue(exportFile),
+    } as unknown as UsersService;
+    const lock = createExportLock();
+    const lockService = {
+      tryAcquire: jest.fn().mockResolvedValue(lock.acquisition),
+    } as unknown as UserExportLockService;
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      lockService,
+    );
+    const { request, response } = createHttpMocks();
+
+    await controller.exportMe(42, request, response);
+
+    if (!lock.acquisition.acquired) {
+      throw new Error('Expected the export lock to be acquired.');
+    }
+    expect(lock.acquisition.lock.stopRenewal).toHaveBeenCalledTimes(1);
+    expect(lock.acquisition.lock.release).not.toHaveBeenCalled();
+  });
+
+  it('cancels generation on an interrupted HTTP response and releases the lock', async () => {
+    const exportLock = createExportLock();
+    let exportSignal: AbortSignal | undefined;
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest.fn(
+        (_userId: number, signal: AbortSignal) =>
+          new Promise((_resolve, reject) => {
+            exportSignal = signal;
+            signal.addEventListener(
+              'abort',
+              () => reject(new Error('generation cancelled')),
+              { once: true },
+            );
+          }),
+      ),
+    } as unknown as UsersService;
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+
+    const operation = controller.exportMe(42, request, response);
+    await Promise.resolve();
+    (response as unknown as MockExportResponse).emit('close');
+    await operation;
+
+    expect(exportSignal?.aborted).toBe(true);
+    expect((response as unknown as MockExportResponse).body).toBe('');
+    if (exportLock.acquisition.acquired) {
+      expect(exportLock.acquisition.lock.release).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('does not start an export when the request disconnected during lock acquisition', async () => {
+    const exportFile = createExportFile('{"data":"private"}');
+    let exportSignal: AbortSignal | undefined;
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest.fn(
+        (_userId: number, signal: AbortSignal) => {
+          exportSignal = signal;
+          return Promise.resolve(exportFile);
+        },
+      ),
+    } as unknown as UsersService;
+    const exportLock = createExportLock();
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      exportLock.service,
+    );
+    const { request, response } = createHttpMocks();
+    Object.assign(request, { aborted: true });
+
+    await controller.exportMe(42, request, response);
+
+    expect(exportSignal?.aborted).toBe(true);
+    expect(exportFile.openReadStream).not.toHaveBeenCalled();
+    expect(exportFile.dispose).toHaveBeenCalledTimes(1);
+    if (exportLock.acquisition.acquired) {
+      expect(exportLock.acquisition.lock.release).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('allows different titular locks to run concurrently without interference', async () => {
+    const active = new Set<number>();
+    const pending = new Map<number, ReturnType<typeof deferred<unknown>>>();
+    const lockService = {
+      tryAcquire: jest.fn(async (userId: number) => {
+        if (active.has(userId)) {
+          return { acquired: false as const, reason: 'LOCKED' as const };
+        }
+        active.add(userId);
+        const lock: UserExportLock = {
+          lost: new AbortController().signal,
+          renew: jest.fn().mockResolvedValue(undefined),
+          stopRenewal: jest.fn().mockResolvedValue(undefined),
+          release: jest.fn(async () => {
+            active.delete(userId);
+            return true;
+          }),
+        };
+        return { acquired: true as const, lock };
+      }),
+    } as unknown as UserExportLockService;
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest.fn((userId: number) => {
+        const task = deferred<unknown>();
+        pending.set(userId, task);
+        return task.promise;
+      }),
+    } as unknown as UsersService;
+    const controller = new UsersController(
+      usersService,
+      createPrivacyRequestsService(),
+      lockService,
+    );
+    const firstHttp = createHttpMocks();
+    const secondHttp = createHttpMocks();
+
+    const first = controller.exportMe(
+      42,
+      firstHttp.request,
+      firstHttp.response,
+    );
+    const second = controller.exportMe(
+      43,
+      secondHttp.request,
+      secondHttp.response,
+    );
+    await Promise.resolve();
+
+    expect(active).toEqual(new Set([42, 43]));
+    expect(lockService.tryAcquire).toHaveBeenCalledWith(42, {
+      ttlMs: 60_000,
+    });
+    expect(lockService.tryAcquire).toHaveBeenCalledWith(43, {
+      ttlMs: 60_000,
+    });
+    pending.get(42)!.resolve(createExportFile('{"titular":42}'));
+    pending.get(43)!.resolve(createExportFile('{"titular":43}'));
+    await Promise.all([first, second]);
+    expect(active.size).toBe(0);
+  });
+
+  it('returns HTTP 409 for a second simultaneous export by the same JWT user', async () => {
+    let app: INestApplication | undefined;
+    const activeUsers = new Set<number>();
+    const exportStarted = deferred<void>();
+    const finishExport = deferred<unknown>();
+    const lockService = {
+      tryAcquire: jest.fn(async (userId: number) => {
+        if (activeUsers.has(userId)) {
+          return { acquired: false as const, reason: 'LOCKED' as const };
+        }
+        activeUsers.add(userId);
+        const lock: UserExportLock = {
+          lost: new AbortController().signal,
+          renew: jest.fn().mockResolvedValue(undefined),
+          stopRenewal: jest.fn().mockResolvedValue(undefined),
+          release: jest.fn(async () => {
+            activeUsers.delete(userId);
+            return true;
+          }),
+        };
+        return { acquired: true as const, lock };
+      }),
+    };
+    const usersService = {
+      exportPersonalDataToTemporaryFile: jest.fn(() => {
+        exportStarted.resolve();
+        return finishExport.promise;
+      }),
+    };
+
+    try {
+      const module = await Test.createTestingModule({
+        imports: [ThrottlerModule.forRoot([{ ttl: 60_000, limit: 100 }])],
+        controllers: [UsersController],
+        providers: [
+          { provide: UsersService, useValue: usersService },
+          {
+            provide: PrivacyRequestsService,
+            useValue: createPrivacyRequestsService(),
+          },
+          { provide: UserExportLockService, useValue: lockService },
+        ],
+      })
+        .overrideGuard(JwtGuard)
+        .useValue({
+          canActivate: (context: {
+            switchToHttp: () => {
+              getRequest: () => { user?: { sub: number } };
+            };
+          }) => {
+            context.switchToHttp().getRequest().user = { sub: 42 };
+            return true;
+          },
+        })
+        .overrideGuard(RolesGuard)
+        .useValue({ canActivate: () => true })
+        .compile();
+
+      app = module.createNestApplication();
+      app.useLogger(false);
+      await app.init();
+      const server = app.getHttpServer();
+
+      const firstExport = request(server)
+        .get('/users/me/export')
+        .then((r) => r);
+      await exportStarted.promise;
+
+      const duplicateResponse = await request(server).get('/users/me/export');
+      expect(duplicateResponse.status).toBe(409);
+      expect(
+        usersService.exportPersonalDataToTemporaryFile,
+      ).toHaveBeenCalledTimes(1);
+      expect(lockService.tryAcquire).toHaveBeenCalledTimes(2);
+
+      finishExport.resolve(
+        createExportFile('{"formato":"Barbearia-App personal data v1"}'),
+      );
+      const firstResponse = await firstExport;
+      expect(firstResponse.status).toBe(200);
+      expect(activeUsers.size).toBe(0);
+    } finally {
+      await app?.close();
+    }
   });
 
   it('passes the authenticated JWT authVersion to profile updates', async () => {
@@ -61,6 +667,7 @@ describe('UsersController', () => {
     const controller = new UsersController(
       usersService,
       createPrivacyRequestsService(),
+      createExportLock().service,
     );
 
     await controller.updateMe(42, 3, dto);
@@ -80,16 +687,18 @@ describe('UsersController', () => {
       ThrottlerGuard,
     );
     expect(Reflect.getMetadata(PATH_METADATA, exportHandler)).toBe('me/export');
-    expect(Reflect.getMetadata('THROTTLER:LIMITdefault', exportHandler)).toBe(3);
+    expect(Reflect.getMetadata('THROTTLER:LIMITdefault', exportHandler)).toBe(
+      3,
+    );
     expect(Reflect.getMetadata('THROTTLER:TTLdefault', exportHandler)).toBe(
       60_000,
     );
     expect(Reflect.getMetadata(PATH_METADATA, createRequestHandler)).toBe(
       'me/requests',
     );
-    expect(Reflect.getMetadata(GUARDS_METADATA, createRequestHandler)).toContain(
-      ThrottlerGuard,
-    );
+    expect(
+      Reflect.getMetadata(GUARDS_METADATA, createRequestHandler),
+    ).toContain(ThrottlerGuard);
     expect(
       Reflect.getMetadata('THROTTLER:LIMITdefault', createRequestHandler),
     ).toBe(5);
@@ -112,24 +721,30 @@ describe('UsersController', () => {
       Reflect.getMetadata('THROTTLER:TTLdefault', listRequestsHandler),
     ).toBe(60_000);
     expect(
-      Reflect.getMetadata('THROTTLER:TRACKERdefault', exportHandler)(
-        { user: { sub: 42 } },
-      ),
+      Reflect.getMetadata(
+        'THROTTLER:TRACKERdefault',
+        exportHandler,
+      )({ user: { sub: 42 } }),
     ).toBe('usuario:42');
     expect(
-      Reflect.getMetadata('THROTTLER:TRACKERdefault', createRequestHandler)(
-        { user: { sub: 42 } },
-      ),
+      Reflect.getMetadata(
+        'THROTTLER:TRACKERdefault',
+        createRequestHandler,
+      )({ user: { sub: 42 } }),
     ).toBe('usuario:42');
     expect(
-      Reflect.getMetadata('THROTTLER:TRACKERdefault', listRequestsHandler)(
-        { user: { sub: 42 } },
-      ),
+      Reflect.getMetadata(
+        'THROTTLER:TRACKERdefault',
+        listRequestsHandler,
+      )({ user: { sub: 42 } }),
     ).toBe('usuario:42');
   });
 
   it('sets non-cacheable download headers with a fixed non-personal filename', () => {
-    const headers = Reflect.getMetadata(HEADERS_METADATA, exportHandler) as Array<{
+    const headers = Reflect.getMetadata(
+      HEADERS_METADATA,
+      exportHandler,
+    ) as Array<{
       name: string;
       value: string;
     }>;
@@ -149,7 +764,7 @@ describe('UsersController', () => {
 
   it('does not accept an account id as an export route parameter', () => {
     expect(Reflect.getMetadata(PATH_METADATA, exportHandler)).toBe('me/export');
-    expect(exportHandler.length).toBe(1);
+    expect(exportHandler.length).toBe(3);
   });
 
   it('hides unexpected service errors and logs only a generic message', async () => {
@@ -157,16 +772,19 @@ describe('UsersController', () => {
       .spyOn(Logger.prototype, 'error')
       .mockImplementation(() => {});
     const usersService = {
-      exportPersonalData: jest
+      exportPersonalDataToTemporaryFile: jest
         .fn()
         .mockRejectedValue(new Error('private database details')),
     } as unknown as UsersService;
+    const exportLock = createExportLock();
     const controller = new UsersController(
       usersService,
       createPrivacyRequestsService(),
+      exportLock.service,
     );
+    const { request, response } = createHttpMocks();
 
-    await expect(controller.exportMe(42)).rejects.toEqual(
+    await expect(controller.exportMe(42, request, response)).rejects.toEqual(
       new InternalServerErrorException(
         'Não foi possível gerar a exportação de dados pessoais.',
       ),
@@ -177,6 +795,9 @@ describe('UsersController', () => {
     expect(loggerSpy.mock.calls.flat().join(' ')).not.toContain(
       'private database details',
     );
+    if (exportLock.acquisition.acquired) {
+      expect(exportLock.acquisition.lock.release).toHaveBeenCalledTimes(1);
+    }
     loggerSpy.mockRestore();
   });
 
@@ -185,10 +806,10 @@ describe('UsersController', () => {
     let authenticatedUserId = 42;
     const exportData = { formato: 'Barbearia-App personal data v1' };
     const usersService = {
-      exportPersonalData: jest
+      exportPersonalDataToTemporaryFile: jest
         .fn()
         .mockRejectedValueOnce(new Error('sensitive internal database details'))
-        .mockResolvedValue(exportData),
+        .mockResolvedValue(createExportFile(JSON.stringify(exportData))),
     };
     const requestData = {
       id: 21,
@@ -213,6 +834,10 @@ describe('UsersController', () => {
           {
             provide: PrivacyRequestsService,
             useValue: privacyRequestsService,
+          },
+          {
+            provide: UserExportLockService,
+            useValue: createExportLock().service,
           },
         ],
       })
@@ -258,16 +883,24 @@ describe('UsersController', () => {
       expect((await request(server).get('/users/me/export')).status).toBe(200);
       expect((await request(server).get('/users/me/export')).status).toBe(200);
       expect((await request(server).get('/users/me/export')).status).toBe(429);
-      expect(firstResponse.headers['content-type']).toMatch(/application\/json/);
+      expect(firstResponse.headers['content-type']).toMatch(
+        /application\/json/,
+      );
       expect(firstResponse.headers['content-disposition']).toBe(
         'attachment; filename="dados-pessoais.json"',
       );
       expect(firstResponse.headers['cache-control']).toBe('no-store');
       expect(firstResponse.headers.pragma).toBe('no-cache');
       expect(firstResponse.headers['x-content-type-options']).toBe('nosniff');
-      expect(usersService.exportPersonalData).toHaveBeenCalledTimes(4);
-      expect(usersService.exportPersonalData).toHaveBeenNthCalledWith(1, 42);
-      expect(usersService.exportPersonalData).toHaveBeenNthCalledWith(2, 43);
+      expect(
+        usersService.exportPersonalDataToTemporaryFile,
+      ).toHaveBeenCalledTimes(4);
+      expect(
+        usersService.exportPersonalDataToTemporaryFile,
+      ).toHaveBeenNthCalledWith(1, 42, expect.any(AbortSignal));
+      expect(
+        usersService.exportPersonalDataToTemporaryFile,
+      ).toHaveBeenNthCalledWith(2, 43, expect.any(AbortSignal));
 
       const requestResponse = await request(server)
         .post('/users/me/requests')
@@ -308,9 +941,11 @@ describe('UsersController', () => {
       expect(invalidKeyResponse.status).toBe(400);
 
       expect(
-        (await request(server).patch('/users/me/requests/21').send({
-          status: 'ENCERRADA',
-        })).status,
+        (
+          await request(server).patch('/users/me/requests/21').send({
+            status: 'ENCERRADA',
+          })
+        ).status,
       ).toBe(404);
     } finally {
       await app?.close();
@@ -341,11 +976,15 @@ describe('UsersController', () => {
         providers: [
           {
             provide: UsersService,
-            useValue: { exportPersonalData: jest.fn() },
+            useValue: { exportPersonalDataToTemporaryFile: jest.fn() },
           },
           {
             provide: PrivacyRequestsService,
             useValue: privacyRequestsService,
+          },
+          {
+            provide: UserExportLockService,
+            useValue: createExportLock().service,
           },
         ],
       })

@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PageHeader } from '../../components/layout/PagePlaceholder'
 import { Avatar } from '../../components/ui/Avatar'
@@ -11,11 +11,8 @@ import { Loading } from '../../components/ui/Loading'
 import { AlertIcon, CheckIcon, ClockIcon, EditIcon } from '../../components/ui/icons/Icon'
 import { useApiResource } from '../../hooks/useApiResource'
 import { useAsyncAction } from '../../hooks/useAsyncAction'
+import { usePersonalDataExport } from '../../hooks/usePersonalDataExport'
 import { authService } from '../../services/api/authService'
-import {
-  downloadJsonFile,
-  personalDataExportFilename,
-} from '../../utils/downloadJson'
 import { useToast } from '../../contexts/useToast'
 import { ROUTES } from '../../routes/routes'
 import type { Usuario, UpdateUserInput } from '../../types/domain'
@@ -53,25 +50,7 @@ export function BarbeiroPerfilPage() {
   const update = useAsyncAction(async (input: UpdateUserInput) => {
     return authService.updateProfile(input)
   })
-  const dataExport = useAsyncAction(async () => authService.exportPersonalData())
-  const exportInProgress = useRef(false)
-
-  async function handleExportData() {
-    if (exportInProgress.current) return
-    exportInProgress.current = true
-    try {
-      const data = await dataExport.run()
-      downloadJsonFile(data, personalDataExportFilename())
-      toast.success('Sua cópia JSON foi baixada.', 'Dados exportados')
-    } catch {
-      toast.error(
-        'Não foi possível exportar seus dados. Tente novamente.',
-        'Falha ao exportar',
-      )
-    } finally {
-      exportInProgress.current = false
-    }
-  }
+  const personalDataExport = usePersonalDataExport()
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -272,12 +251,24 @@ export function BarbeiroPerfilPage() {
                     <Button
                       variant="secondary"
                       className={styles.profileExportButton}
-                      onClick={handleExportData}
-                      loading={dataExport.loading}
-                      disabled={dataExport.loading}
+                      onClick={personalDataExport.start}
+                      loading={personalDataExport.isExporting}
+                      disabled={personalDataExport.isExporting}
                     >
-                      Baixar cópia dos dados
+                      {personalDataExport.phase === 'choosing'
+                        ? 'Escolha onde salvar'
+                        : personalDataExport.isExporting
+                          ? 'Preparando arquivo'
+                          : 'Baixar cópia dos dados'}
                     </Button>
+                    {personalDataExport.canCancel && (
+                      <Button
+                        variant="secondary"
+                        onClick={personalDataExport.cancel}
+                      >
+                        Cancelar download
+                      </Button>
+                    )}
                   </div>
                 </Card>
               </section>

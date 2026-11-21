@@ -1,5 +1,7 @@
 import { RedisThrottlerStorage } from './redis-throttler-storage';
-import { RedisThrottlerClient } from './redis-throttler.tokens';
+import type { RedisThrottlerClient } from './redis-throttler.tokens';
+import { REDIS_CLIENT } from '../redis/redis.tokens';
+import { REDIS_THROTTLER_CLIENT } from './redis-throttler.tokens';
 
 describe('RedisThrottlerStorage', () => {
   function createStorage(isReady: boolean, evalImplementation?: jest.Mock) {
@@ -44,7 +46,9 @@ describe('RedisThrottlerStorage', () => {
       '0',
     ]);
     expect(evalMock.mock.calls[0][1].arguments[3]).toMatch(/^[0-9a-f-]{36}$/i);
-    expect(client.on).toHaveBeenCalledWith('error', expect.any(Function));
+    expect(client.connect).not.toHaveBeenCalled();
+    expect(client.close).not.toHaveBeenCalled();
+    expect(REDIS_THROTTLER_CLIENT).toBe(REDIS_CLIENT);
   });
 
   it('fails closed without falling back when Redis is not ready', async () => {
@@ -66,15 +70,5 @@ describe('RedisThrottlerStorage', () => {
     await expect(
       storage.increment('request-key', 60_000, 5, 0, 'default'),
     ).rejects.toThrow('redis unavailable');
-  });
-
-  it('fails application startup if the initial Redis connection fails', async () => {
-    const { storage, client } = createStorage(true);
-    client.connect.mockRejectedValue(new Error('redis unavailable'));
-
-    await expect(storage.onModuleInit()).rejects.toThrow(
-      'Redis obrigatório para rate limiting indisponível.',
-    );
-    expect(client.destroy).toHaveBeenCalledTimes(1);
   });
 });

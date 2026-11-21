@@ -1,4 +1,5 @@
-import { createClient } from 'redis';
+import { REDIS_CLIENT } from '../redis/redis.tokens';
+import type { RedisClient } from '../redis/redis.tokens';
 
-export const REDIS_THROTTLER_CLIENT = Symbol('REDIS_THROTTLER_CLIENT');
-export type RedisThrottlerClient = ReturnType<typeof createClient>;
+export const REDIS_THROTTLER_CLIENT = REDIS_CLIENT;
+export type RedisThrottlerClient = RedisClient;

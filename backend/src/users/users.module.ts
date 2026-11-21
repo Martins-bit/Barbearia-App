@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { RedisModule } from '../common/redis/redis.module';
+import { UserExportLockService } from '../common/redis/user-export-lock.service';
 import { JwtGuard } from '../auth/guards/jwt.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { UsersController } from './users.controller';
@@ -13,11 +15,13 @@ import { TemporaryExportStorageService } from './temporary-export-storage.servic
  * AppModule); RolesGuard resolve UsersService deste próprio módulo.
  */
 @Module({
+  imports: [RedisModule],
   controllers: [UsersController],
   providers: [
     UsersService,
     PrivacyRequestsService,
     TemporaryExportStorageService,
+    UserExportLockService,
     JwtGuard,
     RolesGuard,
   ],

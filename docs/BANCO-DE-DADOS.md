@@ -329,6 +329,31 @@ duplicidade para o mesmo agendamento. Notificações são
 registros internos persistentes; não representam push, e-mail, SMS ou
 integração externa.
 
+### 10.1. Inscrições e entregas push — implementação parcial
+
+As notificações internas descritas acima permanecem o registro principal. O
+canal push aprovado será adicional e não substituirá nem alterará os registros
+de `Notificacao`.
+
+O schema contém `PushSubscription` e `PushSubscriptionFingerprint`, permitindo
+várias inscrições por usuário/dispositivo, revogação lógica e fingerprints
+versionados. A migration
+`20261120201700_add_push_subscriptions` foi criada, mas ainda não foi aplicada.
+Não existe tabela/outbox de entrega push.
+
+Endpoint e chaves da inscrição devem ser tratados como confidenciais, não
+expostos em consultas/logs e protegidos em repouso. Os campos criptográficos e
+índices estão definidos no schema, mas ainda não há provider KMS/Secret Manager
+nem provider de HMAC configurado. Por isso, a API de cadastro permanece
+desabilitada e não persiste dados. A API de listagem retorna somente metadados;
+a revogação atualiza `revogadoEm` e exige titularidade autenticada.
+
+O processamento de entrega deverá ser durável e assíncrono. A falha de uma
+entrega push não poderá reverter a transação que criou ou alterou o
+agendamento, claim ou notificação interna. Os detalhes do modelo da outbox e
+dos registros de tentativa permanecem pendentes de desenho técnico; esta
+seção não descreve tabelas já existentes.
+
 ---
 
 ## 11. MENSAGENS

@@ -71,6 +71,32 @@ O frontend NÃO deverá:
 - Ser responsável pela integridade dos agendamentos;
 - Criar regras financeiras.
 
+### Aplicativo web progressivo (PWA)
+
+O frontend é publicado como uma única PWA para clientes e barbeiros. A
+instalação é opcional: clientes continuam acessando pelo navegador, enquanto
+barbeiros podem instalar a aplicação pelas opções oferecidas pelo navegador ou
+pelo sistema operacional.
+
+O Service Worker pré-armazena somente o shell estático versionado do build
+(HTML, JavaScript, CSS, ícones e manifest). Não deve armazenar respostas da
+API, dados pessoais, respostas autenticadas ou tráfego Socket.IO. Atualizações
+aguardam a confirmação do usuário; caches antigos do shell são removidos na
+ativação da versão substituta.
+
+A hospedagem de produção deve servir a aplicação por HTTPS e configurar
+fallback de navegação SPA para `index.html`, preservando a passagem direta para
+rotas do React Router. O fallback não deve substituir respostas da API ou
+requisições do Socket.IO.
+
+Auditoria de dependências identificou um finding alto para `picomatch@4.0.5`,
+transitivo de Vite e da cadeia de build do PWA. No momento da auditoria, o
+registry consultado não oferecia versão fora do intervalo afetado (`<=4.0.7`).
+O pacote é usado em tempo de desenvolvimento/build, não no Service Worker
+gerado; os padrões Workbox atuais são constantes confiáveis, sem entrada de
+usuário. O finding permanece aberto: não considerar a árvore de dependências
+limpa e reavaliar quando houver versão corrigida, antes da publicação.
+
 ---
 
 ## 4. BACKEND
@@ -262,6 +288,92 @@ manual e sem envio externo (e-mail/SMS/push) — apenas notificações internas.
 Falhas do motor são logadas e não derrubam a aplicação; o motor continua
 idempotente, permitindo múltiplas instâncias simultâneas.
 
+### Web Push — decisões aprovadas, ainda não implementadas
+
+O Web Push será um canal opcional adicional às notificações internas do
+PostgreSQL, que permanecem o registro principal. O escopo está limitado aos
+seis eventos aprovados em `REGRAS-DE-NEGOCIO.md`. A permissão depende de ação
+consciente; clientes não precisam instalar a PWA para continuar usando o
+aplicativo pelo link.
+
+O fluxo futuro deverá persistir a notificação interna e o trabalho de entrega
+na transação de negócio, mas enviar ao serviço push somente depois do commit,
+por worker/outbox idempotente. Falhas, timeouts ou indisponibilidade do serviço
+push nunca poderão reverter a operação de negócio. Inscrições inválidas serão
+revogadas. Endpoint e chaves devem ser protegidos contra exposição e o envio
+deve validar os destinos para evitar SSRF. O conteúdo enviado será genérico,
+sem dados pessoais, tokens ou detalhes de agendamento.
+
+Logout explícito revogará a inscrição do dispositivo atual e cancelará a
+inscrição local quando possível. Sem conexão, o cancelamento local ocorre
+imediatamente e a revogação no servidor fica pendente de nova tentativa quando
+houver conexão. Um novo login exige nova autorização; não se transfere uma
+inscrição entre contas. JWT, autenticação, autorização e Socket.IO permanecem
+fora do fluxo push.
+
+O frontend atualmente usa o Service Worker gerado por `vite-plugin-pwa`; não
+há handlers de eventos push implementados. O schema e uma migration para
+inscrições e fingerprints foram criados, mas a migration ainda não foi aplicada.
+A outbox específica de push e os handlers de push e clique do Service Worker
+continuam pendentes. A outbox de reoferta da lista de espera existente é
+específica daquele fluxo e não equivale a uma outbox de entrega push.
+
+A API inicial implementa `GET /api/push/public-key`,
+`POST /api/push/subscriptions`, `GET /api/push/subscriptions` e
+`DELETE /api/push/subscriptions/:id`. A chave pública só é retornada quando o
+par VAPID e o subject estão configurados e validados. Listagem e revogação
+retornam/alteram somente metadados e inscrições do titular autenticado. A
+revogação é lógica. O cadastro responde `503` sem persistir enquanto não houver
+providers reais de proteção e recuperação de DEK e de chave HMAC; nenhum
+provider simulado foi registrado.
+
+A validação de endpoints no cadastro rejeita HTTPS inválido, hosts internos
+óbvios e faixas IP privadas/reservadas conhecidas. Isso não substitui validação
+DNS e controles de saída no futuro serviço de envio, que ainda não existe.
+Nenhum endpoint de envio push ou outbox foi implementado nesta etapa.
+
+#### Runtime e biblioteca candidatos
+
+Na verificação de 20/11/2026, não foi encontrada versão de Node declarada em
+`engines` nos manifests do projeto, `.nvmrc`, `.node-version` ou configuração
+de build/deploy consultada. O runtime efetivamente disponível nesta máquina é
+Node.js `v24.18.0` (npm `11.16.0`); isso não confirma qual runtime está
+implantado em produção. `backend/tsconfig.json` usa TypeScript `6.0.3`,
+`module` e `moduleResolution` `nodenext`, target `ES2023`; o
+`backend/package.json` não declara `"type": "module"`.
+
+`web-push` `4.0.0` é o candidato verificado no registry: declara Node.js
+`>=16` e é um pacote ESM. O runtime local supera o requisito de Node e Node
+24.18 oferece suporte estável para carregar módulos ESM síncronos via
+`require()`. TypeScript `NodeNext` reconhece a fronteira ESM, mas o modo de
+módulo do código do backend e o formato emitido precisam ser considerados na
+importação. Como a biblioteca não declara tipos TypeScript no seu manifest,
+`@types/web-push` `3.6.4` é uma dependência de tipos candidata, ainda sem
+compatibilidade verificada com a API da versão 4.
+
+Conclusão: compatibilidade de runtime é plausível para o Node local, mas não
+está comprovada para produção nem por build/teste de integração, pois a
+biblioteca não foi instalada. Antes da escolha final, confirmar o runtime de
+produção e validar a importação, o build NestJS e os tipos no ambiente-alvo.
+Não atualizar a major de Node, TypeScript ou módulos do projeto por
+conveniência nesta etapa.
+
+#### Decisões ainda pendentes
+
+- Base legal, transparência, necessidade de consentimento e informações a
+  apresentar sobre os serviços push externos, com validação pelo controlador;
+- Prazos de retenção e expurgo separados para inscrições, entregas, tentativas,
+  erros e revogações;
+- Política e procedimento de rotação das chaves VAPID, incluindo revalidação
+  das inscrições;
+- Limite de dispositivos/inscrições ativas por usuário;
+- Como persistir e limitar as tentativas de revogação após logout offline, sem
+  manter ou transferir a sessão anterior;
+- Runtime efetivamente usado em produção e compatibilidade final da
+  dependência/tipos;
+- Provedor push, configuração de segurança de saída e validação dos domínios
+  dos endpoints, incluindo mitigação de SSRF.
+
 ---
 
 ## 6. SEPARAÇÃO DE RESPONSABILIDADES
@@ -357,6 +469,9 @@ O sistema deverá possuir mecanismos seguros para:
 - Proteção de rotas.
 
 As informações de autenticação deverão ser tratadas de maneira segura.
+Um `401` em uma operação funcional inicia a revalidação da sessão por
+`GET /auth/me`; o frontend só remove o token se esse endpoint confirmar `401`.
+Um `403` indica falta de permissão e não encerra uma sessão válida.
 
 ---
 

@@ -2,6 +2,8 @@ import type { ReactNode } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/useAuth'
 import { Loading } from '../components/ui/Loading'
+import { Button } from '../components/ui/Button'
+import { ErrorState } from '../components/ui/States'
 import { ROUTES } from './routes'
 
 interface RequireAuthProps {
@@ -16,11 +18,15 @@ interface RequireAuthProps {
  * redireciona para a área correta do usuário (sem laço de redirecionamento).
  */
 export function RequireAuth({ children, role }: RequireAuthProps) {
-  const { status, user, isCliente } = useAuth()
+  const { status, user, isCliente, retrySessionValidation } = useAuth()
   const location = useLocation()
 
   if (status === 'loading') {
     return <Loading fullArea label="Verificando sessão" />
+  }
+
+  if (status === 'error') {
+    return <SessionValidationError onRetry={retrySessionValidation} />
   }
 
   if (status === 'unauthenticated' || !user) {
@@ -37,10 +43,14 @@ export function RequireAuth({ children, role }: RequireAuthProps) {
 
 /** Impede acesso às rotas públicas quando já autenticado. */
 export function RedirectIfAuthenticated({ children }: { children: ReactNode }) {
-  const { status, user, isCliente } = useAuth()
+  const { status, user, isCliente, retrySessionValidation } = useAuth()
 
   if (status === 'loading') {
     return <Loading fullArea label="Verificando sessão" />
+  }
+
+  if (status === 'error') {
+    return <SessionValidationError onRetry={retrySessionValidation} />
   }
 
   if (status === 'authenticated' && user) {
@@ -48,4 +58,18 @@ export function RedirectIfAuthenticated({ children }: { children: ReactNode }) {
   }
 
   return <>{children}</>
+}
+
+function SessionValidationError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <ErrorState
+      title="Não foi possível verificar sua sessão"
+      description="A sessão foi preservada. Verifique a conexão e tente novamente."
+      action={
+        <Button variant="secondary" onClick={onRetry}>
+          Tentar novamente
+        </Button>
+      }
+    />
+  )
 }

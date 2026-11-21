@@ -8,6 +8,8 @@ describe('resolveAllowedOrigins', () => {
   it('em desenvolvimento, sem configuração, usa as origens locais padrão', () => {
     const origins = resolveAllowedOrigins({ NODE_ENV: 'development' });
     expect(origins).toEqual([
+      'http://localhost:4173',
+      'http://127.0.0.1:4173',
       'http://localhost:5173',
       'http://127.0.0.1:5173',
       'http://localhost:5174',
@@ -19,10 +21,11 @@ describe('resolveAllowedOrigins', () => {
     const origins = resolveAllowedOrigins({
       NODE_ENV: 'development',
       CORS_ALLOWED_ORIGINS:
-        ' https://app.exemplo.com , http://localhost:5173 ,',
+        ' https://app.exemplo.com , http://127.0.0.1:4173 , http://localhost:5173 ,',
     });
     expect(origins).toEqual([
       'https://app.exemplo.com',
+      'http://127.0.0.1:4173',
       'http://localhost:5173',
     ]);
   });

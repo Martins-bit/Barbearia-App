@@ -780,6 +780,67 @@ relacionamentos válidos, claim pertencente ao usuário, `claim.status = ACEITO`
 visíveis. Como a resposta não contém a lista atualizada, o frontend deve buscar
 novamente as notificações e o contador de não lidas após a operação.
 
+## 11.6. Web Push — API inicial parcialmente implementada
+
+As rotas existentes em `/api/notifications` continuam representando somente
+notificações internas. O gerenciamento inicial de inscrições é separado e não
+envia notificações push.
+
+### `GET /api/push/public-key`
+
+- Público, com limite de 60 requisições por minuto por IP.
+- Retorna `{ "publicKey": "<chave pública VAPID>" }` somente quando
+  `PUSH_VAPID_PUBLIC_KEY`, `PUSH_VAPID_PRIVATE_KEY` e `PUSH_VAPID_SUBJECT`
+  estiverem presentes e válidos; a chave pública precisa corresponder à privada.
+- Retorna `503` quando a configuração estiver ausente ou inválida. Nunca
+  retorna a chave privada.
+
+### `POST /api/push/subscriptions`
+
+- Privado: exige JWT válido e usuário `CLIENTE` ou `BARBEIRO`; limite de 5 por
+  minuto por usuário.
+- Corpo: `{ "endpoint": "https://...", "keys": { "p256dh": "...", "auth": "..." } }`.
+- A validação exige HTTPS, rejeita destinos locais/privados/reservados
+  conhecidos e valida o formato e os tamanhos das chaves. Propriedades
+  desconhecidas, inclusive `userId`, são rejeitadas.
+- **Cadastro desabilitado:** responde `503` e não persiste dados enquanto não
+  houver providers criptográficos reais e funcionais para proteger e recuperar
+  os segredos da inscrição.
+
+### `GET /api/push/subscriptions`
+
+- Privado: exige JWT válido e usuário `CLIENTE` ou `BARBEIRO`; limite de 30 por
+  minuto por usuário.
+- Lista somente inscrições ativas pertencentes ao usuário autenticado. A
+  resposta contém apenas `id`, `dataCriacao` e `ultimoUsoEm`; endpoint,
+  fingerprints, chaves e ciphertext nunca são retornados.
+
+### `DELETE /api/push/subscriptions/:id`
+
+- Privado: exige JWT válido e usuário `CLIENTE` ou `BARBEIRO`; limite de 20 por
+  minuto por usuário.
+- Revoga logicamente somente uma inscrição ativa pertencente ao usuário
+  autenticado, respondendo `204`. IDs inexistentes, revogados ou de outro
+  usuário respondem `404`.
+
+Todos os endpoints privados derivam o titular de `@CurrentUser()`; o cliente
+nunca define o `userId` usado na consulta ou revogação. A validação do endpoint
+no cadastro é apenas uma barreira inicial: antes de qualquer envio futuro, será
+obrigatória validação DNS e controle de saída contra SSRF. Envio, outbox,
+logout offline e integração com o Service Worker não fazem parte desta etapa.
+
+Erros comuns: `400` para DTO ou identificador inválido; `401` para sessão
+ausente/inválida; `403` para tipo de usuário não permitido; `404` para inscrição
+inexistente, revogada ou pertencente a outro usuário; `429` para limite excedido;
+`503` enquanto VAPID estiver sem configuração válida ou o cadastro continuar
+sem provider criptográfico.
+
+A migration que cria as tabelas de inscrição e fingerprint ainda não foi
+aplicada. `GET` e `DELETE` dependem de a migration ser aplicada no ambiente
+antes de serem usados. O cadastro continua bloqueado até existir proteção
+criptográfica real. O push permanece opcional e adicional às notificações
+internas; JWT, Socket.IO e regras de negócio não são alterados.
+
 ---
 
 # 12. MENSAGENS
@@ -1059,9 +1120,10 @@ senha ou hash.
 Comando de exclusão via WebSocket, leitura e `unread-count` via socket,
 sincronização de leitura em tempo real, fila offline, presença online/offline,
 typing indicator, Redis, filas, push, e-mail, WhatsApp, anexos e edição.
-`DELETE /api/messages/:id` e `PATCH /api/messages/:id/read` continuam sendo
-operações REST; a exclusão global efetivada também gera o evento
-`message:deleted`.
+Web Push, se implementado, será um canal independente e não fará parte do
+Socket.IO; ver a seção 11.6. `DELETE /api/messages/:id` e
+`PATCH /api/messages/:id/read` continuam sendo operações REST; a exclusão
+global efetivada também gera o evento `message:deleted`.
 
 ---
 
