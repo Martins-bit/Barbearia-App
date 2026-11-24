@@ -5,6 +5,7 @@ import {
   authRequestErrorMessage,
   isValidEmail,
   PASSWORD_RECOVERY_ACCEPTED_MESSAGE,
+  readAuthToken,
   validatePasswordReset,
 } from './authValidation.ts'
 
@@ -23,6 +24,13 @@ describe('auth form validation', () => {
     assert.match(PASSWORD_RECOVERY_ACCEPTED_MESSAGE, /poderão ser encaminhadas/)
     assert.doesNotMatch(PASSWORD_RECOVERY_ACCEPTED_MESSAGE, /serão encaminhadas/)
     assert.doesNotMatch(PASSWORD_RECOVERY_ACCEPTED_MESSAGE, /cadastrado|não existe/i)
+  })
+
+  it('prefills only a syntactically valid auth token from public email links', () => {
+    const valid = 'A'.repeat(43)
+    assert.equal(readAuthToken(new URLSearchParams(`token=${valid}`)), valid)
+    assert.equal(readAuthToken(new URLSearchParams('token=curto')), '')
+    assert.equal(readAuthToken(new URLSearchParams('token=bad token')), '')
   })
 
   it('validates password length in UTF-8 bytes and confirmation equality', () => {

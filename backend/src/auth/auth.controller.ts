@@ -24,8 +24,10 @@ import { PasswordRecoveryService } from './password-recovery.service';
 import { PasswordRecoveryDto } from './dto/password-recovery.dto';
 import { PasswordResetDto } from './dto/password-reset.dto';
 import { RequestEmailVerificationDto } from './dto/request-email-verification.dto';
+import { NoStoreResponse } from '../common/http/private-response-cache.interceptor';
 
 @Controller('auth')
+@NoStoreResponse()
 export class AuthController {
   constructor(
     private readonly authService: AuthService,
@@ -59,6 +61,15 @@ export class AuthController {
     return this.authService.login(loginDto);
   }
 
+  @Post('logout')
+  @HttpCode(200)
+  @UseGuards(JwtGuard, RolesGuard, ThrottlerGuard)
+  @Roles(TipoUsuario.CLIENTE, TipoUsuario.BARBEIRO)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async logout(@CurrentUser() userId: number): Promise<{ message: string }> {
+    return this.authService.logout(userId);
+  }
+
   @Post('email/verification/request')
   @HttpCode(202)
   @UseGuards(JwtGuard, RolesGuard, ThrottlerGuard)
@@ -77,9 +88,7 @@ export class AuthController {
   async resendEmailVerification(
     @Body() dto: RequestEmailVerificationDto,
   ): Promise<{ message: string }> {
-    return this.emailVerificationService.requestConfirmationByEmail(
-      dto.email,
-    );
+    return this.emailVerificationService.requestConfirmationByEmail(dto.email);
   }
 
   @Post('email/verification/confirm')

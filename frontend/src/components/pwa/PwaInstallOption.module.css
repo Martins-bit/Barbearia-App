@@ -1,0 +1,58 @@
+.container {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
+}
+
+.installButton,
+.dismissButton {
+  min-height: 2.75rem;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-gold);
+  border-radius: var(--radius-md);
+  background: var(--color-gold);
+  color: var(--color-text-on-gold);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+
+.installButton:focus-visible,
+.dismissButton:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.instructions {
+  flex: 1 1 100%;
+  max-width: 40rem;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.instructions p {
+  margin: 0 0 var(--space-3);
+  line-height: 1.5;
+}
+
+.dismissButton {
+  border-color: var(--color-border-strong);
+  background: transparent;
+  color: var(--color-text);
+}
+
+@media (max-width: 480px) {
+  .container {
+    flex-direction: column;
+  }
+
+  .installButton,
+  .instructions {
+    width: 100%;
+  }
+}

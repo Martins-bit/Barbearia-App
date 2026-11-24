@@ -5,11 +5,12 @@ import { Loading } from '../components/ui/Loading'
 import { Button } from '../components/ui/Button'
 import { ErrorState } from '../components/ui/States'
 import { ROUTES } from './routes'
+import type { TipoUsuario } from '../types/domain'
 
 interface RequireAuthProps {
   children: ReactNode
   /** Papel exigido pela rota; ausente = qualquer usuário autenticado. */
-  role?: 'CLIENTE' | 'BARBEIRO'
+  role?: TipoUsuario
 }
 
 /**

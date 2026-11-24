@@ -54,6 +54,7 @@
 
 @media (max-width: 640px) {
   .banner {
+    top: calc(var(--topbar-height) + var(--space-2) + env(safe-area-inset-top, 0px));
     left: calc(var(--space-4) + env(safe-area-inset-left, 0px));
     right: calc(var(--space-4) + env(safe-area-inset-right, 0px));
     width: auto;

@@ -4,7 +4,7 @@ export class UserResponseDto {
   telefone: string;
   email: string | null;
   emailVerificadoEm?: Date | null;
-  tipoUsuario: 'CLIENTE' | 'BARBEIRO';
+  tipoUsuario: 'CLIENTE' | 'BARBEIRO' | 'ADMIN';
   ativo: boolean;
   dataCriacao: Date;
   dataAtualizacao: Date;

@@ -253,6 +253,12 @@ manualmente.
 A configuração Prisma padrão valida `migrate` e `db push` somente quando ela
 própria é selecionada: exige `PRISMA_MIGRATION_TARGET=development` e uma URL
 para `barbearia_app` local na porta 5432. Esses controles locais não impedem
+
+Para migrations locais aprovadas, use `npm run db:development:migrate`. Este
+wrapper reutiliza o guard existente em `test/prisma-migration-safety.cjs`,
+rejeita argumentos extras e executa somente `prisma migrate deploy` com
+`prisma.config.ts`. Não use `npx prisma migrate dev/deploy` direto para
+contornar a validação protegida. Esses controles locais não impedem
 universalmente o uso direto do Prisma com um arquivo `--config` arbitrário,
 que pode não carregar os guards do projeto. Portanto, os caminhos oficiais são
 protegidos, mas a proteção definitiva contra outros destinos depende de roles
@@ -301,10 +307,17 @@ e qualquer execução manual também exige validação E2E.
 | `BREVO_API_KEY`        | obrigatória somente com `EMAIL_PROVIDER=brevo` | segredo do painel Brevo; não versionar                   |
 | `BREVO_SENDER_EMAIL`   | obrigatória somente com `EMAIL_PROVIDER=brevo` | remetente autorizado no Brevo                            |
 | `BREVO_SENDER_NAME`    | opcional; usa `Barbearia do Bruno` por padrão  | nome exibido do remetente                                |
+| `PUBLIC_APP_URL`       | desenvolvimento: `http://localhost:5173`        | produção: URL pública HTTPS obrigatória, sem localhost |
 | `EMAIL_TIMEOUT_MS`     | padrão `10000` ms                              | inteiro positivo; limita a chamada à API                 |
+| `FIRST_ADMIN_PROVISIONING` | não definido; desabilitado por padrão      | deve ser exatamente `yes` na máquina local autorizada   |
+| `FIRST_ADMIN_DATABASE_NAME` | não definido; obrigatório                   | nome exato do banco local permitido para o primeiro ADMIN |
 
 Consulte `backend/.env.example` para os nomes exatos e o `.env` local para os
 valores do seu ambiente (o conteúdo do `.env` **não** é versionado).
+
+O comando administrativo local resolve `backend/.env` pelo diretório real do
+script, não pelo diretório atual do terminal. Valores já definidos pelo
+processo têm precedência; o arquivo `.env` apenas completa variáveis ausentes.
 
 ## 8. Exportação de dados próprios e minimização de logs
 

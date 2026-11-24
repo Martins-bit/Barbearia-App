@@ -170,7 +170,11 @@ Endpoint conceitual:
 
 ### Objetivo
 
-Encerrar a sessão atual do usuário.
+Encerrar a sessão atual e revogar os JWTs da conta no servidor. A implementação
+incrementa o `authVersion` existente do usuário; o JWT anterior passa a ser
+rejeitado pelo `JwtStrategy` nas próximas requisições. Como o mecanismo atual
+não possui sessões por dispositivo, o logout revoga os tokens já emitidos para
+a conta.
 
 ---
 

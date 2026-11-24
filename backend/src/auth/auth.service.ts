@@ -148,6 +148,16 @@ export class AuthService {
   }
 
   /**
+   * Revoga efetivamente os JWTs existentes para a conta incrementando
+   * authVersion. O frontend ainda deve limpar seu token local em finally,
+   * inclusive se o servidor estiver temporariamente indisponível.
+   */
+  async logout(userId: number): Promise<{ message: string }> {
+    await this.usersService.revokeAuthSessions(userId);
+    return { message: 'Sessão encerrada.' };
+  }
+
+  /**
    * Gera um token JWT para o usuário
    */
   private generateToken(usuario: any): string {

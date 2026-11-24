@@ -1,6 +1,7 @@
 import {
   BREVO_EMAIL_ENDPOINT,
   createEmailVerificationMailer,
+  parsePublicAppUrl,
 } from './brevo-email-verification-mailer';
 import { UnconfiguredEmailVerificationMailer } from './email-verification-mailer';
 
@@ -20,6 +21,7 @@ function makeMailer(
     BREVO_SENDER_EMAIL: SENDER_EMAIL,
     BREVO_SENDER_NAME: 'Barbearia do Bruno',
     EMAIL_TIMEOUT_MS: '1000',
+    PUBLIC_APP_URL: 'https://app.exemplo.com',
     ...overrides,
   };
 
@@ -71,8 +73,14 @@ describe('BrevoEmailVerificationMailer', () => {
     expect(body.subject).toContain('Confirme seu endereço de e-mail');
     expect(body.htmlContent).toContain(TOKEN);
     expect(body.htmlContent).toContain('30 minutos');
+    expect(body.htmlContent).toContain(
+      'https://app.exemplo.com/confirmar-email?token=',
+    );
     expect(body.textContent).toContain(TOKEN);
     expect(body.textContent).toContain('30 minutos');
+    expect(body.textContent).toContain(
+      'https://app.exemplo.com/confirmar-email?token=',
+    );
   });
 
   it('sends a password recovery message containing the exact requested code', async () => {
@@ -86,8 +94,14 @@ describe('BrevoEmailVerificationMailer', () => {
     const body = requestBody(fetcher);
     expect(body.subject).toContain('redefinir sua senha');
     expect(body.htmlContent).toContain(TOKEN);
+    expect(body.htmlContent).toContain(
+      'https://app.exemplo.com/redefinir-senha?token=',
+    );
     expect(body.textContent).toContain(TOKEN);
     expect(body.textContent).toContain('15 minutos');
+    expect(body.textContent).toContain(
+      'https://app.exemplo.com/redefinir-senha?token=',
+    );
   });
 
   it('uses the configured timeout and translates aborts to a sanitized error', async () => {
@@ -154,6 +168,38 @@ describe('BrevoEmailVerificationMailer', () => {
 
     expect(mailer).toBeInstanceOf(UnconfiguredEmailVerificationMailer);
     expect(mailer.isAvailable()).toBe(false);
+  });
+
+  it('requires a valid HTTPS public frontend URL in production', () => {
+    expect(() =>
+      createEmailVerificationMailer({
+        ...{
+          EMAIL_PROVIDER: 'brevo',
+          BREVO_API_KEY: API_KEY,
+          BREVO_SENDER_EMAIL: SENDER_EMAIL,
+        },
+        NODE_ENV: 'production',
+      }),
+    ).toThrow('PUBLIC_APP_URL');
+
+    expect(() =>
+      parsePublicAppUrl('http://app.exemplo.com', 'production'),
+    ).toThrow('HTTPS');
+    expect(() =>
+      parsePublicAppUrl('https://localhost:5173', 'production'),
+    ).toThrow('localhost');
+  });
+
+  it('rejects unsafe or incomplete public frontend URLs', () => {
+    expect(() => parsePublicAppUrl('javascript:alert(1)', 'development')).toThrow(
+      'URL pública válida',
+    );
+    expect(() =>
+      parsePublicAppUrl(
+        'https://app.exemplo.com/reset?tenant=1',
+        'production',
+      ),
+    ).toThrow('URL pública válida');
   });
 
   it.each([

@@ -51,6 +51,18 @@ function assertDefaultPrismaMigrationAllowed(argv, env) {
     );
   }
 
+  try {
+    const url = new URL(env.DATABASE_URL);
+    const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (!['127.0.0.1', '::1'].includes(host)) {
+      throw new Error('Host de desenvolvimento não autorizado.');
+    }
+  } catch {
+    throw new Error(
+      'Prisma bloqueado: migrations locais exigem 127.0.0.1 ou ::1. A URL não será exibida.',
+    );
+  }
+
   if (env.DATABASE_URL.includes(E2E_DATABASE_NAME)) {
     throw new Error(
       'Prisma bloqueado: migrations E2E exigem configuração e runner dedicados.',

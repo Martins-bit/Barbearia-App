@@ -36,6 +36,7 @@ describe('AuthService', () => {
       findByEmail: jest.fn().mockResolvedValue(null),
       createUser: jest.fn(),
       findById: jest.fn(),
+      revokeAuthSessions: jest.fn(),
     };
 
     const mockJwtService = {
@@ -71,6 +72,25 @@ describe('AuthService', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+  });
+
+  describe('logout', () => {
+    it('increments authVersion through UsersService and returns confirmation', async () => {
+      usersService.revokeAuthSessions.mockResolvedValue(4);
+
+      await expect(service.logout(42)).resolves.toEqual({
+        message: 'Sessão encerrada.',
+      });
+      expect(usersService.revokeAuthSessions).toHaveBeenCalledWith(42);
+    });
+
+    it('does not report success if revoking authVersion fails', async () => {
+      usersService.revokeAuthSessions.mockRejectedValue(
+        new Error('Falha no banco'),
+      );
+
+      await expect(service.logout(42)).rejects.toThrow('Falha no banco');
+    });
   });
 
   describe('register', () => {

@@ -5,7 +5,7 @@
    etapas de integração avançarem.
    ============================================================================= */
 
-export type TipoUsuario = 'CLIENTE' | 'BARBEIRO'
+export type TipoUsuario = 'CLIENTE' | 'BARBEIRO' | 'ADMIN'
 
 export type StatusAgendamento =
   | 'CONFIRMADO'

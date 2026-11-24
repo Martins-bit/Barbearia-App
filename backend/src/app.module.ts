@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule as NestScheduleModule } from '@nestjs/schedule';
@@ -17,6 +18,7 @@ import { WaitlistModule } from './waitlist/waitlist.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { MessagesModule } from './messages/messages.module';
 import { BarbersModule } from './barbers/barbers.module';
+import { PrivateResponseCacheInterceptor } from './common/http/private-response-cache.interceptor';
 
 @Module({
   imports: [
@@ -50,6 +52,12 @@ import { BarbersModule } from './barbers/barbers.module';
     BarbersModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: PrivateResponseCacheInterceptor,
+    },
+  ],
 })
 export class AppModule {}

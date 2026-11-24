@@ -13,6 +13,7 @@ interface BrevoEmailConfiguration {
   senderEmail: string;
   senderName: string;
   timeoutMs: number;
+  publicAppUrl: string;
 }
 
 interface BrevoMessage {
@@ -44,6 +45,10 @@ export function createEmailVerificationMailer(
 
   const timeoutMs = parseTimeout(environment.EMAIL_TIMEOUT_MS);
   const senderName = environment.BREVO_SENDER_NAME?.trim();
+  const publicAppUrl = parsePublicAppUrl(
+    environment.PUBLIC_APP_URL,
+    environment.NODE_ENV,
+  );
 
   return new BrevoEmailVerificationMailer(
     {
@@ -51,6 +56,7 @@ export function createEmailVerificationMailer(
       senderEmail,
       senderName: senderName || DEFAULT_SENDER_NAME,
       timeoutMs,
+      publicAppUrl,
     },
     fetcher,
   );
@@ -75,6 +81,60 @@ function parseTimeout(value: string | undefined): number {
   return timeoutMs;
 }
 
+export function parsePublicAppUrl(
+  value: string | undefined,
+  nodeEnv: string | undefined,
+): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    if (nodeEnv === 'production') {
+      throw new Error(
+        'PUBLIC_APP_URL é obrigatório em produção quando o Brevo estiver ativo.',
+      );
+    }
+    return 'http://localhost:5173';
+  }
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error('PUBLIC_APP_URL deve ser uma URL pública válida.');
+  }
+
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error('PUBLIC_APP_URL deve ser uma URL pública válida.');
+  }
+
+  if (nodeEnv === 'production' && url.protocol !== 'https:') {
+    throw new Error('PUBLIC_APP_URL deve usar HTTPS em produção.');
+  }
+
+  if (
+    nodeEnv === 'production' &&
+    (url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.hostname === '::1')
+  ) {
+    throw new Error(
+      'PUBLIC_APP_URL não pode usar localhost em produção.',
+    );
+  }
+
+  url.pathname = url.pathname.replace(/\/+$/, '');
+  return url.origin + (url.pathname === '/' ? '' : url.pathname);
+}
+
+function buildAuthLink(publicAppUrl: string, path: string, token: string): string {
+  return `${publicAppUrl}${path}?token=${encodeURIComponent(token)}`;
+}
+
 class BrevoEmailVerificationMailer implements EmailVerificationMailer {
   constructor(
     private readonly configuration: BrevoEmailConfiguration,
@@ -86,6 +146,11 @@ class BrevoEmailVerificationMailer implements EmailVerificationMailer {
   }
 
   async sendVerificationEmail(email: string, token: string): Promise<void> {
+    const confirmationUrl = buildAuthLink(
+      this.configuration.publicAppUrl,
+      '/confirmar-email',
+      token,
+    );
     await this.send(email, {
       subject: 'Confirme seu endereço de e-mail | Barbearia do Bruno',
       htmlContent: this.renderHtml(
@@ -93,6 +158,8 @@ class BrevoEmailVerificationMailer implements EmailVerificationMailer {
         'Use o código abaixo para confirmar o endereço de e-mail da sua conta:',
         token,
         'O código expira em 30 minutos. Se você não solicitou esta confirmação, ignore esta mensagem.',
+        confirmationUrl,
+        'Confirmar endereço',
       ),
       textContent: [
         'Confirme seu endereço de e-mail',
@@ -100,6 +167,8 @@ class BrevoEmailVerificationMailer implements EmailVerificationMailer {
         'Use o código abaixo para confirmar o endereço de e-mail da sua conta:',
         '',
         token,
+        '',
+        `Confirme pelo link: ${confirmationUrl}`,
         '',
         'O código expira em 30 minutos. Se você não solicitou esta confirmação, ignore esta mensagem.',
         '',
@@ -109,6 +178,11 @@ class BrevoEmailVerificationMailer implements EmailVerificationMailer {
   }
 
   async sendPasswordResetEmail(email: string, token: string): Promise<void> {
+    const resetUrl = buildAuthLink(
+      this.configuration.publicAppUrl,
+      '/redefinir-senha',
+      token,
+    );
     await this.send(email, {
       subject: 'Código para redefinir sua senha | Barbearia do Bruno',
       htmlContent: this.renderHtml(
@@ -116,6 +190,8 @@ class BrevoEmailVerificationMailer implements EmailVerificationMailer {
         'Use o código abaixo na tela de redefinição de senha:',
         token,
         'O código expira em 15 minutos. Se você não solicitou a recuperação, ignore esta mensagem; sua senha não será alterada.',
+        resetUrl,
+        'Redefinir senha',
       ),
       textContent: [
         'Redefina sua senha',
@@ -123,6 +199,8 @@ class BrevoEmailVerificationMailer implements EmailVerificationMailer {
         'Use o código abaixo na tela de redefinição de senha:',
         '',
         token,
+        '',
+        `Redefina sua senha pelo link: ${resetUrl}`,
         '',
         'O código expira em 15 minutos. Se você não solicitou a recuperação, ignore esta mensagem; sua senha não será alterada.',
         '',
@@ -136,7 +214,11 @@ class BrevoEmailVerificationMailer implements EmailVerificationMailer {
     introduction: string,
     token: string,
     notice: string,
+    actionUrl: string,
+    actionLabel: string,
   ): string {
+    const safeActionUrl = escapeHtml(actionUrl);
+    const safeToken = escapeHtml(token);
     return [
       '<!doctype html>',
       '<html lang="pt-BR">',
@@ -144,7 +226,8 @@ class BrevoEmailVerificationMailer implements EmailVerificationMailer {
       '<body>',
       `<h1>${title}</h1>`,
       `<p>${introduction}</p>`,
-      `<p style="font-size: 24px; font-weight: 700; letter-spacing: 2px">${escapeHtml(token)}</p>`,
+      `<p style="font-size: 24px; font-weight: 700; letter-spacing: 2px">${safeToken}</p>`,
+      `<p><a href="${safeActionUrl}">${escapeHtml(actionLabel)}</a></p>`,
       `<p>${notice}</p>`,
       '<p>Barbearia do Bruno</p>',
       '</body>',

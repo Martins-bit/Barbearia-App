@@ -49,6 +49,12 @@ backend/test/.env.e2e
 !backend/test/.env.e2e.example
 !backend/test/.env.e2e.migrate.example
 
+# Backups e caches locais de banco/build
+backend/backups/
+*.sha256
+*.tsbuildinfo
+*.backup
+
 # Arquivos de agentes/skills gerados por ferramentas
 backend/.agents/
 backend/.claude/

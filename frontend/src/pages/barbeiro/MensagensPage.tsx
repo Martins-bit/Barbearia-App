@@ -12,6 +12,7 @@ import { useMensagens } from '../../hooks/useMensagens'
 import { formatTime } from '../../utils/format'
 import type { Mensagem, ModoExclusaoMensagem } from '../../types/domain'
 import { podeApagarParaTodos } from '../cliente/mensagemRegras'
+import { shouldOpenMessageMenuAbove } from '../mensagemMenuPosition'
 import styles from './mensagens.module.css'
 
 /** Rótulo curto do item da lista (horário se hoje, "Ontem", ou dd/mm). */
@@ -62,6 +63,8 @@ export function BarbeiroMensagensPage() {
     modo: ModoExclusaoMensagem
   } | null>(null)
   const menuContainerRef = useRef<HTMLDivElement | null>(null)
+  const historicoRef = useRef<HTMLDivElement | null>(null)
+  const [menuAcimaId, setMenuAcimaId] = useState<number | null>(null)
 
   // Fecha o menu de opções ao clicar fora
   useEffect(() => {
@@ -196,6 +199,7 @@ export function BarbeiroMensagensPage() {
 
                   <div
                     className={styles.historico}
+                    ref={historicoRef}
                     aria-live="polite"
                     aria-label="Histórico da conversa"
                   >
@@ -291,9 +295,24 @@ export function BarbeiroMensagensPage() {
                                     aria-label="Opções da mensagem"
                                     aria-haspopup="true"
                                     aria-expanded={menuAberto}
-                                    onClick={() =>
-                                      setMenuAbertoId(menuAberto ? null : mensagem.id)
-                                    }
+                                    onClick={(event) => {
+                                      if (menuAberto) {
+                                        setMenuAbertoId(null)
+                                        setMenuAcimaId(null)
+                                        return
+                                      }
+
+                                      const scrollport =
+                                        historicoRef.current?.getBoundingClientRect()
+                                      const trigger = event.currentTarget.getBoundingClientRect()
+                                      setMenuAcimaId(
+                                        scrollport &&
+                                          shouldOpenMessageMenuAbove(trigger, scrollport)
+                                          ? mensagem.id
+                                          : null,
+                                      )
+                                      setMenuAbertoId(mensagem.id)
+                                    }}
                                   >
                                     <svg
                                       width="16"
@@ -316,6 +335,9 @@ export function BarbeiroMensagensPage() {
                                     <div
                                       className={[
                                         styles.menuDropdown,
+                                        menuAcimaId === mensagem.id
+                                          ? styles.menuDropdownAcima
+                                          : '',
                                         minha
                                           ? styles.menuDropdownDireita
                                           : styles.menuDropdownEsquerda,

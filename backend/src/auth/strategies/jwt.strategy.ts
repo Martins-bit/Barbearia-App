@@ -7,7 +7,7 @@ import { UsersService } from '../../users/users.service';
 interface JwtPayload {
   sub: number;
   telefone: string;
-  tipoUsuario: 'CLIENTE' | 'BARBEIRO';
+  tipoUsuario: 'CLIENTE' | 'BARBEIRO' | 'ADMIN';
   authVersion?: number;
   iat: number;
   exp: number;

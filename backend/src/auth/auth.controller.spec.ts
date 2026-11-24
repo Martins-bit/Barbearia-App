@@ -22,6 +22,7 @@ describe('AuthController — password recovery & reset endpoints', () => {
       login: jest.fn(),
       register: jest.fn(),
       getCurrentUser: jest.fn(),
+      logout: jest.fn(),
     };
     emailVerificationService = {
       requestConfirmation: jest.fn(),
@@ -50,6 +51,17 @@ describe('AuthController — password recovery & reset endpoints', () => {
       .compile();
 
     controller = module.get<AuthController>(AuthController);
+  });
+
+  describe('POST /auth/logout', () => {
+    it('delegates logout to AuthService using the authenticated JWT identity', async () => {
+      authService.logout.mockResolvedValue({ message: 'Sessão encerrada.' });
+
+      const result = await controller.logout(42);
+
+      expect(authService.logout).toHaveBeenCalledWith(42);
+      expect(result).toEqual({ message: 'Sessão encerrada.' });
+    });
   });
 
   describe('POST /auth/email/verification/resend', () => {

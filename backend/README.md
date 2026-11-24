@@ -99,16 +99,19 @@ config can bypass local guards. The definitive boundary must be least-privilege
 PostgreSQL roles.
 
 When the default `prisma.config.ts` is selected, it blocks `migrate` and
-`db push` unless
-`PRISMA_MIGRATION_TARGET=development` is explicitly set and the connection
-targets local `barbearia_app` on port 5432. For normal local development, from
-`backend`, use:
+`db push` unless `PRISMA_MIGRATION_TARGET=development` is explicitly set and
+the connection targets local `barbearia_app` on port 5432.
+
+For the protected local workflow, use the reusable development migration
+runner instead of invoking Prisma directly:
 
 ```powershell
-$env:PRISMA_MIGRATION_TARGET = 'development'
-npx prisma migrate dev
-Remove-Item Env:PRISMA_MIGRATION_TARGET
+cd backend
+npm run db:development:migrate
 ```
+
+The runner rejects extra arguments, validates the local `barbearia_app`
+destination and delegates only `prisma migrate deploy --config prisma.config.ts`.
 
 The default config never authorizes `barbearia_app_e2e` or remote hosts. This
 validation applies only when that config is selected; it cannot prevent use of
@@ -117,6 +120,36 @@ an arbitrary external `--config` file.
 Diagnostic `_diag-*` E2E files are excluded from the normal E2E selection and
 are not run automatically. Any manual diagnostic execution must also pass the
 same database safety check.
+
+## Provisionar uma conta BARBEIRO localmente
+
+O provisionamento é uma operação explícita de operador; não existe endpoint
+público para criar barbeiros. Configure `BARBER_PROVISIONING=yes`,
+`BARBER_PROVISIONING_OPERATOR` com o nome exato do usuário autorizado do
+sistema operacional e `BARBER_DATABASE_NAME` com o nome do banco local
+aprovado. `NODE_ENV` precisa estar explicitamente definido como `development`;
+valores ausentes, vazios, `test` ou `production` são rejeitados antes da
+transação. A flag, sozinha, não autoriza a execução. O acesso ao ambiente e às
+credenciais do banco deve ser controlado pelas permissões do sistema
+operacional.
+
+Execute somente em terminal local interativo, fora de CI ou SSH:
+
+```powershell
+cd backend
+npm run barber:create
+```
+
+O comando rejeita argumentos, bancos não locais ou divergentes e exige
+confirmação digitada com o nome do banco validado. Nome, telefone e e-mail são
+solicitados interativamente; a senha e sua confirmação são digitadas sem eco.
+Não passe dados pessoais ou senha como argumentos.
+
+A conta e o perfil de barbeiro são criados atomicamente. O login permanece
+bloqueado até a confirmação do e-mail. Se o envio falhar, o comando informa
+que a conta foi criada, mas permanece pendente; após corrigir o serviço de
+e-mail, use o mecanismo existente de reenvio. Este comando não deve ser
+executado contra produção e não é o provisionador de primeiro ADMIN.
 
 ## Deployment
 

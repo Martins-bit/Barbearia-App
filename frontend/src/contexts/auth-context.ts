@@ -13,8 +13,9 @@ export interface AuthContextValue {
   user: Usuario | null
   isCliente: boolean
   isBarbeiro: boolean
+  isAdmin: boolean
   login: (input: LoginInput) => Promise<Usuario>
-  logout: () => void
+  logout: () => Promise<void>
   retrySessionValidation: () => void
 }
 

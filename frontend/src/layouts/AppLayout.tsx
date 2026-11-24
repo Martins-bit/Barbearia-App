@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { BrandLogo } from '../components/brand/BrandLogo'
@@ -18,6 +19,8 @@ export interface NavItem {
    */
   badge?: number
 }
+
+const MOBILE_LAYOUT_QUERY = '(max-width: 1024px)'
 
 interface AppLayoutProps {
   /** Título curto da área (ex.: "Área do cliente"). */
@@ -44,9 +47,50 @@ export function AppLayout({
 }: AppLayoutProps) {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const [isMobileLayout, setIsMobileLayout] = useState(
+    () =>
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia(MOBILE_LAYOUT_QUERY).matches,
+  )
+  const sidebarRef = useRef<HTMLElement>(null)
+  const wasMobileOpen = useRef(false)
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return
+
+    const mediaQuery = window.matchMedia(MOBILE_LAYOUT_QUERY)
+    const updateLayout = () => setIsMobileLayout(mediaQuery.matches)
+    mediaQuery.addEventListener('change', updateLayout)
+
+    return () => mediaQuery.removeEventListener('change', updateLayout)
+  }, [])
+
+  useEffect(() => {
+    if (mobileOpen && !wasMobileOpen.current) {
+      sidebarRef.current?.querySelector<HTMLElement>('button, a[href]')?.focus()
+    } else if (!mobileOpen && wasMobileOpen.current) {
+      document.getElementById('app-navigation-toggle')?.focus()
+    }
+
+    wasMobileOpen.current = mobileOpen
+  }, [mobileOpen])
+
+  useEffect(() => {
+    if (!mobileOpen) return
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onToggleMobile()
+    }
+
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [mobileOpen, onToggleMobile])
 
   const handleLogout = () => {
-    logout()
+    void logout()
     navigate('/login', { replace: true })
   }
 
@@ -57,10 +101,13 @@ export function AppLayout({
       )}
 
       <aside
+        id="app-navigation-drawer"
+        ref={sidebarRef}
         className={[styles.sidebar, mobileOpen ? styles.sidebarOpen : '']
           .filter(Boolean)
           .join(' ')}
         aria-label={`Navegação — ${areaLabel}`}
+        inert={isMobileLayout && !mobileOpen}
       >
         <div className={styles.sidebarTop}>
           <BrandLogo size={34} withWordmark />
@@ -122,9 +169,12 @@ export function AppLayout({
       <div className={styles.main}>
         <header className={styles.topbar}>
           <IconButton
-            label="Abrir menu"
+            id="app-navigation-toggle"
+            label={mobileOpen ? 'Fechar menu' : 'Abrir menu'}
             className={styles.menuButton}
             onClick={onToggleMobile}
+            aria-controls="app-navigation-drawer"
+            aria-expanded={mobileOpen}
           >
             <MenuIcon size={20} />
           </IconButton>

@@ -399,13 +399,14 @@
 }
 
 .botaoMenu {
-  opacity: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
   padding: 0;
+  opacity: 0;
   background-color: var(--color-surface);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full, 9999px);
@@ -434,6 +435,12 @@
   box-shadow: var(--focus-ring);
 }
 
+@media (hover: none), (pointer: coarse) {
+  .botaoMenu {
+    opacity: 1;
+  }
+}
+
 .menuDropdown {
   position: absolute;
   top: 100%;
@@ -450,6 +457,12 @@
   gap: 2px;
 }
 
+.menuDropdownAcima {
+  top: auto;
+  bottom: calc(100% + var(--space-1));
+  margin-top: 0;
+}
+
 .menuDropdownDireita {
   right: 0;
 }
@@ -463,6 +476,7 @@
   align-items: center;
   gap: var(--space-2);
   width: 100%;
+  min-height: 44px;
   padding: var(--space-2) var(--space-3);
   background: transparent;
   border: none;

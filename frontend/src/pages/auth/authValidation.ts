@@ -41,6 +41,11 @@ export function validatePasswordReset(
   return null
 }
 
+export function readAuthToken(searchParams: URLSearchParams): string {
+  const token = searchParams.get('token')?.trim() ?? ''
+  return /^[A-Za-z0-9_-]{43}$/.test(token) ? token : ''
+}
+
 export function authRequestErrorMessage(
   error: unknown,
   fallback: string,

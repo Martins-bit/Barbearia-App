@@ -17,6 +17,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { ROLES_KEY } from '../auth/decorators/roles.decorator';
 import { TipoUsuario } from '../generated/prisma/enums';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -34,6 +35,7 @@ import {
   type UserExportLockAcquisition,
 } from '../common/redis/user-export-lock.service';
 import type { TemporaryExportFile } from './temporary-export-storage.service';
+import { PrivateResponseCacheInterceptor } from '../common/http/private-response-cache.interceptor';
 
 jest.mock('../generated/prisma/enums', () => ({
   ...jest.requireActual('../generated/prisma/enums'),
@@ -740,7 +742,7 @@ describe('UsersController', () => {
     ).toBe('usuario:42');
   });
 
-  it('sets non-cacheable download headers with a fixed non-personal filename', () => {
+  it('sets safe download headers with a fixed non-personal filename', () => {
     const headers = Reflect.getMetadata(
       HEADERS_METADATA,
       exportHandler,
@@ -755,8 +757,6 @@ describe('UsersController', () => {
           name: 'Content-Disposition',
           value: 'attachment; filename="dados-pessoais.json"',
         },
-        { name: 'Cache-Control', value: 'no-store' },
-        { name: 'Pragma', value: 'no-cache' },
         { name: 'X-Content-Type-Options', value: 'nosniff' },
       ]),
     );
@@ -860,6 +860,9 @@ describe('UsersController', () => {
 
       app = module.createNestApplication();
       app.useLogger(false);
+      app.useGlobalInterceptors(
+        new PrivateResponseCacheInterceptor(new Reflector()),
+      );
       app.useGlobalPipes(
         new ValidationPipe({
           whitelist: true,

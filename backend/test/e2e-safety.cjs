@@ -120,7 +120,17 @@ function validateDatabaseUrl(
     }
 
     const queryEntries = Array.from(url.searchParams.entries());
-    if (
+    if (allowLocalhost) {
+      if (
+        queryEntries.length > 1 ||
+        (url.search !== '' && url.search !== '?schema=public') ||
+        (queryEntries.length === 1 &&
+          (queryEntries[0][0] !== 'schema' ||
+            queryEntries[0][1] !== 'public'))
+      ) {
+        blocked('parâmetros PostgreSQL duplicados ou não permitidos.');
+      }
+    } else if (
       queryEntries.length !== 1 ||
       url.search !== '?schema=public' ||
       queryEntries[0][0] !== 'schema' ||

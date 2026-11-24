@@ -56,6 +56,48 @@ describe('JwtStrategy authVersion validation', () => {
     });
   });
 
+  it('accepts an ADMIN token only at the account current authVersion', async () => {
+    usersService.findAuthVersionById.mockResolvedValue({
+      id: 10,
+      authVersion: 2,
+      emailConfirmacaoObrigatoria: false,
+    });
+
+    await expect(
+      strategy.validate({
+        sub: 10,
+        telefone: '11777777777',
+        tipoUsuario: 'ADMIN',
+        authVersion: 2,
+        iat: 1,
+        exp: 9999999999,
+      }),
+    ).resolves.toMatchObject({
+      sub: 10,
+      tipoUsuario: 'ADMIN',
+      authVersion: 2,
+    });
+  });
+
+  it('rejects a token after logout increments the account authVersion', async () => {
+    usersService.findAuthVersionById.mockResolvedValue({
+      id: 8,
+      authVersion: 2,
+      emailConfirmacaoObrigatoria: false,
+    });
+
+    await expect(
+      strategy.validate({
+        sub: 8,
+        telefone: '11999999999',
+        tipoUsuario: 'CLIENTE',
+        authVersion: 1,
+        iat: 1,
+        exp: 9999999999,
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   it('rejects a token issued before password reset increments authVersion', async () => {
     usersService.findAuthVersionById.mockResolvedValue({
       id: 8,

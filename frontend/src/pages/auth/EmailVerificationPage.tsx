@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Field'
 import { CheckIcon } from '../../components/ui/icons/Icon'
@@ -7,7 +7,11 @@ import { useAuth } from '../../contexts/useAuth'
 import { AuthLayout } from '../../layouts/AuthLayout'
 import { authService } from '../../services/api/authService'
 import { ROUTES } from '../../routes/routes'
-import { authRequestErrorMessage, isValidEmail } from './authValidation'
+import {
+  authRequestErrorMessage,
+  isValidEmail,
+  readAuthToken,
+} from './authValidation'
 import styles from './LoginPage.module.css'
 
 const EMAIL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
@@ -20,12 +24,13 @@ interface VerificationLocationState {
 export function EmailVerificationPage() {
   const { user } = useAuth()
   const location = useLocation()
+  const [searchParams] = useSearchParams()
   const locationState =
     location.state as VerificationLocationState | null
   const [email, setEmail] = useState(
     locationState?.email ?? user?.email ?? '',
   )
-  const [token, setToken] = useState('')
+  const [token, setToken] = useState(() => readAuthToken(searchParams))
   const [requestMessage, setRequestMessage] = useState<string>()
   const [error, setError] = useState<string>()
   const [requesting, setRequesting] = useState(false)

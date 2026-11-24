@@ -115,14 +115,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return response.user
   }, [])
 
-  const logout = useCallback(() => {
-    authService.logout()
-    // Sem sessão não deve restar conexão autenticada: sem este teardown o
-    // socket sobreviveria ao logout com o JWT/identidade do usuário que saiu.
+  const logout = useCallback(async () => {
+    const logoutRequest = authService.logout()
     messagesSocket.disconnect()
     messagesBadge.reset()
     setUser(null)
     setStatus('unauthenticated')
+
+    try {
+      await logoutRequest
+    } catch {
+      // A limpeza local é obrigatória mesmo quando a API não confirmar a
+      // revogação. Nenhum toast de sucesso deve ser mostrado por este fluxo.
+    }
   }, [])
 
   const retrySessionValidation = useCallback(() => {
@@ -137,6 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       isCliente: userRole === 'CLIENTE',
       isBarbeiro: userRole === 'BARBEIRO',
+      isAdmin: userRole === 'ADMIN',
       login,
       logout,
       retrySessionValidation,

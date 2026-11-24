@@ -3,7 +3,7 @@ export class AuthResponseDto {
   nome: string;
   telefone: string;
   email: string | null;
-  tipoUsuario: 'CLIENTE' | 'BARBEIRO';
+  tipoUsuario: 'CLIENTE' | 'BARBEIRO' | 'ADMIN';
   ativo: boolean;
   dataCriacao: Date;
   dataAtualizacao: Date;

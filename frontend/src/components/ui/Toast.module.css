@@ -10,6 +10,17 @@
   pointer-events: none;
 }
 
+:global(body:has(aside[role='status'][aria-live='polite'])) .container {
+  bottom: calc(
+    var(--space-4) + env(safe-area-inset-bottom, 0px) + 11rem
+  );
+  max-height: calc(
+    100dvh - var(--space-8) - env(safe-area-inset-top, 0px) -
+      env(safe-area-inset-bottom, 0px) - 11rem
+  );
+  overflow-y: auto;
+}
+
 .toast {
   position: relative;
   display: flex;

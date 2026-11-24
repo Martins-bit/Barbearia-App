@@ -75,14 +75,29 @@ O frontend NÃO deverá:
 
 O frontend é publicado como uma única PWA para clientes e barbeiros. A
 instalação é opcional: clientes continuam acessando pelo navegador, enquanto
-barbeiros podem instalar a aplicação pelas opções oferecidas pelo navegador ou
-pelo sistema operacional.
+barbeiros autenticados têm uma opção de instalação na área operacional. Quando
+o navegador oferece `beforeinstallprompt`, a opção abre o fluxo nativo; em
+navegadores sem esse evento, apresenta instruções do navegador, incluindo o
+fluxo de compartilhamento do Safari no iOS. Clientes e administradores não
+recebem a opção. O navegador pode oferecer sua própria instalação
+independentemente do perfil.
+
+A detecção de instalação usa `display-mode: standalone` e, no iOS, o sinal
+`navigator.standalone` quando disponível. O Safari em uma aba normal não expõe
+de forma confiável se o usuário já adicionou o site à tela inicial; nesse
+contexto, essa condição não pode ser detectada pelo aplicativo.
 
 O Service Worker pré-armazena somente o shell estático versionado do build
 (HTML, JavaScript, CSS, ícones e manifest). Não deve armazenar respostas da
 API, dados pessoais, respostas autenticadas ou tráfego Socket.IO. Atualizações
 aguardam a confirmação do usuário; caches antigos do shell são removidos na
 ativação da versão substituta.
+
+O backend aplica centralmente `Cache-Control: no-store` e `Pragma: no-cache`
+às respostas de rotas protegidas por JWT, aos fluxos de autenticação e a
+requisições que enviem `Authorization`. Endpoints públicos sem autenticação e
+recursos estáticos não recebem essa política automaticamente; cabeçalhos
+específicos já existentes, como os de exportação de dados, são preservados.
 
 A hospedagem de produção deve servir a aplicação por HTTPS e configurar
 fallback de navegação SPA para `index.html`, preservando a passagem direta para
@@ -311,6 +326,16 @@ houver conexão. Um novo login exige nova autorização; não se transfere uma
 inscrição entre contas. JWT, autenticação, autorização e Socket.IO permanecem
 fora do fluxo push.
 
+Na implementação atual, ainda sem cadastro push no frontend, o logout tenta
+cancelar a inscrição do Service Worker local e a autenticação local é encerrada
+mesmo se esse cancelamento falhar. Antes de um novo login, o frontend também
+tenta limpar qualquer inscrição local pendente; se não conseguir, impede a
+autenticação para não reutilizar a inscrição na nova sessão. A revogação remota
+específica do dispositivo ainda não é feita: o contrato de listagem retorna
+somente IDs e não permite correlacioná-los com segurança à inscrição local. A
+implementação remota permanece pendente até haver essa associação segura; esta
+etapa não altera tabelas ou migrations.
+
 O frontend atualmente usa o Service Worker gerado por `vite-plugin-pwa`; não
 há handlers de eventos push implementados. O schema e uma migration para
 inscrições e fingerprints foram criados, mas a migration ainda não foi aplicada.
@@ -463,7 +488,7 @@ A autenticação deverá ser realizada pelo backend.
 O sistema deverá possuir mecanismos seguros para:
 
 - Login;
-- Logout;
+- Logout com incremento de `authVersion` e rejeição dos JWTs anteriores;
 - Identificação do usuário;
 - Controle de sessão;
 - Proteção de rotas.
@@ -486,6 +511,50 @@ Acesso às funcionalidades destinadas ao cliente.
 ### Barbeiro
 
 Acesso às funcionalidades administrativas destinadas ao barbeiro.
+
+### Administrador
+
+O papel `ADMIN` é reservado ao provisionamento operacional inicial e a
+operações administrativas futuras explicitamente autorizadas. Ele não é
+atribuído pelo cadastro público e não é herdado por contas existentes.
+
+O primeiro administrador é criado somente por:
+
+```text
+cd backend
+npm run admin:create:first
+```
+
+O comando exige terminal local interativo, recusando sessões remotas/CI,
+argumentos e entrada não interativa. A senha é digitada sem eco e confirmada
+dois vezes. O serviço usa transação, advisory lock transacional e reconsulta
+de `ADMIN` antes da criação.
+
+Contas `BARBEIRO` são provisionadas separadamente por um operador autorizado:
+
+```text
+cd backend
+npm run barber:create
+```
+
+Esse comando não cria endpoints nem altera o cadastro público. A autorização
+combina uma flag operacional própria, correspondência do usuário do sistema
+operacional com `BARBER_PROVISIONING_OPERATOR`, terminal interativo local sem
+argumentos/CI/SSH e validação de que o PostgreSQL é loopback e corresponde
+exatamente a `BARBER_DATABASE_NAME`. A flag isolada não autoriza a operação;
+o acesso ao ambiente e às credenciais do banco deve continuar restrito por
+permissões do sistema operacional. O operador também deve digitar a frase de
+confirmação que inclui o banco validado. `NODE_ENV` deve ser explicitamente
+`development`; valores ausentes, vazios, `test` ou `production` são rejeitados
+antes de qualquer criação. Um destino loopback, por si só, não autoriza
+execução em produção.
+
+O serviço normaliza e-mail, rejeita duplicidades sem converter contas existentes
+e cria `Usuario` e o perfil `Barbeiro` ativo na mesma transação. A conta fica
+com confirmação de e-mail obrigatória e não pode autenticar até a confirmação
+pelo fluxo existente. A senha inicial é solicitada sem eco e nunca aceita como
+argumento. Este provisionador é somente local; não autoriza nem implementa
+execução em produção.
 
 O backend deverá verificar as permissões em cada operação protegida.
 

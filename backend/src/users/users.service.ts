@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
@@ -134,6 +135,8 @@ type ExportCreatedAtCursor = {
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly temporaryExportStorage: TemporaryExportStorageService,
@@ -867,6 +870,34 @@ export class UsersService {
         emailConfirmacaoObrigatoria: true,
       },
     });
+  }
+
+  /**
+   * Revoga as sessões JWT do usuário existente incrementando authVersion.
+   * Usa o mesmo mecanismo já empregado por redefinição de senha e alteração
+   * de e-mail. Como não há sessões por dispositivo, o logout invalida todos os
+   * JWTs emitidos para a conta com a versão anterior.
+   */
+  async revokeAuthSessions(userId: number): Promise<number> {
+    const updated = await this.prisma.usuario.update({
+      where: { id: userId },
+      data: { authVersion: { increment: 1 } },
+      select: { authVersion: true, ativo: true },
+    });
+
+    if (!updated.ativo) {
+      throw new NotFoundException('Usuário não encontrado.');
+    }
+
+    try {
+      this.revokeWebSocketSessions(userId);
+    } catch (error) {
+      this.logger.warn(
+        `Sessões WebSocket não puderam ser revogadas imediatamente no logout do usuário ${userId}.`,
+      );
+    }
+
+    return updated.authVersion;
   }
 
   async findByPhone(telefone: string): Promise<UserResponseDto | null> {

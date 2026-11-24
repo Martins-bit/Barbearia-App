@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Field'
 import { useAuth } from '../../contexts/useAuth'
@@ -7,7 +7,11 @@ import { useToast } from '../../contexts/useToast'
 import { AuthLayout } from '../../layouts/AuthLayout'
 import { authService } from '../../services/api/authService'
 import { ROUTES } from '../../routes/routes'
-import { authRequestErrorMessage, validatePasswordReset } from './authValidation'
+import {
+  authRequestErrorMessage,
+  readAuthToken,
+  validatePasswordReset,
+} from './authValidation'
 import styles from './LoginPage.module.css'
 
 const RESET_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
@@ -15,7 +19,8 @@ const RESET_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 export function ResetPasswordPage() {
   const { logout } = useAuth()
   const toast = useToast()
-  const [token, setToken] = useState('')
+  const [searchParams] = useSearchParams()
+  const [token, setToken] = useState(() => readAuthToken(searchParams))
   const [password, setPassword] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [error, setError] = useState<string>()
@@ -43,7 +48,7 @@ export function ResetPasswordPage() {
       setToken('')
       setPassword('')
       setConfirmation('')
-      logout()
+      void logout()
       setCompleted(true)
       toast.success('Senha redefinida com sucesso.')
     } catch (caught) {

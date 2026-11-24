@@ -48,6 +48,42 @@ describe('RolesGuard', () => {
     );
   });
 
+  it('permite ADMIN somente em rota que exige explicitamente ADMIN', async () => {
+    reflector.getAllAndOverride.mockReturnValue([TipoUsuario.ADMIN]);
+    usersService.findAuthorizationStateById.mockResolvedValue(
+      createAuthorizationState({
+        tipoUsuario: TipoUsuario.ADMIN,
+        barbeiro: null,
+      }),
+    );
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
+  it('não concede privilégios administrativos a BARBEIRO ou CLIENTE', async () => {
+    reflector.getAllAndOverride.mockReturnValue([TipoUsuario.ADMIN]);
+
+    usersService.findAuthorizationStateById.mockResolvedValue(
+      createAuthorizationState({
+        tipoUsuario: TipoUsuario.BARBEIRO,
+        barbeiro: { ativo: true },
+      }),
+    );
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      ForbiddenException,
+    );
+
+    usersService.findAuthorizationStateById.mockResolvedValue(
+      createAuthorizationState({
+        tipoUsuario: TipoUsuario.CLIENTE,
+        barbeiro: null,
+      }),
+    );
+    await expect(guard.canActivate(context)).rejects.toThrow(
+      ForbiddenException,
+    );
+  });
+
   it('permite BARBEIRO ativo com registro ativo', async () => {
     reflector.getAllAndOverride.mockReturnValue([TipoUsuario.BARBEIRO]);
     usersService.findAuthorizationStateById.mockResolvedValue(

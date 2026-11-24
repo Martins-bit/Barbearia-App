@@ -4,6 +4,7 @@ import { ToastProvider } from './contexts/ToastContext'
 import { AppRouter } from './routes/AppRouter'
 import { PwaUpdatePrompt } from './components/pwa/PwaUpdatePrompt'
 import { ConnectionStatus } from './components/pwa/ConnectionStatus'
+import { PwaInstallProvider } from './contexts/PwaInstallContext'
 
 /**
  * Raiz do app: provedores globais (sessão + feedback) e a árvore de rotas.
@@ -14,9 +15,11 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
-          <ConnectionStatus />
-          <PwaUpdatePrompt />
-          <AppRouter />
+          <PwaInstallProvider>
+            <ConnectionStatus />
+            <PwaUpdatePrompt />
+            <AppRouter />
+          </PwaInstallProvider>
         </ToastProvider>
       </AuthProvider>
     </BrowserRouter>

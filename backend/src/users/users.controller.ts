@@ -120,8 +120,6 @@ export class UsersController {
    */
   @Get('me/export')
   @Header('Content-Disposition', 'attachment; filename="dados-pessoais.json"')
-  @Header('Cache-Control', 'no-store')
-  @Header('Pragma', 'no-cache')
   @Header('X-Content-Type-Options', 'nosniff')
   @UseGuards(ThrottlerGuard)
   @Throttle({
@@ -220,8 +218,6 @@ export class UsersController {
         'Content-Disposition',
         'attachment; filename="dados-pessoais.json"',
       );
-      response.setHeader('Cache-Control', 'no-store');
-      response.setHeader('Pragma', 'no-cache');
       response.setHeader('X-Content-Type-Options', 'nosniff');
       response.setHeader('Content-Type', 'application/json; charset=utf-8');
       response.setHeader('Content-Length', String(exportFile.sizeBytes));

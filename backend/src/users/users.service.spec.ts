@@ -1378,6 +1378,36 @@ describe('UsersService', () => {
     expect(result[0]).not.toHaveProperty('senhaHash');
   });
 
+  describe('revokeAuthSessions', () => {
+    it('increments authVersion and revokes active WebSocket sessions', async () => {
+      prisma.usuario.update.mockResolvedValue({
+        authVersion: 5,
+        ativo: true,
+      });
+
+      await expect(service.revokeAuthSessions(42)).resolves.toBe(5);
+
+      expect(prisma.usuario.update).toHaveBeenCalledWith({
+        where: { id: 42 },
+        data: { authVersion: { increment: 1 } },
+        select: { authVersion: true, ativo: true },
+      });
+      expect(sessionRevoker.revokeUserSessions).toHaveBeenCalledWith(42);
+    });
+
+    it('does not report success for an inactive or missing account', async () => {
+      prisma.usuario.update.mockResolvedValue({
+        authVersion: 6,
+        ativo: false,
+      });
+
+      await expect(service.revokeAuthSessions(42)).rejects.toBeInstanceOf(
+        require('@nestjs/common').NotFoundException,
+      );
+      expect(sessionRevoker.revokeUserSessions).not.toHaveBeenCalled();
+    });
+  });
+
   describe('updateUser — pre-check de e-mail (DEF-1)', () => {
     it('should not search for null e-mail when clearing the e-mail of a user that has one', async () => {
       // Reprodução do DEF-1: usuário COM e-mail que solicita a limpeza

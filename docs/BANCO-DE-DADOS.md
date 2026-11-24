@@ -60,6 +60,7 @@ O sistema deverá diferenciar pelo menos:
 
 - `CLIENTE`
 - `BARBEIRO`
+- `ADMIN`
 
 O tipo de usuário será utilizado para controlar permissões.
 

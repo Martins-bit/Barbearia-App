@@ -1,4 +1,6 @@
 import { http, authTokenStorage } from './http.ts'
+import { ApiError } from './ApiError.ts'
+import { pushSubscriptionService } from './pushSubscriptionService.ts'
 import type {
   LoginResponse,
   Usuario,
@@ -31,6 +33,15 @@ export interface RegisterResponse extends Usuario {
  */
 export const authService = {
   async login(input: LoginInput): Promise<LoginResponse> {
+    try {
+      await pushSubscriptionService.clearLocalSubscription()
+    } catch {
+      throw new ApiError(
+        'Não foi possível limpar a inscrição anterior de notificações. Tente novamente.',
+        0,
+      )
+    }
+
     const response = await http.post<LoginResponse>('/auth/login', input, {
       skipAuth: true,
     })
@@ -97,7 +108,20 @@ export const authService = {
     return http.getStream('/users/me/export', { signal })
   },
 
-  logout(): void {
+  async logout(): Promise<void> {
+    const pushCleanup = pushSubscriptionService.clearLocalSubscription()
+    const logoutRequest = http.post<AuthMessageResponse>(
+      '/auth/logout',
+      undefined,
+    )
     authTokenStorage.clear()
+
+    try {
+      await pushCleanup
+    } catch {
+      console.warn('Falha ao cancelar inscrição push local durante logout.')
+    }
+
+    await logoutRequest
   },
 }

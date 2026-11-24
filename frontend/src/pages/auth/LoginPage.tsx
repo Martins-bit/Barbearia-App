@@ -37,7 +37,11 @@ export function LoginPage() {
       const user = await login({ telefone: telefone.trim(), senha })
       const from = (location.state as LocationState | null)?.from
       const fallback =
-        user.tipoUsuario === 'BARBEIRO' ? ROUTES.barbeiro.home : ROUTES.cliente.home
+        user.tipoUsuario === 'BARBEIRO'
+          ? ROUTES.barbeiro.home
+          : user.tipoUsuario === 'CLIENTE'
+            ? ROUTES.cliente.home
+            : '/404'
       navigate(from ?? fallback, { replace: true })
     } catch (err) {
       const message =

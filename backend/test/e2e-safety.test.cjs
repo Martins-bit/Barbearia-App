@@ -27,7 +27,7 @@ const TEST_URL =
 const MIGRATION_URL =
   'postgresql://barbearia_e2e_migrator:migration-only-password@127.0.0.1:5432/barbearia_app_e2e?schema=public';
 const DEVELOPMENT_URL =
-  'postgresql://developer:development-only-password@localhost:5432/barbearia_app?schema=public';
+  'postgresql://developer:development-only-password@127.0.0.1:5432/barbearia_app?schema=public';
 
 function withConfig(contents, callback, filename = '.env.e2e') {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'barbearia-e2e-'));

@@ -38,7 +38,7 @@ test('renders the request form and approved options for clients and barbers', as
       error: () => {},
     }
 
-    for (const tipoUsuario of ['CLIENTE', 'BARBEIRO'] as const) {
+    for (const tipoUsuario of ['CLIENTE', 'BARBEIRO', 'ADMIN'] as const) {
       const user: Usuario = {
         id: 12,
         nome: 'Titular de teste',
@@ -54,8 +54,9 @@ test('renders the request form and approved options for clients and barbers', as
         user,
         isCliente: tipoUsuario === 'CLIENTE',
         isBarbeiro: tipoUsuario === 'BARBEIRO',
+        isAdmin: tipoUsuario === 'ADMIN',
         login: async () => user,
-        logout: () => {},
+        logout: async () => {},
         retrySessionValidation: () => {},
       }
       const markup = renderToStaticMarkup(

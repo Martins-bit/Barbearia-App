@@ -7,6 +7,7 @@ import { notificationsService } from '../services/api/notificationsService'
 import { messagesBadge } from '../services/api/messagesBadge'
 import { useMensagensNaoLidas } from '../hooks/useMensagensNaoLidas'
 import { useAuth } from '../contexts/useAuth'
+import { PwaInstallOption } from '../components/pwa/PwaInstallOption'
 import {
   BellIcon,
   CalendarIcon,
@@ -152,6 +153,7 @@ export function BarberLayout({ children }: { children: ReactNode }) {
         mobileOpen={drawer.mobileOpen}
         onToggleMobile={drawer.toggle}
       >
+        <PwaInstallOption />
         {children}
       </AppLayout>
     </UnreadNotificationsContext.Provider>

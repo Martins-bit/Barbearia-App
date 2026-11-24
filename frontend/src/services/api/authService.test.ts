@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it } from 'node:test'
 import { authService } from './authService.ts'
-import { http } from './http.ts'
+import { authTokenStorage, http } from './http.ts'
+import { pushSubscriptionService } from './pushSubscriptionService.ts'
 
 type PostCall = [string, unknown, unknown]
 type GetCall = [string, unknown]
@@ -18,11 +19,26 @@ const mutableHttp = http as unknown as {
 let calls: PostCall[]
 let getCalls: GetCall[]
 let streamCalls: StreamCall[]
+const originalTokenClear = authTokenStorage.clear
+const originalPushCleanup = pushSubscriptionService.clearLocalSubscription
+let tokenClearCalls: number
+let pushCleanupCalls: number
+let pushCleanupError: Error | null
 
 beforeEach(() => {
   calls = []
   getCalls = []
   streamCalls = []
+  tokenClearCalls = 0
+  pushCleanupCalls = 0
+  pushCleanupError = null
+  pushSubscriptionService.clearLocalSubscription = async () => {
+    pushCleanupCalls++
+    if (pushCleanupError) throw pushCleanupError
+  }
+  authTokenStorage.clear = () => {
+    tokenClearCalls++
+  }
   mutableHttp.post = async (path, body, options) => {
     calls.push([path, body, options])
     return { message: 'ok' }
@@ -43,9 +59,58 @@ afterEach(() => {
   mutableHttp.post = originalPost as unknown as typeof mutableHttp.post
   mutableHttp.get = originalGet as unknown as typeof mutableHttp.get
   mutableHttp.getStream = originalGetStream
+  authTokenStorage.clear = originalTokenClear
+  pushSubscriptionService.clearLocalSubscription = originalPushCleanup
 })
 
 describe('authService endpoint contracts', () => {
+  it('clears local auth state and attempts push cleanup even if server logout fails', async () => {
+    mutableHttp.post = async (path) => {
+      calls.push([path, undefined, undefined])
+      throw new Error('Servidor indisponível')
+    }
+
+    await assert.rejects(authService.logout(), /Servidor indisponível/)
+    assert.deepEqual(calls, [['/auth/logout', undefined, undefined]])
+    assert.equal(tokenClearCalls, 1)
+    assert.equal(pushCleanupCalls, 1)
+  })
+
+  it('does not let local push cleanup failure prevent server logout', async () => {
+    pushCleanupError = new Error('Falha local')
+    const originalWarn = console.warn
+    console.warn = () => {}
+
+    try {
+      await authService.logout()
+    } finally {
+      console.warn = originalWarn
+    }
+
+    assert.deepEqual(calls, [['/auth/logout', undefined, undefined]])
+    assert.equal(tokenClearCalls, 1)
+  })
+
+  it('clears local auth state and attempts push cleanup on successful logout', async () => {
+    await authService.logout()
+
+    assert.deepEqual(calls, [['/auth/logout', undefined, undefined]])
+    assert.equal(tokenClearCalls, 1)
+    assert.equal(pushCleanupCalls, 1)
+  })
+
+  it('requires previous local push cleanup before authenticating a new session', async () => {
+    pushCleanupError = new Error('Falha local')
+
+    await assert.rejects(
+      authService.login({ telefone: '11999999999', senha: 'senha' }),
+      /Não foi possível limpar a inscrição anterior de notificações/,
+    )
+
+    assert.deepEqual(calls, [])
+    assert.equal(pushCleanupCalls, 1)
+  })
+
   it('marks /auth/me as the canonical session-validation request', async () => {
     await authService.me()
 
