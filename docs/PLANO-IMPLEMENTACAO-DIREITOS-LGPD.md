@@ -72,9 +72,12 @@ Princípios técnicos a preservar:
   `limpa` em vez de apagar fisicamente os registros. Veja
   [notifications.controller.ts](../backend/src/notifications/notifications.controller.ts)
   e [notifications.service.ts](../backend/src/notifications/notifications.service.ts).
-- Tokens de confirmação e recuperação têm validade e marca de uso; não foi
-  localizada rotina geral para apagar tokens expirados/usados. Veja
-  [email-verification.service.ts](../backend/src/auth/email-verification.service.ts)
+- Tokens de confirmação têm limpeza automática diária, com retenção terminal
+  aprovada de 24 horas após a data mais recente entre expiração e uso ou
+  invalidação. A limpeza usa lotes transacionais PostgreSQL e não inclui tokens
+  de recuperação. Para estes, não foi localizada rotina geral de expurgo. Veja
+  [email-verification.service.ts](../backend/src/auth/email-verification.service.ts),
+  [email-verification-cleanup.service.ts](../backend/src/auth/email-verification-cleanup.service.ts)
   e [password-recovery.service.ts](../backend/src/auth/password-recovery.service.ts).
 - Registros de rate limit e a outbox de reofertas têm dados persistidos. O
   processamento revisado grava categoria genérica ou código/status técnico em

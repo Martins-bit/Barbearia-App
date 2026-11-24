@@ -1,14 +1,13 @@
 import { io, type Socket } from 'socket.io-client'
 import { authTokenStorage } from './http'
+import { API_BASE_URL } from './apiBaseUrl.ts'
 import type { Mensagem, MessageDeletedEventPayload } from '../../types/domain'
 
 /**
- * Origem do backend: a MESMA usada pelo REST (VITE_API_URL). O Socket.IO
+ * Origem do backend: a mesma URL validada e usada pelo REST. O Socket.IO
  * precisa de um destino explícito — sem ele, conectaria à origem da própria
  * página (ex.: http://localhost:5173), onde não existe servidor de socket.
  */
-const SOCKET_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
-
 /**
  * Conexão WebSocket com o namespace `/messages` do backend (Etapa 7C).
  *
@@ -132,7 +131,7 @@ export const messagesSocket: MensajesSocketApi = (() => {
     setEstado('conectando')
     tokenDaConexao = token
 
-    // Destino explícito: origem do backend (VITE_API_URL) + namespace
+    // Destino explícito: origem do backend + namespace
     // dedicado `/messages`, igual ao gateway. `withCredentials` alinha o
     // handshake com o CORS (credentials: true) já configurado no backend.
     const instancia = io(`${SOCKET_URL}/messages`, {

@@ -1,16 +1,31 @@
 import { Transform } from 'class-transformer';
-import { IsEmail, IsString, MinLength, MaxLength, Matches } from 'class-validator';
+import {
+  IsEmail,
+  IsNotEmpty,
+  IsString,
+  MinLength,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 import { normalizeEmail } from '../../common/utils/email.util';
+import { normalizePhone } from '../../common/utils/phone.util';
 
 export class RegisterDto {
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
-  @MinLength(2)
-  @MaxLength(120)
+  @IsNotEmpty({ message: 'Informe seu nome.' })
+  @MinLength(2, { message: 'O nome deve ter pelo menos 2 caracteres.' })
+  @MaxLength(120, { message: 'O nome deve ter no máximo 120 caracteres.' })
   nome: string;
 
+  @Transform(({ value }) =>
+    typeof value === 'string' ? normalizePhone(value) : value,
+  )
   @IsString()
   @Matches(/^\d{10,11}$/, {
-    message: 'Telefone deve conter 10 ou 11 dígitos',
+    message: 'Telefone deve conter DDD e 10 ou 11 dígitos.',
   })
   telefone: string;
 

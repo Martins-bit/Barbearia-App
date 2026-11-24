@@ -15,12 +15,54 @@ const LOCAL_DEV_ORIGINS: readonly string[] = [
   'http://localhost:5175',
 ];
 
-function isValidOrigin(value: string): boolean {
+function isLocalDevelopmentHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return (
+    normalized === 'localhost' ||
+    normalized.endsWith('.localhost') ||
+    normalized === '127.0.0.1' ||
+    normalized === '::1'
+  );
+}
+
+function normalizeOrigin(value: string, isProduction: boolean): string | null {
+  const candidate = value.trim();
+  if (
+    !candidate ||
+    candidate.includes('*') ||
+    candidate.includes('?') ||
+    candidate.includes('#') ||
+    candidate.includes('\\')
+  ) {
+    return null;
+  }
+
+  const authority = candidate.match(/^https?:\/\/([^/?#]*)\/?$/i)?.[1];
+  if (!authority || authority.includes('@')) return null;
+
   try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
+    const url = new URL(candidate);
+    if (
+      (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+      url.username ||
+      url.password ||
+      url.pathname !== '/' ||
+      url.search ||
+      url.hash ||
+      url.origin === 'null'
+    ) {
+      return null;
+    }
+
+    if (url.protocol === 'http:') {
+      if (isProduction || !isLocalDevelopmentHostname(url.hostname)) {
+        return null;
+      }
+    }
+
+    return url.origin;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -28,10 +70,10 @@ function isValidOrigin(value: string): boolean {
  * Retorna a lista de origens autorizadas a partir de `CORS_ALLOWED_ORIGINS`.
  *
  * - Desenvolvimento: se `CORS_ALLOWED_ORIGINS` não estiver definido, usa as
- *   origens locais padrão do projeto (localhost:5173 / 5174).
+ *   origens locais padrão do projeto.
  * - Produção (`NODE_ENV=production`): exige `CORS_ALLOWED_ORIGINS` explícito,
- *   não vazio e sem entradas inválidas; caso contrário interrompe o boot com
- *   mensagem clara (sem expor segredos).
+ *   não vazio, com origens HTTPS e sem entradas inválidas; caso contrário
+ *   interrompe o boot sem expor os valores configurados.
  */
 export function resolveAllowedOrigins(
   env: NodeJS.ProcessEnv = process.env,
@@ -39,12 +81,7 @@ export function resolveAllowedOrigins(
   const isProduction = env.NODE_ENV === 'production';
   const raw = (env.CORS_ALLOWED_ORIGINS ?? '').trim();
 
-  const origins = raw
-    .split(',')
-    .map((origin) => origin.trim())
-    .filter((origin) => origin.length > 0);
-
-  if (origins.length === 0) {
+  if (!raw) {
     if (isProduction) {
       throw new Error(
         'CORS_ALLOWED_ORIGINS é obrigatório em produção e não pode estar vazio.',
@@ -53,22 +90,40 @@ export function resolveAllowedOrigins(
     return [...LOCAL_DEV_ORIGINS];
   }
 
-  if (origins.includes('*')) {
+  const configuredOrigins = raw.split(',').map((origin) => origin.trim());
+  if (configuredOrigins.includes('*')) {
     throw new Error(
       'CORS_ALLOWED_ORIGINS não pode conter "*" quando credentials está ativo.',
     );
   }
 
-  const invalidCount = origins.filter(
-    (origin) => !isValidOrigin(origin),
-  ).length;
-  if (invalidCount > 0) {
+  if (configuredOrigins.some((origin) => !origin)) {
     throw new Error(
-      `CORS_ALLOWED_ORIGINS contém ${invalidCount} origem(ns) inválida(s); use o formato http(s)://host[:porta].`,
+      'CORS_ALLOWED_ORIGINS contém uma entrada vazia.',
     );
   }
 
-  return origins;
+  const normalizedOrigins = configuredOrigins.map((origin) =>
+    normalizeOrigin(origin, isProduction),
+  );
+  if (normalizedOrigins.some((origin) => origin === null)) {
+    throw new Error(
+      'CORS_ALLOWED_ORIGINS contém origem inválida. Use apenas origens http(s) sem credenciais, caminhos, query ou fragmento; em produção, use HTTPS.',
+    );
+  }
+
+  return [
+    ...new Set(
+      normalizedOrigins.filter((origin): origin is string => origin !== null),
+    ),
+  ];
+}
+
+export function isAllowedOrigin(
+  origin: unknown,
+  allowedOrigins: readonly string[],
+): boolean {
+  return typeof origin === 'string' && allowedOrigins.includes(origin);
 }
 
 /**
@@ -82,6 +137,6 @@ export function buildCorsOptions() {
     origin: resolveAllowedOrigins(),
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
   };
 }

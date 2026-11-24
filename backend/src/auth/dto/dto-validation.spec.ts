@@ -41,6 +41,78 @@ describe('Auth DTOs Validation', () => {
       expect(errors.length).toBe(0);
     });
 
+    it('trims the name and normalizes formatted phone numbers', async () => {
+      const dto = plainToClass(RegisterDto, {
+        nome: '  João Silva  ',
+        telefone: ' (11) 99999-9999 ',
+        senha: 'senha12345',
+        email: 'joao@example.com',
+      });
+
+      await expect(validate(dto)).resolves.toHaveLength(0);
+      expect(dto.nome).toBe('João Silva');
+      expect(dto.telefone).toBe('11999999999');
+    });
+
+    it('rejects empty or whitespace-only names after trimming', async () => {
+      for (const nome of ['', '   \t  ']) {
+        const dto = plainToClass(RegisterDto, {
+          nome,
+          telefone: '11999999999',
+          senha: 'senha12345',
+          email: 'joao@example.com',
+        });
+
+        const errors = await validate(dto);
+
+        expect(errors).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ property: 'nome' }),
+          ]),
+        );
+        expect(dto.nome).toBe('');
+      }
+    });
+
+    it('rejects names outside the 2 to 120 character range', async () => {
+      for (const nome of ['A', 'a'.repeat(121)]) {
+        const dto = plainToClass(RegisterDto, {
+          nome,
+          telefone: '11999999999',
+          senha: 'senha12345',
+          email: 'joao@example.com',
+        });
+
+        expect(await validate(dto)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ property: 'nome' }),
+          ]),
+        );
+      }
+    });
+
+    it('rejects unsupported phone characters and invalid digit counts', async () => {
+      for (const telefone of [
+        '+55 11 99999-9999',
+        '11 9999-999a',
+        '123456789',
+        '119999999999',
+      ]) {
+        const dto = plainToClass(RegisterDto, {
+          nome: 'João Silva',
+          telefone,
+          senha: 'senha12345',
+          email: 'joao@example.com',
+        });
+
+        expect(await validate(dto)).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ property: 'telefone' }),
+          ]),
+        );
+      }
+    });
+
     it('should reject password shorter than 8 characters', async () => {
       const invalidData = {
         nome: 'João Silva',

@@ -269,9 +269,12 @@ aplicáveis devem ser avaliados pelo controlador antes da ativação.
 - **Base legal a avaliar:** execução do serviço e segurança da conta; interesse
   legítimo pode ser avaliado para rate limiting/prevenção de abuso. O envio
   transacional não equivale a consentimento de marketing.
-- **Retenção:** token tem validade de 30 minutos, mas a retenção dos registros
-  expirados/usados e dos registros de rate limit permanece pendente; expiração
-  funcional não significa eliminação física.
+- **Retenção:** tokens de confirmação têm validade funcional de 30 minutos. A
+  política aprovada mantém registros terminais por 24 horas após a data mais
+  recente entre `expiraEm` e `usadoEm`; uma rotina diária às 03:00 UTC remove
+  registros elegíveis em lotes de até 500, sem remover tokens ainda válidos.
+  Essa política não se estende aos registros de rate limit, cuja retenção
+  permanece separada.
 - **Situação:** cadastro tenta envio automático único; reenvio é explícito,
   limitado, com resposta pública genérica. A configuração efetiva do Brevo e
   retenção pelo fornecedor não foram verificadas.
@@ -404,7 +407,7 @@ compartilhamento. Hipóteses a avaliar, sem conclusão jurídica:
 | Mensagens | Flags e data de exclusão lógica; conteúdo original pode permanecer. | **Pendente.** |
 | Notificações | Leitura/limpeza registradas. | **Pendente.** |
 | Inscrições push e registros de entrega (planejados) | Não existem no código atual. | **Pendente antes da ativação**, inclusive revogadas, tentativas, erros e registros associados. |
-| Tokens de confirmação | Expiração funcional de 30 minutos. | **Pendente** para remoção física após uso/expiração. |
+| Tokens de confirmação | Expiram funcionalmente em 30 minutos; rotina diária remove registros terminais após 24 horas da data mais recente entre expiração e uso/invalidação. | **Política técnica aprovada e limpeza automática implementada**; backups e retenção em infraestrutura não verificados. |
 | Tokens de recuperação | Validade funcional definida no serviço. | **Pendente** para remoção física após uso/expiração. |
 | Rate limits | Alguns registros antigos são removidos durante solicitações. | **Pendente** para política completa, demais rate limits e prazo abrangente. |
 | Logs e erro da outbox | Sem prazo global encontrado. | **Pendente.** |

@@ -4,8 +4,7 @@ import {
   isApiUnavailableStatus,
   parseApiErrorMessage,
 } from './ApiError.ts'
-
-const API_BASE_URL = import.meta.env?.VITE_API_URL ?? 'http://localhost:3000'
+import { API_BASE_URL } from './apiBaseUrl.ts'
 
 export const TOKEN_STORAGE_KEY = 'bb.auth.token'
 export const AUTH_SESSION_CHANGED_EVENT = 'bb:auth:session-changed'

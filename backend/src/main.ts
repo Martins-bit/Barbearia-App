@@ -9,8 +9,10 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { buildCorsOptions } from './common/config/cors.config';
+import { parseTrustProxySetting } from './common/config/trust-proxy.config';
 
 async function bootstrap() {
+  const trustProxy = parseTrustProxySetting(process.env.TRUST_PROXY);
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Headers de segurança (ETAPA 2). Helmet com os defaults seguros; a API é
@@ -19,14 +21,16 @@ async function bootstrap() {
   // afetados.
   app.use(helmet());
 
-  // Confiança no proxy (ETAPA 2) — OPT-IN e conservadora: só passa a confiar
-  // em X-Forwarded-For quando TRUST_PROXY estiver explicitamente definido
-  // (ex.: "1" para um único hop do Cloudflare). Por padrão NÃO confia em
-  // cabeçalho enviado pelo cliente. Necessário publicar atrás do Cloudflare
-  // para que req.ip (e o rate limit por IP) reflitam o cliente real.
-  // Ver docs/SEGURANCA-INFRAESTRUTURA.md.
-  if (process.env.TRUST_PROXY) {
-    app.set('trust proxy', process.env.TRUST_PROXY);
+  // Mantém a confiança em proxies desativada por padrão. O valor explícito é
+  // convertido e validado antes de ser aplicado ao Express.
+  if (trustProxy !== undefined) {
+    try {
+      app.set('trust proxy', trustProxy);
+    } catch {
+      throw new Error(
+        'TRUST_PROXY contém um valor que o Express não aceita. Revise o formato sem compartilhar seu valor.',
+      );
+    }
   }
 
   // CORS (ETAPA 2): origens autorizadas vêm de CORS_ALLOWED_ORIGINS

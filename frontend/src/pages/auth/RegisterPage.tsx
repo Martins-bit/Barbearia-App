@@ -6,7 +6,13 @@ import { Input } from '../../components/ui/Field'
 import { useToast } from '../../contexts/useToast'
 import { authService } from '../../services/api/authService'
 import { ROUTES } from '../../routes/routes'
-import { authRequestErrorMessage, isValidEmail } from './authValidation'
+import {
+  authRequestErrorMessage,
+  isValidEmail,
+  normalizePhone,
+  registrationNameError,
+  registrationPhoneError,
+} from './authValidation'
 import styles from './LoginPage.module.css'
 
 /**
@@ -22,22 +28,38 @@ export function RegisterPage() {
   const [senha, setSenha] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [nameError, setNameError] = useState<string | undefined>()
+  const [phoneError, setPhoneError] = useState<string | undefined>()
   const [emailError, setEmailError] = useState<string | undefined>()
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
+    setNameError(undefined)
+    setPhoneError(undefined)
     setEmailError(undefined)
+
+    const normalizedName = nome.trim()
+    const normalizedPhone = normalizePhone(telefone)
     const normalizedEmail = email.trim().toLowerCase()
-    if (!isValidEmail(normalizedEmail)) {
-      setEmailError('Informe um endereço de e-mail válido.')
+    const nextNameError = registrationNameError(nome)
+    const nextPhoneError = registrationPhoneError(telefone)
+    const nextEmailError = isValidEmail(normalizedEmail)
+      ? undefined
+      : 'Informe um endereço de e-mail válido.'
+
+    setNameError(nextNameError ?? undefined)
+    setPhoneError(nextPhoneError ?? undefined)
+    setEmailError(nextEmailError)
+    if (nextNameError || nextPhoneError || nextEmailError) {
       return
     }
+
     setSubmitting(true)
     try {
       const response = await authService.register({
-        nome: nome.trim(),
-        telefone: telefone.trim(),
+        nome: normalizedName,
+        telefone: normalizedPhone,
         senha,
         email: normalizedEmail,
       })
@@ -79,7 +101,11 @@ export function RegisterPage() {
           autoComplete="name"
           placeholder="Seu nome"
           value={nome}
-          onChange={(event) => setNome(event.target.value)}
+          onChange={(event) => {
+            setNome(event.target.value)
+            setNameError(undefined)
+          }}
+          error={nameError}
           required
         />
         <Input
@@ -90,7 +116,11 @@ export function RegisterPage() {
           autoComplete="username"
           placeholder="11 99999-9999"
           value={telefone}
-          onChange={(event) => setTelefone(event.target.value)}
+          onChange={(event) => {
+            setTelefone(event.target.value)
+            setPhoneError(undefined)
+          }}
+          error={phoneError}
           required
         />
         <Input

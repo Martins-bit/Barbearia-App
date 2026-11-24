@@ -1,4 +1,8 @@
-import { buildCorsOptions, resolveAllowedOrigins } from './cors.config';
+import {
+  buildCorsOptions,
+  isAllowedOrigin,
+  resolveAllowedOrigins,
+} from './cors.config';
 
 /**
  * Testes da resolução centralizada de origens (CORS). Sem banco, sem I/O:
@@ -17,11 +21,11 @@ describe('resolveAllowedOrigins', () => {
     ]);
   });
 
-  it('lê e normaliza CORS_ALLOWED_ORIGINS (vírgulas, espaços, vazios)', () => {
+  it('lê e normaliza CORS_ALLOWED_ORIGINS (vírgulas e espaços)', () => {
     const origins = resolveAllowedOrigins({
       NODE_ENV: 'development',
       CORS_ALLOWED_ORIGINS:
-        ' https://app.exemplo.com , http://127.0.0.1:4173 , http://localhost:5173 ,',
+        ' https://app.exemplo.com/ , http://127.0.0.1:4173 , http://localhost:5173 ',
     });
     expect(origins).toEqual([
       'https://app.exemplo.com',
@@ -63,7 +67,60 @@ describe('resolveAllowedOrigins', () => {
     ).toThrow(/inválida/);
   });
 
-  it('aceita origens válidas http/https em produção', () => {
+  it('normaliza host, porta padrão e barra final', () => {
+    const origins = resolveAllowedOrigins({
+      NODE_ENV: 'production',
+      CORS_ALLOWED_ORIGINS: ' HTTPS://APP.INVALID:443/ ',
+    });
+
+    expect(origins).toEqual(['https://app.invalid']);
+  });
+
+  it.each([
+    'https://api.invalid/path',
+    'https://api.invalid?x=1',
+    'https://api.invalid#section',
+    'https://user:pass@api.invalid',
+    'https://@api.invalid',
+    'https://*.api.invalid',
+    'http://api.invalid',
+    'ftp://api.invalid',
+    '*',
+  ])('rejeita origem não permitida em produção: %s', (origin) => {
+    expect(() =>
+      resolveAllowedOrigins({
+        NODE_ENV: 'production',
+        CORS_ALLOWED_ORIGINS: origin,
+      }),
+    ).toThrow('CORS_ALLOWED_ORIGINS');
+  });
+
+  it('aceita HTTP local somente em desenvolvimento', () => {
+    expect(
+      resolveAllowedOrigins({
+        NODE_ENV: 'development',
+        CORS_ALLOWED_ORIGINS: 'http://localhost:5173,http://127.0.0.1:4173',
+      }),
+    ).toEqual(['http://localhost:5173', 'http://127.0.0.1:4173']);
+
+    expect(() =>
+      resolveAllowedOrigins({
+        NODE_ENV: 'development',
+        CORS_ALLOWED_ORIGINS: 'http://frontend.invalid',
+      }),
+    ).toThrow('CORS_ALLOWED_ORIGINS');
+  });
+
+  it('rejeita entradas vazias em uma lista configurada', () => {
+    expect(() =>
+      resolveAllowedOrigins({
+        NODE_ENV: 'development',
+        CORS_ALLOWED_ORIGINS: 'http://localhost:5173,',
+      }),
+    ).toThrow('entrada vazia');
+  });
+
+  it('aceita origens HTTPS válidas em produção', () => {
     const origins = resolveAllowedOrigins({
       NODE_ENV: 'production',
       CORS_ALLOWED_ORIGINS: 'https://app.exemplo.com,https://www.exemplo.com',
@@ -72,6 +129,27 @@ describe('resolveAllowedOrigins', () => {
       'https://app.exemplo.com',
       'https://www.exemplo.com',
     ]);
+  });
+
+  it('deduplica origens depois da normalização', () => {
+    expect(
+      resolveAllowedOrigins({
+        NODE_ENV: 'production',
+        CORS_ALLOWED_ORIGINS:
+          'https://app.invalid, HTTPS://APP.INVALID:443/',
+      }),
+    ).toEqual(['https://app.invalid']);
+  });
+});
+
+describe('isAllowedOrigin', () => {
+  const allowedOrigins = ['https://app.invalid'];
+
+  it('aceita somente uma origem exata da allowlist', () => {
+    expect(isAllowedOrigin('https://app.invalid', allowedOrigins)).toBe(true);
+    expect(isAllowedOrigin('https://other.invalid', allowedOrigins)).toBe(false);
+    expect(isAllowedOrigin(undefined, allowedOrigins)).toBe(false);
+    expect(isAllowedOrigin('null', allowedOrigins)).toBe(false);
   });
 });
 
@@ -82,6 +160,7 @@ describe('buildCorsOptions', () => {
     expect(options.methods).toContain('GET');
     expect(options.methods).toContain('OPTIONS');
     expect(options.allowedHeaders).toContain('Authorization');
+    expect(options.allowedHeaders).toContain('Idempotency-Key');
     // origin é uma lista (nunca "*").
     expect(Array.isArray(options.origin)).toBe(true);
     expect(options.origin).not.toContain('*');

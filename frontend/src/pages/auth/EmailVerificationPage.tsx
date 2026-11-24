@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useLayoutEffect, useState, type FormEvent } from 'react'
 import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Field'
@@ -10,7 +10,9 @@ import { ROUTES } from '../../routes/routes'
 import {
   authRequestErrorMessage,
   isValidEmail,
+  redactTokenFromMessage,
   readAuthToken,
+  removeVerificationTokenFromAddressBar,
 } from './authValidation'
 import styles from './LoginPage.module.css'
 
@@ -30,12 +32,23 @@ export function EmailVerificationPage() {
   const [email, setEmail] = useState(
     locationState?.email ?? user?.email ?? '',
   )
-  const [token, setToken] = useState(() => readAuthToken(searchParams))
+  const [token, setToken] = useState('')
   const [requestMessage, setRequestMessage] = useState<string>()
   const [error, setError] = useState<string>()
   const [requesting, setRequesting] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
+
+  useLayoutEffect(() => {
+    if (!searchParams.has('token')) return
+
+    setToken(readAuthToken(searchParams))
+    removeVerificationTokenFromAddressBar(
+      searchParams,
+      window.location,
+      window.history,
+    )
+  }, [searchParams])
 
   useEffect(() => {
     if (!email && user?.email) setEmail(user.email)
@@ -85,10 +98,13 @@ export function EmailVerificationPage() {
       setToken('')
       setConfirmed(true)
     } catch (caught) {
+      const fallback =
+        'Não foi possível confirmar o endereço. Verifique o token e tente novamente.'
       setError(
-        authRequestErrorMessage(
-          caught,
-          'Não foi possível confirmar o endereço. Verifique o token e tente novamente.',
+        redactTokenFromMessage(
+          authRequestErrorMessage(caught, fallback),
+          token,
+          fallback,
         ),
       )
     } finally {

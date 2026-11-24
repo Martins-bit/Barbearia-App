@@ -21,8 +21,13 @@ import { SendMessageSocketDto } from './dto/send-message-socket.dto';
 import { MessageDeletedEventPayload } from './dto/message-deleted-event.dto';
 import { MessagesService } from './messages.service';
 import { MessagesSocketRegistry } from './messages.socket-registry';
-import { resolveAllowedOrigins } from '../common/config/cors.config';
+import {
+  isAllowedOrigin,
+  resolveAllowedOrigins,
+} from '../common/config/cors.config';
 import { SlidingWindowRateLimiter } from '../common/utils/sliding-window-rate-limiter';
+
+const MESSAGE_SOCKET_ALLOWED_ORIGINS = resolveAllowedOrigins();
 
 /** Identidade anexada ao socket exclusivamente a partir do JWT validado. */
 export interface SocketIdentity {
@@ -74,9 +79,18 @@ interface PingPongDto {
  */
 @WebSocketGateway({
   namespace: '/messages',
-  // Mesmas origens autorizadas do CORS REST (ETAPA 2), com credenciais.
-  // A autenticação JWT no handshake (afterInit) permanece inalterada.
-  cors: { origin: resolveAllowedOrigins(), credentials: true },
+  // CORS protege o transporte HTTP; allowRequest também valida o upgrade
+  // WebSocket. A ausência de Origin é rejeitada e JWT continua obrigatório.
+  cors: { origin: MESSAGE_SOCKET_ALLOWED_ORIGINS, credentials: true },
+  allowRequest: (request, callback) => {
+    callback(
+      null,
+      isAllowedOrigin(
+        request.headers?.origin,
+        MESSAGE_SOCKET_ALLOWED_ORIGINS,
+      ),
+    );
+  },
 })
 export class MessagesGateway
   implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect

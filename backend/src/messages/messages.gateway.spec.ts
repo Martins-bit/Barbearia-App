@@ -100,6 +100,31 @@ describe('MessagesGateway', () => {
   /** `exp` passado: JWT expirado durante a vida do socket. */
   const PASSADO = Math.floor(Date.now() / 1000) - 60;
 
+  it('valida a origem do handshake e rejeita requisições sem Origin', () => {
+    const options = Reflect.getMetadata(
+      'websockets:gateway_options',
+      MessagesGateway,
+    );
+    const allowRequest = options.allowRequest as (
+      request: { headers: { origin?: string } },
+      callback: (error: string | null, allowed: boolean) => void,
+    ) => void;
+    const allowedOrigins = options.cors.origin as string[];
+    const callback = jest.fn();
+
+    allowRequest(
+      { headers: { origin: allowedOrigins[0] } },
+      callback,
+    );
+    expect(callback).toHaveBeenLastCalledWith(null, true);
+
+    allowRequest({ headers: { origin: 'https://other.invalid' } }, callback);
+    expect(callback).toHaveBeenLastCalledWith(null, false);
+
+    allowRequest({ headers: {} }, callback);
+    expect(callback).toHaveBeenLastCalledWith(null, false);
+  });
+
   beforeEach(() => {
     registry = new MessagesSocketRegistry();
     jwt = buildJwtMock();

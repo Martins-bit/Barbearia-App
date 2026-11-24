@@ -154,9 +154,12 @@ como hash e têm validade funcional de 30 minutos. Novos cadastros iniciam uma
 tentativa automática de envio; qualquer reenvio posterior depende de solicitação
 explícita do usuário e está sujeito a limites.
 
-O prazo para apagar do banco tokens expirados ou utilizados e registros de
-limitação está **[PENDENTE DE DEFINIÇÃO]**. A validade do token não significa
-que o registro é eliminado automaticamente ao expirar.
+Foi aprovada a retenção técnica dos registros de confirmação por 24 horas após
+a data mais recente entre `expiraEm` e `usadoEm`. Uma rotina diária às 03:00 UTC
+remove registros terminais em lotes de até 500 e preserva tokens ainda válidos.
+A remoção do banco não comprova eliminação em backups, logs de infraestrutura ou
+no provedor de e-mail. A retenção dos registros de limitação permanece separada
+e pendente de definição.
 
 ### Recuperação de senha
 

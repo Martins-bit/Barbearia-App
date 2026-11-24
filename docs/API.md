@@ -121,7 +121,9 @@ Criar uma nova conta de cliente.
 O backend deverá verificar:
 
 - Campos obrigatórios;
-- Formato dos dados;
+- Nome com espaços externos removidos e entre 2 e 120 caracteres;
+- Telefone com 10 ou 11 dígitos, aceitando espaços, parênteses e hífens de
+  formatação e persistindo o valor normalizado somente com dígitos;
 - Formato e unicidade do e-mail;
 - Regras de senha;
 - Existência de conta duplicada.
@@ -1167,11 +1169,26 @@ desconexão imediata nas demais instâncias não é garantida; a validação de
 autorização antes de uma nova entrega privada impede que sockets obsoletos
 recebam esses eventos quando a instância consulta o estado atualizado.
 
-### Observação de integração (futuro)
+### Origem e publicação
 
-O servidor HTTP atual não configura CORS; quando o frontend (browser)
-conectar de outra origem, o CORS do gateway WebSocket deverá ser habilitado
-na integração do frontend.
+O CORS REST e o handshake Socket.IO usam a allowlist `CORS_ALLOWED_ORIGINS`.
+Cada item deve ser uma origem HTTP(S), sem credenciais, caminho, query ou
+fragmento; origens HTTP são aceitas somente para hosts locais em
+desenvolvimento. Em produção, configure as origens HTTPS reais do frontend.
+Uma barra final e diferenças de caixa/porta padrão são normalizadas.
+
+O gateway também verifica o cabeçalho `Origin` no handshake, rejeitando
+requisições sem origem ou fora da allowlist. Essa verificação não substitui a
+autenticação: o JWT continua obrigatório e validado no handshake e durante a
+conexão.
+
+O frontend usa `VITE_API_URL` como origem-base comum para REST e Socket.IO. Em
+desenvolvimento, a ausência da variável usa `http://localhost:3000`; em builds
+de produção, a variável é obrigatória e deve conter a origem HTTPS pública do
+backend, sem caminho, query ou fragmento. A publicação deve encaminhar as
+rotas REST na raiz e o transporte Socket.IO (`/socket.io`, namespace
+`/messages`) ao backend, sem o fallback SPA. Um prefixo externo da API precisa
+ser removido pelo proxy antes de chegar ao backend.
 
 ---
 

@@ -1286,6 +1286,11 @@ interface não deverá exibir, registrar ou persistir o token além do necessár
 para enviá-lo uma vez ao backend. Erros de token inválido ou expirado deverão
 ser apresentados sem revelar dados de outra conta.
 
+Quando o token chegar na query string do link, deverá ser mantido somente em
+memória e removido imediatamente da barra de endereço com `history.replaceState`,
+sem recarregar a página. Não deverá ser salvo em `localStorage`,
+`sessionStorage` ou cookies.
+
 ---
 
 # 4. ESTADOS GERAIS DAS TELAS

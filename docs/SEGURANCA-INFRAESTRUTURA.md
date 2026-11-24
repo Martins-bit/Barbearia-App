@@ -61,11 +61,8 @@ Variável: **`CORS_ALLOWED_ORIGINS`** (lista separada por vírgulas).
 
 ### Produção (`NODE_ENV=production`)
 
-- **Obrigatório** definir `CORS_ALLOWED_ORIGINS` com o(s) domínio(s) real(is) do
-  frontend. Exemplo (trocar pelo domínio verdadeiro):
-  ```
-  CORS_ALLOWED_ORIGINS=https://app.seudominio.com,https://www.seudominio.com
-  ```
+- **Obrigatório** definir `CORS_ALLOWED_ORIGINS` com as origens HTTPS reais do
+  frontend. Cada origem deve conter somente esquema, host e porta opcional.
 - Se estiver **ausente, vazia ou inválida**, a API **não inicia** — falha rápida
   com mensagem clara (sem revelar segredos).
 - **Nunca** combina `credentials: true` com `Access-Control-Allow-Origin: *`
@@ -74,10 +71,24 @@ Variável: **`CORS_ALLOWED_ORIGINS`** (lista separada por vírgulas).
 
 ### Normalização e validação
 
-- Cada entrada é normalizada (sem barra final, sem espaços) e validada como URL
-  absoluta `http(s)`.
-- Entradas vazias ou inválidas **não** são aceitas silenciosamente: em produção,
-  qualquer item inválido **interrompe** o boot.
+- Cada item separado por vírgula é uma origem absoluta HTTP(S), sem credenciais,
+  caminho além da barra raiz, query ou fragmento. Espaços externos são
+  removidos; host, esquema e porta padrão são normalizados e a barra final não
+  é mantida.
+- HTTP é permitido somente para hosts locais em desenvolvimento. Produção exige
+  HTTPS. Valores vazios, wildcard, caminhos, parâmetros ou itens inválidos
+  interrompem a inicialização.
+- O CORS REST permite `Content-Type`, `Authorization` e `Idempotency-Key`;
+  este último é usado pela criação de solicitações de titular.
+
+### URL-base do frontend
+
+`VITE_API_URL` é a origem-base pública do backend e é incorporada ao build Vite.
+REST e Socket.IO importam a mesma URL validada. Em desenvolvimento, sua ausência
+usa `http://localhost:3000`; HTTP configurado só é aceito para hosts locais. Em
+produção, a variável é obrigatória e deve ser HTTPS. Informe somente a origem,
+sem credenciais, caminho, query, fragmento ou barra final; a normalização
+remove uma barra raiz opcional. Não use valores secretos nessa variável.
 
 ## 4. Rate limiting (somente rotas sensíveis)
 
@@ -132,6 +143,11 @@ nas operações sensíveis. Leituras e demais rotas legítimas **não** são lim
 - Se o envio de confirmação falhar, o token é invalidado e a rota retorna `503`.
   Se uma tentativa de recuperação falhar após a criação do token, ele é
   invalidado e a rota mantém a resposta `202` genérica para evitar enumeração.
+- Registros terminais de confirmação são removidos diariamente às 03:00 UTC,
+  após retenção de 24 horas contada da data mais recente entre expiração e uso ou
+  invalidação. A rotina preserva tokens válidos, trabalha em lotes PostgreSQL de
+  até 500 com `FOR UPDATE SKIP LOCKED` e transação por lote, e registra somente
+  contagens agregadas, duração e falhas sanitizadas.
 - A janela de tempo do socket usa o utilitário
   `common/utils/sliding-window-rate-limiter.ts` (janela deslizante, em memória,
   por processo).
@@ -196,23 +212,39 @@ arquivos; nesses casos é necessária intervenção operacional. Arquivos
 remanescentes após reinício também não entram na quota total em memória do novo
 processo.
 
-## 5. Confiança no proxy (Cloudflare) — atenção ao publicar
+## 5. Confiança no proxy reverso/CDN
 
-A API poderá rodar atrás do **Cloudflare**. Pontos obrigatórios:
+`TRUST_PROXY` é opt-in. Se estiver ausente, o Express mantém a confiança em
+proxies desligada e não usa `X-Forwarded-For` para determinar `req.ip`.
+Quando definida, a configuração aceita:
 
-1. **Não confiar cegamente em `X-Forwarded-For` / `X-Real-IP`.** Esses cabeçalhos
-   podem ser forjados pelo cliente se não houver proxy de verdade na frente.
-2. **`trust proxy` é OPT-IN e desligado por padrão.** Só é ativado quando a
-   variável **`TRUST_PROXY`** estiver explicitamente definida em `main.ts`
-   (ex.: `TRUST_PROXY=1` para um único hop do Cloudflare).
-3. **Antes de publicar**, defina `TRUST_PROXY` com o número correto de hops do
-   seu proxy/CDN. Sem isso, o `req.ip` (base do rate limit por IP) aponta para o
-   proxy, e não para o cliente real.
-4. **Reavalie os limites** após definir a topologia final (Cloudflare + origem),
-   especialmente os rastreadores por IP (login/register).
+- `true` ou `false` (como texto), respeitando a semântica booleana do Express;
+- um inteiro decimal não negativo, convertido em número e interpretado como
+  quantidade de hops;
+- uma lista separada por vírgulas de endereços IP, sub-redes CIDR (ou máscara
+  IPv4) ou aliases reconhecidos pelo Express
+  (`loopback`, `linklocal`, `uniquelocal`).
 
-> Enquanto o domínio e a topologia finais não estiverem definidos, mantenha
-> `TRUST_PROXY` desligado (comportamento conservador atual).
+Valores vazios, formatos inválidos e intervalos fora do limite são rejeitados
+com erro sem reproduzir o valor configurado. `true` confia em todos os hops e
+não deve ser usado se clientes puderem alcançar a origem sem passar pelo proxy
+confiável.
+
+**Não escolha o valor de produção antes de conhecer a hospedagem.** A topologia
+deve determinar se é apropriado configurar quantidade de hops ou endereços/
+sub-redes confiáveis. Restrinja o acesso direto à origem e valide que os
+cabeçalhos encaminhados são definidos pelo proxy confiável. Sem configuração,
+os limites por IP podem ver o endereço do proxy; uma configuração permissiva
+pode permitir falsificação de IP encaminhado. Reavalie login/cadastro após a
+topologia final.
+
+### Handshake Socket.IO
+
+O CORS e `allowRequest` usam a mesma allowlist. O gateway compara o `Origin`
+exato com as origens normalizadas e rejeita cabeçalho ausente, `null` ou não
+autorizado. Isso vale para polling e upgrade WebSocket. A checagem de origem é
+adicional: o JWT continua obrigatório e a autorização é revalidada como
+documentado; origem permitida nunca concede identidade ou permissão.
 
 ## 6. Isolamento dos testes E2E
 
@@ -274,6 +306,8 @@ e qualquer execução manual também exige validação E2E.
 
 - `backend/src/main.ts` — Helmet, `trust proxy` (opt-in), CORS REST.
 - `backend/src/common/config/cors.config.ts` — resolução/validação das origens.
+- `backend/src/common/config/trust-proxy.config.ts` — parsing e validação de `TRUST_PROXY`.
+- `frontend/src/services/api/apiBaseUrl.ts` — URL-base validada, compartilhada por REST e Socket.IO.
 - `backend/src/common/utils/sliding-window-rate-limiter.ts` — janela p/ socket.
 - `backend/src/app.module.ts` — registro do `ThrottlerModule` (throttler `default`).
 - `backend/src/common/throttling/redis-throttler-storage.ts` — storage Redis
@@ -293,16 +327,19 @@ e qualquer execução manual também exige validação E2E.
 - `backend/src/auth/brevo-email-verification-mailer.ts` — adaptador HTTPS do Brevo e validação de configuração.
 - `backend/src/auth/auth.module.ts` — seleção explícita do provider de e-mail.
 - `backend/.env.example` — nomes de variáveis e exemplos seguros (sem segredos).
-- Testes: `cors.config.spec.ts`, `sliding-window-rate-limiter.spec.ts`,
+- Testes: `cors.config.spec.ts`, `trust-proxy.config.spec.ts`,
+  `messages.gateway.spec.ts`, `apiBaseUrl.test.ts`,
+  `sliding-window-rate-limiter.spec.ts`,
   `security-infra.spec.ts` (integração: headers, CORS autorizado/negado/preflight, `429`) e `brevo-email-verification-mailer.spec.ts`.
 
 ## 7. Configuração de variáveis (resumo)
 
-| Variável               | Dev                                            | Produção                                                 |
-| ---------------------- | ---------------------------------------------- | -------------------------------------------------------- |
-| `CORS_ALLOWED_ORIGINS` | opcional (padrão loopback 4173/5173, 5174/5175) | **obrigatório**, domínio(s) real(is), sem `*`            |
-| `TRUST_PROXY`          | desligado                                      | definir nº de hops do proxy/CDN (ex.: `1` p/ Cloudflare) |
-| `NODE_ENV`             | `development`                                  | `production` (ativa exigências de CORS)                  |
+| Variável               | Dev                                            | Produção                                                       |
+| ---------------------- | ---------------------------------------------- | -------------------------------------------------------------- |
+| `CORS_ALLOWED_ORIGINS` | opcional (padrão loopback 4173/5173, 5174/5175) | **obrigatório**, origens HTTPS reais, sem `*`                 |
+| `VITE_API_URL`         | opcional; usa backend local                    | **obrigatória**, origem HTTPS do backend, definida no build    |
+| `TRUST_PROXY`          | desligado                                      | escolher após definir proxies, hops ou IPs confiáveis         |
+| `NODE_ENV`             | `development`                                  | `production` (ativa exigências de CORS)                        |
 | `EMAIL_PROVIDER`       | `disabled` por padrão; `brevo` para ativar     | selecionar explicitamente `brevo`                        |
 | `BREVO_API_KEY`        | obrigatória somente com `EMAIL_PROVIDER=brevo` | segredo do painel Brevo; não versionar                   |
 | `BREVO_SENDER_EMAIL`   | obrigatória somente com `EMAIL_PROVIDER=brevo` | remetente autorizado no Brevo                            |

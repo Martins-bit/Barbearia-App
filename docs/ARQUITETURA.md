@@ -104,6 +104,21 @@ fallback de navegação SPA para `index.html`, preservando a passagem direta par
 rotas do React Router. O fallback não deve substituir respostas da API ou
 requisições do Socket.IO.
 
+O frontend usa `VITE_API_URL` como origem-base única para REST e Socket.IO.
+Desenvolvimento pode omiti-la e usar o backend local; builds de produção exigem
+uma origem HTTPS absoluta, sem credenciais, caminho, query ou fragmento. O
+backend mantém uma allowlist explícita em `CORS_ALLOWED_ORIGINS`; produção exige
+origens HTTPS reais do frontend. O proxy da hospedagem deve encaminhar API e
+Socket.IO ao backend e permitir WebSocket Upgrade em `/socket.io` (namespace
+`/messages`). Como as rotas REST são expostas na raiz, um prefixo externo só
+pode ser usado se o proxy o remover antes de encaminhar as requisições.
+
+`TRUST_PROXY` permanece desligado quando não configurado. Quando a topologia
+final estiver definida, pode representar booleano, número de hops ou lista de
+IPs/sub-redes confiáveis no formato Express. A quantidade ou a lista não deve
+ser presumida antes de conhecer os proxies e restringir o acesso direto à
+origem.
+
 Auditoria de dependências identificou um finding alto para `picomatch@4.0.5`,
 transitivo de Vite e da cadeia de build do PWA. No momento da auditoria, o
 registry consultado não oferecia versão fora do intervalo afetado (`<=4.0.7`).
@@ -497,6 +512,14 @@ As informações de autenticação deverão ser tratadas de maneira segura.
 Um `401` em uma operação funcional inicia a revalidação da sessão por
 `GET /auth/me`; o frontend só remove o token se esse endpoint confirmar `401`.
 Um `403` indica falta de permissão e não encerra uma sessão válida.
+
+Os registros de `EmailVerificationToken` são removidos diariamente às 03:00 UTC
+por `EmailVerificationCleanupScheduler`. A limpeza conserva registros terminais
+por 24 horas após a data mais recente entre `expiraEm` e `usadoEm`, usa o relógio
+do PostgreSQL e exclui em lotes de até 500 com `FOR UPDATE SKIP LOCKED`. Tokens
+ainda válidos não são candidatos. Cada lote usa uma transação; falhas deixam o
+lote pendente para a próxima execução, sem interromper o backend nem registrar
+tokens, hashes, e-mails ou IDs.
 
 ---
 

@@ -9,9 +9,9 @@ import { RolesGuard } from './guards/roles.guard';
 import { UsersModule } from '../users/users.module';
 import { JWT_CONFIG } from '../common/config/jwt.config';
 import { EmailVerificationService } from './email-verification.service';
-import {
-  EMAIL_VERIFICATION_MAILER,
-} from './email-verification-mailer';
+import { EmailVerificationCleanupService } from './email-verification-cleanup.service';
+import { EmailVerificationCleanupScheduler } from './email-verification-cleanup.scheduler';
+import { EMAIL_VERIFICATION_MAILER } from './email-verification-mailer';
 import { createEmailVerificationMailer } from './brevo-email-verification-mailer';
 import { PasswordRecoveryService } from './password-recovery.service';
 
@@ -31,6 +31,8 @@ import { PasswordRecoveryService } from './password-recovery.service';
     JwtGuard,
     RolesGuard,
     EmailVerificationService,
+    EmailVerificationCleanupService,
+    EmailVerificationCleanupScheduler,
     PasswordRecoveryService,
     {
       provide: EMAIL_VERIFICATION_MAILER,
