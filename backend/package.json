@@ -6,7 +6,7 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "prisma generate && nest build",
     "admin:create:first": "ts-node scripts/create-first-admin.ts",
     "barber:create": "ts-node scripts/create-barber.ts",
     "db:development:migrate": "node test/run-development-migrations.cjs",

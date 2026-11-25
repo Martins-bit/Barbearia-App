@@ -8,6 +8,8 @@ import { RedisThrottlerStorageModule } from './common/throttling/redis-throttler
 import { RedisModule } from './common/redis/redis.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { HealthController } from './health/health.controller';
+import { HealthService } from './health/health.service';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
 import { AuthModule } from './auth/auth.module';
@@ -51,9 +53,10 @@ import { PrivateResponseCacheInterceptor } from './common/http/private-response-
     MessagesModule,
     BarbersModule,
   ],
-  controllers: [AppController],
+  controllers: [AppController, HealthController],
   providers: [
     AppService,
+    HealthService,
     {
       provide: APP_INTERCEPTOR,
       useClass: PrivateResponseCacheInterceptor,

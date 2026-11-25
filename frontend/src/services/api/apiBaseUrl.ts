@@ -6,6 +6,7 @@ function isLocalDevelopmentHostname(hostname: string): boolean {
     normalized === 'localhost' ||
     normalized.endsWith('.localhost') ||
     normalized === '127.0.0.1' ||
+    normalized === '192.168.1.7' ||
     normalized === '::1'
   )
 }

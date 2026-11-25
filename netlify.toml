@@ -1,0 +1,10 @@
+[build]
+  base = "frontend"
+  command = "npm ci --include=dev && npm run build"
+  publish = "dist"
+
+# REST and Socket.IO use the absolute VITE_API_URL backend origin.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

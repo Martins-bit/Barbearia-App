@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { authService } from './authService.ts'
+import { authService, type RegisterResponse } from './authService.ts'
+import { ApiError } from './ApiError.ts'
 import { authTokenStorage, http } from './http.ts'
 import { pushSubscriptionService } from './pushSubscriptionService.ts'
 
@@ -11,6 +12,7 @@ type StreamCall = [string, unknown]
 const originalPost = http.post
 const originalGet = http.get
 const originalGetStream = http.getStream
+const originalFetch = globalThis.fetch
 const mutableHttp = http as unknown as {
   post: (path: string, body?: unknown, options?: unknown) => Promise<unknown>
   get: (path: string, options?: unknown) => Promise<unknown>
@@ -24,6 +26,25 @@ const originalPushCleanup = pushSubscriptionService.clearLocalSubscription
 let tokenClearCalls: number
 let pushCleanupCalls: number
 let pushCleanupError: Error | null
+
+const registerInput = {
+  nome: 'Cliente',
+  telefone: '11999999999',
+  senha: 'senha-segura',
+  email: 'cliente@example.com',
+}
+
+const registerResponse: RegisterResponse = {
+  id: 12,
+  nome: 'Cliente',
+  telefone: '11999999999',
+  email: 'cliente@example.com',
+  tipoUsuario: 'CLIENTE',
+  ativo: true,
+  dataCriacao: '2026-11-25T10:00:00.000Z',
+  dataAtualizacao: '2026-11-25T10:00:00.000Z',
+  emailConfirmationSent: true,
+}
 
 beforeEach(() => {
   calls = []
@@ -56,6 +77,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  globalThis.fetch = originalFetch
   mutableHttp.post = originalPost as unknown as typeof mutableHttp.post
   mutableHttp.get = originalGet as unknown as typeof mutableHttp.get
   mutableHttp.getStream = originalGetStream
@@ -119,17 +141,125 @@ describe('authService endpoint contracts', () => {
     ])
   })
 
-  it('sends registration e-mail without an existing bearer token', async () => {
-    const input = {
-      nome: 'Cliente',
-      telefone: '11999999999',
-      senha: 'senha-segura',
-      email: 'cliente@example.com',
+  it('accepts a valid response with confirmation sent and omits authentication', async () => {
+    mutableHttp.post = async (path, body, options) => {
+      calls.push([path, body, options])
+      return registerResponse
     }
 
-    await authService.register(input)
+    const result = await authService.register(registerInput)
 
-    assert.deepEqual(calls, [['/auth/register', input, { skipAuth: true }]])
+    assert.deepEqual(result, {
+      outcome: 'confirmed',
+      response: registerResponse,
+    })
+    assert.deepEqual(calls, [
+      ['/auth/register', registerInput, { skipAuth: true }],
+    ])
+  })
+
+  it('accepts a valid registration response when confirmation email was not sent', async () => {
+    const response = { ...registerResponse, emailConfirmationSent: false }
+    mutableHttp.post = async () => response
+
+    assert.deepEqual(await authService.register(registerInput), {
+      outcome: 'confirmed',
+      response,
+    })
+  })
+
+  it('classifies an empty 2xx registration response as unknown', async () => {
+    mutableHttp.post = originalPost as unknown as typeof mutableHttp.post
+    globalThis.fetch = async () =>
+      new Response(null, {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      })
+
+    assert.deepEqual(await authService.register(registerInput), {
+      outcome: 'unknown',
+    })
+  })
+
+  it('classifies invalid JSON in a 2xx registration response as unknown', async () => {
+    mutableHttp.post = originalPost as unknown as typeof mutableHttp.post
+    globalThis.fetch = async () =>
+      new Response('{invalid json', {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      })
+
+    assert.deepEqual(await authService.register(registerInput), {
+      outcome: 'unknown',
+    })
+  })
+
+  it('classifies responses missing required registration fields as unknown', async () => {
+    const withoutField = (field: string) =>
+      Object.fromEntries(
+        Object.entries(registerResponse).filter(([key]) => key !== field),
+      )
+    const invalidResponses: unknown[] = [
+      withoutField('emailConfirmationSent'),
+      withoutField('id'),
+      withoutField('dataAtualizacao'),
+      { ...registerResponse, id: undefined },
+    ]
+
+    for (const response of invalidResponses) {
+      mutableHttp.post = async () => response
+
+      assert.deepEqual(await authService.register(registerInput), {
+        outcome: 'unknown',
+      })
+    }
+  })
+
+  it('classifies a network failure during registration as unknown', async () => {
+    mutableHttp.post = originalPost as unknown as typeof mutableHttp.post
+    globalThis.fetch = async () => {
+      throw new TypeError('Network unavailable')
+    }
+
+    assert.deepEqual(await authService.register(registerInput), {
+      outcome: 'unknown',
+    })
+  })
+
+  it('preserves HTTP 400 and 409 registration errors', async () => {
+    mutableHttp.post = originalPost as unknown as typeof mutableHttp.post
+
+    for (const [status, message] of [
+      [400, 'E-mail inválido.'],
+      [409, 'Este e-mail já está em uso por outra conta.'],
+    ] as const) {
+      globalThis.fetch = async () =>
+        new Response(JSON.stringify({ message }), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        })
+
+      await assert.rejects(
+        authService.register(registerInput),
+        (error: unknown) =>
+          error instanceof ApiError &&
+          error.status === status &&
+          error.message === message,
+      )
+    }
+  })
+
+  it('classifies HTTP 5xx registration errors as unknown', async () => {
+    mutableHttp.post = originalPost as unknown as typeof mutableHttp.post
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ message: 'Gateway indisponível.' }), {
+        status: 503,
+        headers: { 'content-type': 'application/json' },
+      })
+
+    assert.deepEqual(await authService.register(registerInput), {
+      outcome: 'unknown',
+    })
   })
 
   it('requests verification with the current authenticated session', async () => {

@@ -37,6 +37,13 @@ A API deverá:
 - Não expor informações sensíveis;
 - Impedir operações não autorizadas.
 
+### Disponibilidade do backend
+
+`GET /health` é público e destinado ao health check da hospedagem. Retorna
+`200` com `{ "status": "ok" }` quando PostgreSQL e Redis respondem. Se algum
+serviço obrigatório não estiver disponível, retorna `503` com uma mensagem
+genérica, sem expor qual dependência falhou nem detalhes internos.
+
 ---
 
 ## 3. AUTENTICAÇÃO

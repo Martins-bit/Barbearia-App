@@ -45,6 +45,9 @@ test-results/
 *.db
 *.db-journal
 *.dump
+*.rdb
+memurai-log.txt
+redis-log.txt
 backend/test/.env.e2e
 !backend/test/.env.e2e.example
 !backend/test/.env.e2e.migrate.example
@@ -60,3 +63,6 @@ backend/.agents/
 backend/.claude/
 backend/.windsurf/
 backend/skills-lock.json
+
+/backend/src/query.sql
+/backend/src/query15.sql

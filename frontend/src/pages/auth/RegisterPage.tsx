@@ -1,10 +1,17 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import {
+  Link,
+  useNavigate,
+  type NavigateFunction,
+} from 'react-router-dom'
 import { AuthLayout } from '../../layouts/AuthLayout'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Field'
 import { useToast } from '../../contexts/useToast'
-import { authService } from '../../services/api/authService'
+import {
+  authService,
+  type RegisterResult,
+} from '../../services/api/authService'
 import { ROUTES } from '../../routes/routes'
 import {
   authRequestErrorMessage,
@@ -14,6 +21,19 @@ import {
   registrationPhoneError,
 } from './authValidation'
 import styles from './LoginPage.module.css'
+
+export function completeConfirmedRegistration(
+  navigate: NavigateFunction,
+  email: string,
+  emailConfirmationSent: boolean,
+  notifySuccess: () => void,
+): void {
+  navigate(ROUTES.confirmEmail, {
+    replace: true,
+    state: { email, emailConfirmationSent },
+  })
+  notifySuccess()
+}
 
 /**
  * Cadastro de cliente — usa o endpoint real POST /auth/register.
@@ -28,12 +48,15 @@ export function RegisterPage() {
   const [senha, setSenha] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [uncertainEmail, setUncertainEmail] = useState<string | null>(null)
   const [nameError, setNameError] = useState<string | undefined>()
   const [phoneError, setPhoneError] = useState<string | undefined>()
   const [emailError, setEmailError] = useState<string | undefined>()
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (uncertainEmail) return
+
     setError(null)
     setNameError(undefined)
     setPhoneError(undefined)
@@ -56,31 +79,41 @@ export function RegisterPage() {
     }
 
     setSubmitting(true)
-    try {
-      const response = await authService.register({
+    const result = await authService
+      .register({
         nome: normalizedName,
         telefone: normalizedPhone,
         senha,
         email: normalizedEmail,
       })
-      toast.success('Cadastro criado. Confirme seu e-mail para entrar.')
-      navigate(ROUTES.confirmEmail, {
-        replace: true,
-        state: {
-          email: normalizedEmail,
-          emailConfirmationSent: response.emailConfirmationSent,
-        },
+      .catch((err): RegisterResult | null => {
+        setSubmitting(false)
+        const message = authRequestErrorMessage(
+          err,
+          'Não foi possível concluir o cadastro.',
+        )
+        setError(message)
+        toast.error(message, 'Falha no cadastro')
+        return null
       })
-    } catch (err) {
-      const message = authRequestErrorMessage(
-        err,
-        'Não foi possível concluir o cadastro.',
+
+    setSubmitting(false)
+    if (result === null) return
+
+    if (result.outcome === 'unknown') {
+      setUncertainEmail(normalizedEmail)
+      setError(
+        'Não foi possível confirmar o resultado do cadastro. A conta pode ter sido criada. Para evitar duplicidade, não tente cadastrar novamente agora.',
       )
-      setError(message)
-      toast.error(message, 'Falha no cadastro')
-    } finally {
-      setSubmitting(false)
+      return
     }
+
+    completeConfirmedRegistration(
+      navigate,
+      normalizedEmail,
+      result.response.emailConfirmationSent,
+      () => toast.success('Cadastro criado. Confirme seu e-mail para entrar.'),
+    )
   }
 
   return (
@@ -101,6 +134,7 @@ export function RegisterPage() {
           autoComplete="name"
           placeholder="Seu nome"
           value={nome}
+          disabled={uncertainEmail !== null}
           onChange={(event) => {
             setNome(event.target.value)
             setNameError(undefined)
@@ -116,6 +150,7 @@ export function RegisterPage() {
           autoComplete="username"
           placeholder="11 99999-9999"
           value={telefone}
+          disabled={uncertainEmail !== null}
           onChange={(event) => {
             setTelefone(event.target.value)
             setPhoneError(undefined)
@@ -130,6 +165,7 @@ export function RegisterPage() {
           autoComplete="email"
           placeholder="seu@email.com"
           value={email}
+          disabled={uncertainEmail !== null}
           onChange={(event) => {
             setEmail(event.target.value)
             setEmailError(undefined)
@@ -144,6 +180,7 @@ export function RegisterPage() {
           autoComplete="new-password"
           placeholder="Crie uma senha"
           value={senha}
+          disabled={uncertainEmail !== null}
           onChange={(event) => setSenha(event.target.value)}
           required
         />
@@ -154,9 +191,19 @@ export function RegisterPage() {
           </p>
         )}
 
-        <Button type="submit" size="lg" fullWidth loading={submitting}>
-          Criar conta
-        </Button>
+        {uncertainEmail ? (
+          <Link
+            className={styles.link}
+            to={ROUTES.confirmEmail}
+            state={{ email: uncertainEmail }}
+          >
+            Continuar para confirmação ou reenvio do e-mail
+          </Link>
+        ) : (
+          <Button type="submit" size="lg" fullWidth loading={submitting}>
+            Criar conta
+          </Button>
+        )}
       </form>
 
       <p className={styles.footerText}>

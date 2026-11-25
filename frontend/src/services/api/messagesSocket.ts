@@ -134,7 +134,7 @@ export const messagesSocket: MensajesSocketApi = (() => {
     // Destino explícito: origem do backend + namespace
     // dedicado `/messages`, igual ao gateway. `withCredentials` alinha o
     // handshake com o CORS (credentials: true) já configurado no backend.
-    const instancia = io(`${SOCKET_URL}/messages`, {
+    const instancia = io(`${API_BASE_URL}/messages`, {
       auth: { token },
       withCredentials: true,
       transports: ['websocket', 'polling'],

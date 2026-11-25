@@ -31,6 +31,14 @@ describe('resolveApiBaseUrl', () => {
       resolveApiBaseUrl('http://127.0.0.1:3000', false),
       'http://127.0.0.1:3000',
     )
+    assert.equal(
+      resolveApiBaseUrl('http://192.168.1.7:3000', false),
+      'http://192.168.1.7:3000',
+    )
+    assert.throws(
+      () => resolveApiBaseUrl('http://192.168.1.8:3000', false),
+      /VITE_API_URL deve ser/,
+    )
     assert.throws(
       () => resolveApiBaseUrl('http://api.invalid', false),
       /VITE_API_URL deve ser/,

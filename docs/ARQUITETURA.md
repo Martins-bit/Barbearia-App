@@ -93,16 +93,21 @@ API, dados pessoais, respostas autenticadas ou tráfego Socket.IO. Atualizaçõe
 aguardam a confirmação do usuário; caches antigos do shell são removidos na
 ativação da versão substituta.
 
+`frontend/public/manifest.webmanifest` é a fonte do manifest consumida pelo
+Vite. Os ícones nele declarados são copiados do diretório público e incluídos
+explicitamente no precache do Service Worker.
+
 O backend aplica centralmente `Cache-Control: no-store` e `Pragma: no-cache`
 às respostas de rotas protegidas por JWT, aos fluxos de autenticação e a
 requisições que enviem `Authorization`. Endpoints públicos sem autenticação e
 recursos estáticos não recebem essa política automaticamente; cabeçalhos
 específicos já existentes, como os de exportação de dados, são preservados.
 
-A hospedagem de produção deve servir a aplicação por HTTPS e configurar
-fallback de navegação SPA para `index.html`, preservando a passagem direta para
-rotas do React Router. O fallback não deve substituir respostas da API ou
-requisições do Socket.IO.
+A hospedagem Netlify publica `frontend/dist` e configura fallback de navegação
+SPA para `index.html`, preservando rotas diretas do React Router. REST e
+Socket.IO usam a origem absoluta `VITE_API_URL` do backend Render, portanto as
+requisições não passam pelo fallback do domínio do frontend. A aplicação deve
+ser servida por HTTPS.
 
 O frontend usa `VITE_API_URL` como origem-base única para REST e Socket.IO.
 Desenvolvimento pode omiti-la e usar o backend local; builds de produção exigem
@@ -111,7 +116,58 @@ backend mantém uma allowlist explícita em `CORS_ALLOWED_ORIGINS`; produção e
 origens HTTPS reais do frontend. O proxy da hospedagem deve encaminhar API e
 Socket.IO ao backend e permitir WebSocket Upgrade em `/socket.io` (namespace
 `/messages`). Como as rotas REST são expostas na raiz, um prefixo externo só
-pode ser usado se o proxy o remover antes de encaminhar as requisições.
+pode ser usado se o proxy o remover antes de encaminhar as requisições. O
+backend lê a porta `PORT` da hospedagem e faz bind em `0.0.0.0`. `GET /health`
+verifica PostgreSQL e Redis, retorna `200` quando disponíveis e `503` genérico
+quando algum serviço obrigatório falha.
+
+### Versões e comandos de hospedagem
+
+`frontend/.nvmrc` e `backend/.nvmrc` selecionam a major Node.js 24,
+independentemente do diretório-base configurado para cada hospedagem. O patch
+fica a cargo do gerenciador da plataforma dentro da linha 24.x.
+
+No Netlify:
+
+- Diretório-base: `frontend`;
+- Build: `npm ci --include=dev && npm run build`;
+- Publicação: `dist`;
+- Variável de build `VITE_API_URL`: origem HTTPS real do backend. O valor do
+  arquivo local `.env.local` não é versionado nem transferido para a hospedagem.
+
+No Render:
+
+- Diretório-base: `backend`;
+- Build: `npm ci --include=dev && npm run build`;
+- Inicialização: `npm run start:prod`.
+
+O build executa `prisma generate` e depois NestJS; `start:prod` inicia
+`dist/main`. Os comandos correspondem aos scripts reais do
+`backend/package.json`; Prisma CLI e Nest CLI são dependências de
+desenvolvimento e precisam estar disponíveis durante o build.
+
+Configure no Render, sem versionar valores:
+
+- `NODE_ENV=production`;
+- `DATABASE_URL`, com a conexão PostgreSQL do Supabase;
+- `REDIS_URL`, com a conexão Redis do Upstash usando `rediss://` quando TLS
+  estiver habilitado;
+- `JWT_SECRET`, com pelo menos 32 caracteres;
+- `CORS_ALLOWED_ORIGINS`, contendo a origem HTTPS final do frontend, sem
+  curingas;
+- `PORT`, fornecida pela plataforma, que o backend já lê.
+
+`TRUST_PROXY` deve permanecer ausente até a topologia ser confirmada. Se for
+necessário configurá-la, use somente hops ou endereços confiáveis verificados;
+não habilite confiança indiscriminada. O envio de e-mail é opcional: o padrão
+é `EMAIL_PROVIDER=disabled`. Se o provedor Brevo for habilitado, configure
+`BREVO_API_KEY`, `BREVO_SENDER_EMAIL` e `PUBLIC_APP_URL` com a origem HTTPS
+real do frontend; `BREVO_SENDER_NAME` e `EMAIL_TIMEOUT_MS` são opcionais.
+
+Build e inicialização não executam migrations. Uma migration de produção é
+uma operação separada, manual e sujeita a autorização explícita, revisão e
+procedimento de backup. A proteção atual em `prisma.config.ts` não deve ser
+contornada; não há comando de migration incluído no build ou no start.
 
 `TRUST_PROXY` permanece desligado quando não configurado. Quando a topologia
 final estiver definida, pode representar booleano, número de hops ou lista de
@@ -374,13 +430,16 @@ Nenhum endpoint de envio push ou outbox foi implementado nesta etapa.
 
 #### Runtime e biblioteca candidatos
 
-Na verificação de 20/11/2026, não foi encontrada versão de Node declarada em
-`engines` nos manifests do projeto, `.nvmrc`, `.node-version` ou configuração
-de build/deploy consultada. O runtime efetivamente disponível nesta máquina é
-Node.js `v24.18.0` (npm `11.16.0`); isso não confirma qual runtime está
-implantado em produção. `backend/tsconfig.json` usa TypeScript `6.0.3`,
-`module` e `moduleResolution` `nodenext`, target `ES2023`; o
-`backend/package.json` não declara `"type": "module"`.
+Na verificação de 25/11/2026, o runtime disponível é Node.js `v24.21.0`
+(npm `11.19.0`). As dependências instaladas aceitam essa versão: Vite
+`8.2.4` e `@vitejs/plugin-react` `6.0.5` exigem `^20.19.0 || >=22.12.0`;
+Prisma e `@prisma/client` `7.10.1` exigem `^20.19 || ^22.12 || >=24.0`;
+NestJS Core `11.2.1` exige Node `>=20` e Nest CLI `12.0.13` exige `>=20.11`.
+Os arquivos `.nvmrc` fixam a major 24 nos diretórios-base do frontend e
+backend, sem escolher um patch específico. A plataforma ainda precisa honrar
+essa seleção. `backend/tsconfig.json` usa TypeScript `6.0.3`, `module` e
+`moduleResolution` `nodenext`, target `ES2023`; o `backend/package.json` não
+declara `"type": "module"`.
 
 `web-push` `4.0.0` é o candidato verificado no registry: declara Node.js
 `>=16` e é um pacote ESM. O runtime local supera o requisito de Node e Node

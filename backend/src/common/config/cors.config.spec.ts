@@ -16,6 +16,7 @@ describe('resolveAllowedOrigins', () => {
       'http://127.0.0.1:4173',
       'http://localhost:5173',
       'http://127.0.0.1:5173',
+      'http://192.168.1.7:5173',
       'http://localhost:5174',
       'http://localhost:5175',
     ]);
@@ -99,14 +100,26 @@ describe('resolveAllowedOrigins', () => {
     expect(
       resolveAllowedOrigins({
         NODE_ENV: 'development',
-        CORS_ALLOWED_ORIGINS: 'http://localhost:5173,http://127.0.0.1:4173',
+        CORS_ALLOWED_ORIGINS:
+          'http://localhost:5173,http://127.0.0.1:4173,http://192.168.1.7:5173',
       }),
-    ).toEqual(['http://localhost:5173', 'http://127.0.0.1:4173']);
+    ).toEqual([
+      'http://localhost:5173',
+      'http://127.0.0.1:4173',
+      'http://192.168.1.7:5173',
+    ]);
 
     expect(() =>
       resolveAllowedOrigins({
         NODE_ENV: 'development',
         CORS_ALLOWED_ORIGINS: 'http://frontend.invalid',
+      }),
+    ).toThrow('CORS_ALLOWED_ORIGINS');
+
+    expect(() =>
+      resolveAllowedOrigins({
+        NODE_ENV: 'development',
+        CORS_ALLOWED_ORIGINS: 'http://192.168.1.8:5173',
       }),
     ).toThrow('CORS_ALLOWED_ORIGINS');
   });
