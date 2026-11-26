@@ -169,6 +169,20 @@ uma operação separada, manual e sujeita a autorização explícita, revisão e
 procedimento de backup. A proteção atual em `prisma.config.ts` não deve ser
 contornada; não há comando de migration incluído no build ou no start.
 
+A primeira instalação do schema em produção possui um runner explícito e
+separado: `npm run db:production:first-install`, documentado em
+[PROCEDIMENTO-PRIMEIRA-INSTALACAO-PRODUCAO.md](./PROCEDIMENTO-PRIMEIRA-INSTALACAO-PRODUCAO.md).
+Ele não faz parte do build, start ou deploy automático, exige conexão direta
+PostgreSQL do Supabase e recusa Session Pooler, banco com histórico Prisma ou
+schema `public` não vazio. O destino é fixado no runner e a execução requer
+aprovação Ed25519 curta, de uso único, além de TLS com validação estrita do
+certificado e hostname. A aplicação e quaisquer outros escritores devem
+permanecer parados durante toda a operação; o advisory lock do runner não
+bloqueia outros clientes PostgreSQL. A configuração Prisma exige ainda uma
+prova efêmera de invocação criada após o preflight e consumida atomicamente,
+impedindo chamadas diretas ou reutilizadas do CLI sem passar pelo runner. A
+autorização assinada também é vinculada ao hostname do operador.
+
 `TRUST_PROXY` permanece desligado quando não configurado. `true` é rejeitado;
 quando a topologia final estiver definida, configure somente a quantidade de
 hops ou a lista de IPs/sub-redes confiáveis no formato Express. A quantidade ou

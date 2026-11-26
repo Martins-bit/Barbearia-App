@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "provider": "postgresql",
+  "migrations": [
+    {
+      "name": "20260817014109_initial_schema",
+      "sha256": "aa4f67c59a6b2b496b47b03e41e63bc143aacf42f0930b4de2e4f457264dacf4"
+    },
+    {
+      "name": "20260902000030_add_waitlist_barbeiro_fields",
+      "sha256": "1ecb9b2e539e2bd1a96d08c38f6503400d6415268c6e0f5137e8e3f2d541ab24"
+    },
+    {
+      "name": "20260905000000_add_waitlist_claim",
+      "sha256": "822cb78822e3788de8b3bbb2c94f7e2c619458196887ee1bde3f149beaf30c11"
+    },
+    {
+      "name": "20260905000001_add_notifications_claim_reference",
+      "sha256": "45d7c87fc876e3a5739408f873f54e801404133dda61463d89d0747dc951829f"
+    },
+    {
+      "name": "20260905000002_add_notifications_agendamento_reference",
+      "sha256": "c526449276cd3f283f849af618bca589e484c435740c9abd4bd2d719d1bf5c40"
+    },
+    {
+      "name": "20260906000000_add_messages_foundation",
+      "sha256": "0fc93880fa8c1c4280373ac597207073d530c7da880bfc36243bea89c4832861"
+    },
+    {
+      "name": "20260906000001_add_messages_conversation_indexes",
+      "sha256": "d58a8f605cb65b2454bd6a6385a3af9c02d65dd37fe1b2716c8c04bdda0ee041"
+    },
+    {
+      "name": "20261030000000_add_message_deletion_fields",
+      "sha256": "461c198e21161d2df81bd8924d3b9bcd6ca5ed3e07b9277788637328a2aba8ae"
+    },
+    {
+      "name": "20261030010000_add_notification_soft_delete",
+      "sha256": "27d047c65b2b55e73cea458b2cb54fdcdc7c523add9bbd384bf449da95886ee7"
+    },
+    {
+      "name": "20261105000000_waitlist_reoffer_outbox",
+      "sha256": "9d90b4a380a976a091d32b56ce88096931b033da7f6a9579d016783f2d476ff8"
+    },
+    {
+      "name": "20261106000000_waitlist_data_entrada_database_clock",
+      "sha256": "e8fb64de3353a8e489fa87896828a451f0bd90f1b153db4b99d03f1c2f843ee0"
+    },
+    {
+      "name": "20261106010000_add_email_verification_tokens",
+      "sha256": "65a2343d64479f4028bfac112ad7ce125fa7b278fbc2fc2e2caf4808e3bc8249"
+    },
+    {
+      "name": "20261106020000_add_password_reset",
+      "sha256": "0eba2b1f0c08d1c8cadc8203d025da481e02c0458be12fb58fa0663679165e37"
+    },
+    {
+      "name": "20261112000000_require_email_verification_on_registration",
+      "sha256": "97d8d9377a576044ab1571034bf8b52c14b123fae9c2f18371371d4db5fe2d68"
+    },
+    {
+      "name": "20261112010000_add_solicitacoes_titulares",
+      "sha256": "49e9addd3d0075b364109bf70f8d698fdedec6eeb5ffed6bdce2f24bc9731497"
+    },
+    {
+      "name": "20261120201700_add_push_subscriptions",
+      "sha256": "709fc47eb1ffc269dce73a38a441b2d78464b5eea6000df0ef6d4d7caa5d8e92"
+    },
+    {
+      "name": "20261121200700_add_admin_role",
+      "sha256": "4c59b20db9500e4fd774d2ad6ef44f33dcd475a4099de96cd5ad07d5640aa92f"
+    }
+  ]
+}

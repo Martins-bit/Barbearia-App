@@ -132,6 +132,15 @@ Para migrations E2E, use exclusivamente:
 npm run db:e2e:migrate
 ```
 
+A primeira instalação de produção é um fluxo diferente, não coberto pelos
+runners locais ou E2E. Não execute migrations de produção seguindo este
+documento: consulte
+[PROCEDIMENTO-PRIMEIRA-INSTALACAO-PRODUCAO.md](./PROCEDIMENTO-PRIMEIRA-INSTALACAO-PRODUCAO.md)
+e obtenha autorização operacional separada. O runner de produção exige uma
+conexão direta PostgreSQL do Supabase; o Session Pooler não é aceito. A
+aplicação e quaisquer outros escritores devem permanecer parados durante toda
+a operação; o advisory lock do runner não bloqueia outros clientes PostgreSQL.
+
 ## Procedimento recomendado antes de migrations
 
 1. Confirmar que a aplicacao esta parada.
