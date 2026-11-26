@@ -6,11 +6,13 @@ describe('parseTrustProxySetting', () => {
     expect(parseTrustProxySetting(undefined)).toBeUndefined();
   });
 
-  it('converte booleanos e quantidade de hops para os tipos do Express', () => {
-    expect(parseTrustProxySetting('true')).toBe(true);
+  it('desativa confiança booleana ampla e converte false e hops', () => {
     expect(parseTrustProxySetting('FALSE')).toBe(false);
     expect(parseTrustProxySetting('1')).toBe(1);
     expect(parseTrustProxySetting('0')).toBe(0);
+    expect(() => parseTrustProxySetting('true')).toThrow(
+      'TRUST_PROXY=true não é permitido',
+    );
   });
 
   it('aceita aliases, endereços e sub-redes reconhecidos pelo Express', () => {

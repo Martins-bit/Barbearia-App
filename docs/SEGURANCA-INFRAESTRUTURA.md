@@ -78,8 +78,10 @@ Variável: **`CORS_ALLOWED_ORIGINS`** (lista separada por vírgulas).
 - HTTP é permitido somente para hosts locais em desenvolvimento. Produção exige
   HTTPS. Valores vazios, wildcard, caminhos, parâmetros ou itens inválidos
   interrompem a inicialização.
-- O CORS REST permite `Content-Type`, `Authorization` e `Idempotency-Key`;
-  este último é usado pela criação de solicitações de titular.
+- O CORS REST permite os métodos `GET`, `POST`, `PATCH`, `PUT`, `DELETE` e
+  `OPTIONS`, e os cabeçalhos `Content-Type`, `Authorization` e
+  `Idempotency-Key`; este último é usado pela criação de solicitações de
+  titular.
 
 ### URL-base do frontend
 
@@ -88,7 +90,9 @@ REST e Socket.IO importam a mesma URL validada. Em desenvolvimento, sua ausênci
 usa `http://localhost:3000`; HTTP configurado só é aceito para hosts locais. Em
 produção, a variável é obrigatória e deve ser HTTPS. Informe somente a origem,
 sem credenciais, caminho, query, fragmento ou barra final; a normalização
-remove uma barra raiz opcional. Não use valores secretos nessa variável.
+remove uma barra raiz opcional. Se estiver ausente em produção, o módulo de API
+lança erro explícito indicando que a variável deve ser configurada no ambiente
+de build. Não use valores secretos nessa variável.
 
 ## 4. Rate limiting (somente rotas sensíveis)
 
@@ -218,17 +222,16 @@ processo.
 proxies desligada e não usa `X-Forwarded-For` para determinar `req.ip`.
 Quando definida, a configuração aceita:
 
-- `true` ou `false` (como texto), respeitando a semântica booleana do Express;
+- `false` (como texto), para manter a confiança desligada;
 - um inteiro decimal não negativo, convertido em número e interpretado como
   quantidade de hops;
 - uma lista separada por vírgulas de endereços IP, sub-redes CIDR (ou máscara
   IPv4) ou aliases reconhecidos pelo Express
   (`loopback`, `linklocal`, `uniquelocal`).
 
-Valores vazios, formatos inválidos e intervalos fora do limite são rejeitados
-com erro sem reproduzir o valor configurado. `true` confia em todos os hops e
-não deve ser usado se clientes puderem alcançar a origem sem passar pelo proxy
-confiável.
+`true` é rejeitado porque confia indiscriminadamente em todos os hops. Valores
+vazios, formatos inválidos e intervalos fora do limite também são rejeitados
+com erro sem reproduzir o valor configurado.
 
 **Não escolha o valor de produção antes de conhecer a hospedagem.** A topologia
 deve determinar se é apropriado configurar quantidade de hops ou endereços/

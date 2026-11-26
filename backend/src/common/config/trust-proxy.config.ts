@@ -1,6 +1,6 @@
 import { isIP } from 'node:net';
 
-export type TrustProxySetting = boolean | number | string[];
+export type TrustProxySetting = false | number | string[];
 
 const EXPRESS_PROXY_ALIASES = new Set([
   'loopback',
@@ -60,13 +60,17 @@ export function parseTrustProxySetting(
   const value = raw.trim();
   if (!value) {
     throw new Error(
-      'TRUST_PROXY está vazio. Remova a variável ou informe true, false, hops ou IPs confiáveis.',
+      'TRUST_PROXY está vazio. Remova a variável ou informe false, hops ou IPs confiáveis.',
     );
   }
 
   const normalized = value.toLowerCase();
-  if (normalized === 'true') return true;
   if (normalized === 'false') return false;
+  if (normalized === 'true') {
+    throw new Error(
+      'TRUST_PROXY=true não é permitido. Informe hops ou IPs/sub-redes confiáveis após confirmar a topologia.',
+    );
+  }
 
   if (/^\d+$/.test(value)) {
     const hops = Number(value);
@@ -79,7 +83,7 @@ export function parseTrustProxySetting(
   const ranges = value.split(',').map((range) => range.trim().toLowerCase());
   if (ranges.some((range) => !isValidProxyRange(range))) {
     throw new Error(
-      'TRUST_PROXY inválido. Use true, false, uma quantidade de hops ou IPs/sub-redes válidos separados por vírgula.',
+      'TRUST_PROXY inválido. Use false, uma quantidade de hops ou IPs/sub-redes válidos separados por vírgula.',
     );
   }
 

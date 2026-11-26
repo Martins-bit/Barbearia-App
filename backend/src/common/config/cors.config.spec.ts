@@ -84,6 +84,9 @@ describe('resolveAllowedOrigins', () => {
     'https://user:pass@api.invalid',
     'https://@api.invalid',
     'https://*.api.invalid',
+    'https://api.invalid:',
+    'https://api .invalid',
+    'https://api.invalid\t.evil',
     'http://api.invalid',
     'ftp://api.invalid',
     '*',
@@ -171,7 +174,12 @@ describe('buildCorsOptions', () => {
     const options = buildCorsOptions();
     expect(options.credentials).toBe(true);
     expect(options.methods).toContain('GET');
+    expect(options.methods).toContain('POST');
+    expect(options.methods).toContain('PATCH');
+    expect(options.methods).toContain('PUT');
+    expect(options.methods).toContain('DELETE');
     expect(options.methods).toContain('OPTIONS');
+    expect(options.allowedHeaders).toContain('Content-Type');
     expect(options.allowedHeaders).toContain('Authorization');
     expect(options.allowedHeaders).toContain('Idempotency-Key');
     // origin é uma lista (nunca "*").

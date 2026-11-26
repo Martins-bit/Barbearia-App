@@ -24,7 +24,9 @@ export function resolveApiBaseUrl(
   const candidate = configuredUrl?.trim()
   if (!candidate) {
     if (isProduction) {
-      throw new Error('VITE_API_URL é obrigatória em produção.')
+      throw new Error(
+        'VITE_API_URL é obrigatória em produção. Configure a origem HTTPS do backend no ambiente de build.',
+      )
     }
     return LOCAL_API_BASE_URL
   }

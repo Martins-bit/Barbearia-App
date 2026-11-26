@@ -31,6 +31,7 @@ function normalizeOrigin(value: string, isProduction: boolean): string | null {
   const candidate = value.trim();
   if (
     !candidate ||
+    /\s/.test(candidate) ||
     candidate.includes('*') ||
     candidate.includes('?') ||
     candidate.includes('#') ||
@@ -40,7 +41,9 @@ function normalizeOrigin(value: string, isProduction: boolean): string | null {
   }
 
   const authority = candidate.match(/^https?:\/\/([^/?#]*)\/?$/i)?.[1];
-  if (!authority || authority.includes('@')) return null;
+  if (!authority || authority.includes('@') || authority.endsWith(':')) {
+    return null;
+  }
 
   try {
     const url = new URL(candidate);

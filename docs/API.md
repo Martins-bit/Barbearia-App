@@ -1186,16 +1186,22 @@ Uma barra final e diferenças de caixa/porta padrão são normalizadas.
 
 O gateway também verifica o cabeçalho `Origin` no handshake, rejeitando
 requisições sem origem ou fora da allowlist. Essa verificação não substitui a
-autenticação: o JWT continua obrigatório e validado no handshake e durante a
-conexão.
+autenticação: a origem é comparada exatamente com a allowlist normalizada no
+handshake de polling e no upgrade WebSocket; o JWT continua obrigatório e
+validado no handshake e durante a conexão.
+
+No REST, o preflight CORS permite os métodos `GET`, `POST`, `PATCH`, `PUT`,
+`DELETE` e `OPTIONS`, além dos cabeçalhos `Content-Type`, `Authorization` e
+`Idempotency-Key`.
 
 O frontend usa `VITE_API_URL` como origem-base comum para REST e Socket.IO. Em
 desenvolvimento, a ausência da variável usa `http://localhost:3000`; em builds
-de produção, a variável é obrigatória e deve conter a origem HTTPS pública do
-backend, sem caminho, query ou fragmento. A publicação deve encaminhar as
-rotas REST na raiz e o transporte Socket.IO (`/socket.io`, namespace
-`/messages`) ao backend, sem o fallback SPA. Um prefixo externo da API precisa
-ser removido pelo proxy antes de chegar ao backend.
+de produção, a variável é obrigatória e deve conter a origem HTTPS do backend,
+sem caminho, query ou fragmento. Se estiver ausente, o módulo de API lança erro
+explícito solicitando a configuração no ambiente de build. A publicação deve
+encaminhar as rotas REST na raiz e o transporte Socket.IO (`/socket.io`,
+namespace `/messages`) ao backend, sem o fallback SPA. Um prefixo externo da
+API precisa ser removido pelo proxy antes de chegar ao backend.
 
 ---
 

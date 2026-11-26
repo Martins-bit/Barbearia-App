@@ -169,11 +169,11 @@ uma operação separada, manual e sujeita a autorização explícita, revisão e
 procedimento de backup. A proteção atual em `prisma.config.ts` não deve ser
 contornada; não há comando de migration incluído no build ou no start.
 
-`TRUST_PROXY` permanece desligado quando não configurado. Quando a topologia
-final estiver definida, pode representar booleano, número de hops ou lista de
-IPs/sub-redes confiáveis no formato Express. A quantidade ou a lista não deve
-ser presumida antes de conhecer os proxies e restringir o acesso direto à
-origem.
+`TRUST_PROXY` permanece desligado quando não configurado. `true` é rejeitado;
+quando a topologia final estiver definida, configure somente a quantidade de
+hops ou a lista de IPs/sub-redes confiáveis no formato Express. A quantidade ou
+a lista não deve ser presumida antes de conhecer os proxies e restringir o
+acesso direto à origem.
 
 Auditoria de dependências identificou um finding alto para `picomatch@4.0.5`,
 transitivo de Vite e da cadeia de build do PWA. No momento da auditoria, o
