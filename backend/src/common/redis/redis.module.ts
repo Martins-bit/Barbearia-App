@@ -12,6 +12,89 @@ import { createClient } from 'redis';
 import { REDIS_CLIENT } from './redis.tokens';
 import type { RedisClient } from './redis.tokens';
 
+interface RedisErrorDetails {
+  name: string;
+  code: string;
+  message: string;
+}
+
+function getRedisUrlSecrets(redisUrl: string): string[] {
+  const secrets = [redisUrl];
+  try {
+    const url = new URL(redisUrl);
+    secrets.push(
+      url.hostname,
+      url.port,
+      url.username,
+      url.password,
+      url.pathname === '/' ? '' : url.pathname,
+      url.search,
+      url.hash,
+    );
+    for (const [key, value] of url.searchParams) {
+      secrets.push(key, value);
+    }
+
+    for (const value of [...secrets]) {
+      if (!value) {
+        continue;
+      }
+      try {
+        secrets.push(decodeURIComponent(value));
+      } catch {
+        // Keep the encoded value when it is not valid percent-encoding.
+      }
+    }
+  } catch {
+    // The URL is validated before the client is created.
+  }
+  return secrets.filter(Boolean);
+}
+
+function getRedisErrorDetails(
+  error: unknown,
+  redisUrl: string,
+): RedisErrorDetails {
+  const isError = error instanceof Error;
+  const errorRecord =
+    typeof error === 'object' && error !== null ? error : undefined;
+  const rawName = isError ? error.name : 'UnknownError';
+  const rawCode =
+    errorRecord && 'code' in errorRecord && typeof errorRecord.code === 'string'
+      ? errorRecord.code
+      : 'unknown';
+  const rawMessage = isError ? error.message : 'Unknown Redis client error.';
+  const secrets = getRedisUrlSecrets(redisUrl);
+  const containsConnectionSecret = (value: string): boolean =>
+    secrets.some((secret) =>
+      value.toLowerCase().includes(secret.toLowerCase()),
+    );
+  const safeIdentifier = (value: string): string =>
+    /^[A-Za-z][A-Za-z0-9_.-]{0,80}$/.test(value) &&
+    !containsConnectionSecret(value)
+      ? value
+      : 'redacted';
+
+  const flattenedMessage = rawMessage.replace(/[\r\n\t]+/g, ' ').slice(0, 500);
+  const messageContainsCredentials =
+    /\b(password|passwd|token|secret|authorization|credential|username)\s*[:=]\s*\S+/i.test(
+      flattenedMessage,
+    );
+  const safeMessage =
+    containsConnectionSecret(flattenedMessage) || messageContainsCredentials
+      ? '[message omitted because it may contain connection credentials]'
+      : flattenedMessage.replace(
+          /\b[a-z][a-z\d+.-]*:\/\/[^\s"'<>]+/gi,
+          '[URL omitted]',
+        );
+
+  return {
+    name: safeIdentifier(rawName),
+    code: safeIdentifier(rawCode),
+    message: safeMessage,
+  };
+}
+
 function createRedisClient(configService: ConfigService): RedisClient {
   const redisUrl = configService.getOrThrow<string>('REDIS_URL').trim();
   let parsedUrl: URL;
@@ -50,20 +133,50 @@ class RedisClientLifecycle implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(REDIS_CLIENT)
     private readonly client: RedisClient,
+    private readonly configService: ConfigService,
   ) {}
 
   async onModuleInit(): Promise<void> {
-    this.client.on('error', () => {
-      this.logger.error('Redis indisponível para serviços compartilhados.');
+    const redisUrl = this.configService.getOrThrow<string>('REDIS_URL').trim();
+    let connecting = true;
+    let cleaningUp = false;
+    const loggedConnectionErrors = new Set<string>();
+    const logRedisError = (error: unknown, duringCleanup = false): void => {
+      if (cleaningUp && !duringCleanup) {
+        return;
+      }
+
+      const details = getRedisErrorDetails(error, redisUrl);
+      const fingerprint = JSON.stringify(details);
+      if (connecting) {
+        if (loggedConnectionErrors.has(fingerprint)) {
+          return;
+        }
+        loggedConnectionErrors.add(fingerprint);
+      }
+      this.logger.error(`Redis client error: ${JSON.stringify(details)}`);
+    };
+
+    this.client.on('error', (error) => {
+      logRedisError(error);
     });
 
     try {
       await this.client.connect();
-    } catch {
-      this.client.destroy();
-      this.logger.error('Não foi possível conectar ao Redis obrigatório.');
-      throw new Error('Redis obrigatório indisponível.');
+    } catch (error) {
+      logRedisError(error);
+      connecting = false;
+      cleaningUp = true;
+      if (this.client.isOpen) {
+        try {
+          this.client.destroy();
+        } catch (cleanupError) {
+          logRedisError(cleanupError, true);
+        }
+      }
+      throw new Error('Redis obrigatório indisponível.', { cause: error });
     }
+    connecting = false;
   }
 
   async onModuleDestroy(): Promise<void> {
