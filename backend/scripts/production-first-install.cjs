@@ -2,7 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync, spawnSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const { Client } = require('pg');
 
 const BACKEND_DIRECTORY = path.resolve(__dirname, '..');
@@ -28,6 +28,8 @@ const PRISMA_CONFIG_PATH = path.join(
   'prisma.production.config.ts',
 );
 const EXPECTED_MIGRATION_COUNT = 17;
+const SUPABASE_CA_SHA256 =
+  '807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa';
 const PRODUCTION_TARGET = Object.freeze({
   projectRef: 'stxaxuzkivatxurubeus',
   host: 'db.stxaxuzkivatxurubeus.supabase.co',
@@ -35,9 +37,11 @@ const PRODUCTION_TARGET = Object.freeze({
   schema: 'public',
   port: 5432,
 });
-const APPROVAL_AUDIENCE = 'barbearia-app:production-first-install';
+const SESSION_POOLER_HOST_ENV = 'PRODUCTION_SESSION_POOLER_HOST';
+const APPROVAL_AUDIENCE = 'barbearia-app:production-first-install:v3';
 const APPROVAL_MAX_LIFETIME_SECONDS = 300;
 const APPROVAL_CLOCK_SKEW_SECONDS = 30;
+const LOCK_HEARTBEAT_INTERVAL_MS = 5000;
 const APPROVAL_PUBLIC_KEY_ENV = 'PRODUCTION_MIGRATION_APPROVAL_PUBLIC_KEY';
 const APPROVAL_TOKEN_ENV = 'PRODUCTION_MIGRATION_APPROVAL_TOKEN';
 const ADVISORY_LOCK_KEY = [1111634258, 1179200083];
@@ -45,7 +49,10 @@ const APPROVAL_CLAIM_KEYS = [
   'version',
   'audience',
   'projectRef',
+  'connectionMode',
   'host',
+  'port',
+  'username',
   'database',
   'schema',
   'operatorHost',
@@ -54,6 +61,8 @@ const APPROVAL_CLAIM_KEYS = [
   'expiresAt',
   'backupVerified',
   'writersStopped',
+  'sessionPoolerValidated',
+  'sessionPoolerRiskAccepted',
 ];
 const windowsAclAppliedDirectories = new Set();
 
@@ -80,7 +89,10 @@ function serializeApprovalClaims(claims) {
     version: claims.version,
     audience: claims.audience,
     projectRef: claims.projectRef,
+    connectionMode: claims.connectionMode,
     host: claims.host,
+    port: claims.port,
+    username: claims.username,
     database: claims.database,
     schema: claims.schema,
     operatorHost: claims.operatorHost,
@@ -89,6 +101,8 @@ function serializeApprovalClaims(claims) {
     expiresAt: claims.expiresAt,
     backupVerified: claims.backupVerified,
     writersStopped: claims.writersStopped,
+    sessionPoolerValidated: claims.sessionPoolerValidated,
+    sessionPoolerRiskAccepted: claims.sessionPoolerRiskAccepted,
   });
 }
 
@@ -147,7 +161,11 @@ function parseApprovalPublicKey(value) {
   return publicKey;
 }
 
-function verifyApprovalToken(env, nowSeconds = Math.floor(Date.now() / 1000)) {
+function verifyApprovalToken(
+  env,
+  target,
+  nowSeconds = Math.floor(Date.now() / 1000),
+) {
   const publicKey = parseApprovalPublicKey(env[APPROVAL_PUBLIC_KEY_ENV]);
   const token = env[APPROVAL_TOKEN_ENV];
   if (typeof token !== 'string' || token.length === 0 || token.length > 8192) {
@@ -206,11 +224,23 @@ function verifyApprovalToken(env, nowSeconds = Math.floor(Date.now() / 1000)) {
     );
   }
 
+  const sessionPoolerDispositionValid =
+    target.connectionMode === 'session'
+      ? (claims.sessionPoolerValidated === true &&
+          claims.sessionPoolerRiskAccepted === false) ||
+        (claims.sessionPoolerValidated === false &&
+          claims.sessionPoolerRiskAccepted === true)
+      : claims.sessionPoolerValidated === false &&
+        claims.sessionPoolerRiskAccepted === false;
+
   if (
-    claims.version !== 1 ||
+    claims.version !== 3 ||
     claims.audience !== APPROVAL_AUDIENCE ||
     claims.projectRef !== PRODUCTION_TARGET.projectRef ||
-    claims.host !== PRODUCTION_TARGET.host ||
+    claims.connectionMode !== target.connectionMode ||
+    claims.host !== target.host ||
+    claims.port !== target.port ||
+    claims.username !== target.username ||
     claims.database !== PRODUCTION_TARGET.database ||
     claims.schema !== PRODUCTION_TARGET.schema ||
     claims.operatorHost !== os.hostname().toLowerCase() ||
@@ -224,7 +254,8 @@ function verifyApprovalToken(env, nowSeconds = Math.floor(Date.now() / 1000)) {
     claims.expiresAt <= claims.issuedAt ||
     claims.expiresAt - claims.issuedAt > APPROVAL_MAX_LIFETIME_SECONDS ||
     claims.backupVerified !== true ||
-    claims.writersStopped !== true
+    claims.writersStopped !== true ||
+    !sessionPoolerDispositionValid
   ) {
     throw blocked(
       'PRODUCTION_APPROVAL_INVALID',
@@ -277,16 +308,46 @@ function validateProductionTarget(env = process.env) {
   }
 
   const actualHost = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (actualHost.endsWith('.pooler.supabase.com')) {
-    throw blocked(
-      'SESSION_POOLER_NOT_ALLOWED',
-      'Migrations de primeira instalação exigem conexão direta; Session Pooler não é aceito.',
-    );
-  }
-  if (actualHost !== PRODUCTION_TARGET.host) {
+  let connectionMode;
+  let expectedHost;
+  let expectedUsername;
+  if (actualHost === PRODUCTION_TARGET.host) {
+    connectionMode = 'direct';
+    expectedHost = PRODUCTION_TARGET.host;
+    expectedUsername = 'postgres';
+  } else if (actualHost.endsWith('.pooler.supabase.com')) {
+    if (url.port === '6543') {
+      throw blocked(
+        'TRANSACTION_POOLER_NOT_ALLOWED',
+        'A primeira instalação aceita somente Session Pooler na porta 5432.',
+      );
+    }
+
+    const configuredPoolerHost = env[SESSION_POOLER_HOST_ENV];
+    if (
+      typeof configuredPoolerHost !== 'string' ||
+      !/^aws-\d+-[a-z0-9]+(?:-[a-z0-9]+)*\.pooler\.supabase\.com$/.test(
+        configuredPoolerHost,
+      )
+    ) {
+      throw blocked(
+        'SESSION_POOLER_HOST_REQUIRED',
+        'Configure o hostname exato do Session Pooler obtido no painel Supabase.',
+      );
+    }
+    if (actualHost !== configuredPoolerHost) {
+      throw blocked(
+        'PRODUCTION_TARGET_HOST_MISMATCH',
+        'O host não corresponde ao Session Pooler configurado para produção.',
+      );
+    }
+    connectionMode = 'session';
+    expectedHost = configuredPoolerHost;
+    expectedUsername = `postgres.${PRODUCTION_TARGET.projectRef}`;
+  } else {
     throw blocked(
       'PRODUCTION_TARGET_HOST_MISMATCH',
-      'O host da conexão não corresponde ao projeto de produção fixado no runner.',
+      'O host da conexão não corresponde a um endpoint de produção permitido.',
     );
   }
   if (
@@ -298,10 +359,10 @@ function validateProductionTarget(env = process.env) {
       'A porta ou o banco da conexão não corresponde ao destino autorizado.',
     );
   }
-  if (url.username !== 'postgres' || !url.password || url.hash) {
+  if (url.username !== expectedUsername || !url.password || url.hash) {
     throw blocked(
       'PRODUCTION_DATABASE_URL_INVALID',
-      'A conexão direta exige usuário postgres e credenciais válidas.',
+      'O usuário ou as credenciais não correspondem ao modo de conexão aprovado.',
     );
   }
 
@@ -322,12 +383,81 @@ function validateProductionTarget(env = process.env) {
   }
 
   return {
+    connectionMode,
     database: PRODUCTION_TARGET.database,
     databaseUrl: rawDatabaseUrl,
-    host: PRODUCTION_TARGET.host,
+    host: expectedHost,
     port: PRODUCTION_TARGET.port,
     projectRef: PRODUCTION_TARGET.projectRef,
     schema: PRODUCTION_TARGET.schema,
+    username: expectedUsername,
+  };
+}
+
+function validateSupabaseCa(env = process.env) {
+  const configuredPath = env.NODE_EXTRA_CA_CERTS;
+  if (
+    typeof configuredPath !== 'string' ||
+    configuredPath.trim() === '' ||
+    !path.isAbsolute(configuredPath)
+  ) {
+    throw blocked(
+      'SUPABASE_CA_PATH_REQUIRED',
+      'NODE_EXTRA_CA_CERTS deve apontar para o certificado oficial do Supabase.',
+    );
+  }
+
+  let certificatePath;
+  let certificatePem;
+  let certificate;
+  try {
+    const fileStat = fs.lstatSync(configuredPath);
+    if (!fileStat.isFile() || fileStat.isSymbolicLink()) {
+      throw new Error('The certificate path is not a regular file.');
+    }
+    certificatePath = fs.realpathSync(configuredPath);
+    certificatePem = fs.readFileSync(certificatePath, 'utf8');
+    const certificates = certificatePem.match(
+      /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g,
+    );
+    if (
+      !certificates ||
+      certificates.length !== 1 ||
+      certificatePem.trim() !== certificates[0]
+    ) {
+      throw new Error('Expected exactly one PEM certificate.');
+    }
+    certificate = new crypto.X509Certificate(certificates[0]);
+  } catch (error) {
+    throw blocked(
+      'SUPABASE_CA_INVALID',
+      'O certificado CA configurado está ausente, inválido ou inacessível.',
+      error,
+    );
+  }
+
+  const now = Date.now();
+  const validFrom = Date.parse(certificate.validFrom);
+  const validTo = Date.parse(certificate.validTo);
+  if (
+    certificate.ca !== true ||
+    certificate.fingerprint256.replaceAll(':', '').toLowerCase() !==
+      SUPABASE_CA_SHA256 ||
+    !Number.isFinite(validFrom) ||
+    !Number.isFinite(validTo) ||
+    validFrom > now ||
+    validTo <= now
+  ) {
+    throw blocked(
+      'SUPABASE_CA_UNTRUSTED',
+      'O certificado não corresponde à CA oficial do Supabase aprovada pelo runner.',
+    );
+  }
+
+  return {
+    path: certificatePath,
+    pem: certificatePem,
+    fingerprint256: certificate.fingerprint256,
   };
 }
 
@@ -335,9 +465,12 @@ function validateProductionEnvironment(
   env = process.env,
   nowSeconds = Math.floor(Date.now() / 1000),
 ) {
+  const target = validateProductionTarget(env);
+  const supabaseCa = validateSupabaseCa(env);
   return {
-    ...validateProductionTarget(env),
-    approval: verifyApprovalToken(env, nowSeconds),
+    ...target,
+    supabaseCa,
+    approval: verifyApprovalToken(env, target, nowSeconds),
   };
 }
 
@@ -743,6 +876,14 @@ function assertProductionConfigInvocation(
   consumeRunnerLaunchProof(env);
 }
 
+function migrationSqlChecksum(sql) {
+  const normalizedSql = Buffer.from(
+    sql.toString('latin1').replace(/\r\n/g, '\n'),
+    'latin1',
+  );
+  return crypto.createHash('sha256').update(normalizedSql).digest('hex');
+}
+
 function readAndVerifyMigrationManifest({
   migrationsDirectory = MIGRATIONS_DIRECTORY,
   manifestPath = MANIFEST_PATH,
@@ -847,8 +988,13 @@ function readAndVerifyMigrationManifest({
         error,
       );
     }
-    const checksum = crypto.createHash('sha256').update(sql).digest('hex');
-    if (checksum !== migration.sha256) {
+    // Keep exact-byte compatibility with existing manifest entries.
+    const rawChecksum = crypto.createHash('sha256').update(sql).digest('hex');
+    const canonicalChecksum = migrationSqlChecksum(sql);
+    if (
+      rawChecksum !== migration.sha256 &&
+      canonicalChecksum !== migration.sha256
+    ) {
       throw blocked(
         'MIGRATION_CHECKSUM_MISMATCH',
         'Um arquivo de migration difere do conteúdo revisado.',
@@ -860,12 +1006,19 @@ function readAndVerifyMigrationManifest({
 }
 
 function sanitizedDatabaseEnvironment(env, config, launchProof) {
+  const supabaseCa = validateSupabaseCa({
+    NODE_EXTRA_CA_CERTS: config.supabaseCa && config.supabaseCa.path,
+  });
   const childEnv = {
     NODE_ENV: 'production',
     DATABASE_URL: config.databaseUrl,
+    NODE_EXTRA_CA_CERTS: supabaseCa.path,
     ...launchProof,
     PATH: path.dirname(process.execPath),
   };
+  if (config.connectionMode === 'session') {
+    childEnv[SESSION_POOLER_HOST_ENV] = config.host;
+  }
   const runtimeVariables =
     process.platform === 'win32'
       ? ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE']
@@ -890,6 +1043,28 @@ function quoteIdentifier(identifier) {
 }
 
 async function assertDatabaseIdentityAndTls(client, config) {
+  const tlsSocket = client && client.connection && client.connection.stream;
+  const ssl = client && client.ssl;
+  const expectedCa = config && config.supabaseCa && config.supabaseCa.pem;
+  if (
+    !config ||
+    !expectedCa ||
+    !tlsSocket ||
+    tlsSocket.encrypted !== true ||
+    tlsSocket.authorized !== true ||
+    tlsSocket.authorizationError ||
+    client.host !== config.host ||
+    !ssl ||
+    ssl.ca !== expectedCa ||
+    ssl.rejectUnauthorized !== true ||
+    ssl.servername !== config.host
+  ) {
+    throw blocked(
+      'PRODUCTION_TLS_REQUIRED',
+      'A conexão PostgreSQL não confirmou TLS estrito no socket do cliente.',
+    );
+  }
+
   await client.query('SET search_path TO "public"');
   const identity = await client.query(
     'SELECT current_database() AS database, current_schema() AS schema',
@@ -905,16 +1080,6 @@ async function assertDatabaseIdentityAndTls(client, config) {
       'O banco ou schema efetivo não corresponde ao destino autorizado.',
     );
   }
-
-  const tls = await client.query(
-    'SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()',
-  );
-  if (!tls.rows || !tls.rows[0] || tls.rows[0].ssl !== true) {
-    throw blocked(
-      'PRODUCTION_TLS_REQUIRED',
-      'A conexão PostgreSQL não confirmou TLS.',
-    );
-  }
 }
 
 async function acquireFirstInstallLock(client) {
@@ -922,6 +1087,29 @@ async function acquireFirstInstallLock(client) {
     'SELECT pg_advisory_lock($1::integer, $2::integer)',
     ADVISORY_LOCK_KEY,
   );
+}
+
+async function assertFirstInstallLockHeld(client) {
+  const result = await client.query(
+    `SELECT EXISTS (
+       SELECT 1
+       FROM pg_locks
+       WHERE locktype = 'advisory'
+         AND pid = pg_backend_pid()
+         AND classid = $1::oid
+         AND objid = $2::oid
+         AND objsubid = 2
+         AND mode = 'ExclusiveLock'
+         AND granted
+     ) AS held`,
+    ADVISORY_LOCK_KEY,
+  );
+  if (!result.rows || !result.rows[0] || result.rows[0].held !== true) {
+    throw blocked(
+      'PRODUCTION_ADVISORY_LOCK_LOST',
+      'A sessão do runner não confirmou a posse contínua do advisory lock.',
+    );
+  }
 }
 
 async function assertTargetIsEmpty(client, schema) {
@@ -1008,11 +1196,6 @@ async function assertTargetIsEmpty(client, schema) {
            FROM pg_statistic_ext s
            JOIN pg_namespace n ON n.oid = s.stxnamespace
           WHERE n.nspname = $1
-         UNION ALL
-         SELECT d.oid
-           FROM pg_default_acl d
-           JOIN pg_namespace n ON n.oid = d.defaclnamespace
-          WHERE n.nspname = $1
        ) AS existing_objects`,
     [schema],
   );
@@ -1083,6 +1266,9 @@ function createPostgresClient(
   config,
   clientFactory = (options) => new Client(options),
 ) {
+  const supabaseCa = validateSupabaseCa({
+    NODE_EXTRA_CA_CERTS: config.supabaseCa && config.supabaseCa.path,
+  });
   const connectionUrl = new URL(config.databaseUrl);
   connectionUrl.searchParams.delete('schema');
   connectionUrl.searchParams.delete('sslmode');
@@ -1090,19 +1276,25 @@ function createPostgresClient(
   return clientFactory({
     connectionString: connectionUrl.toString(),
     ssl: {
+      ca: supabaseCa.pem,
       rejectUnauthorized: true,
       servername: config.host,
     },
     connectionTimeoutMillis: 10000,
+    query_timeout: LOCK_HEARTBEAT_INTERVAL_MS,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: LOCK_HEARTBEAT_INTERVAL_MS,
     application_name: 'barbearia-app-first-install',
   });
 }
 
-function makeChildInvocation(
+async function makeChildInvocation(
   config,
   env,
-  spawn = spawnSync,
+  lockClient,
+  spawnProcess = spawn,
   authorizationStateDirectory = defaultApprovalStateDirectory(),
+  lockHeartbeatIntervalMs = LOCK_HEARTBEAT_INTERVAL_MS,
 ) {
   if (!fs.existsSync(PRISMA_PATH) || !fs.existsSync(PRISMA_CONFIG_PATH)) {
     throw blocked(
@@ -1119,12 +1311,106 @@ function makeChildInvocation(
     '--config',
     PRISMA_CONFIG_PATH,
   ];
-  const result = spawn(process.execPath, args, {
-    cwd: BACKEND_DIRECTORY,
-    env: sanitizedDatabaseEnvironment(env, config, launchProof),
-    stdio: 'ignore',
-  });
+  let child;
+  try {
+    child = spawnProcess(process.execPath, args, {
+      cwd: BACKEND_DIRECTORY,
+      env: sanitizedDatabaseEnvironment(env, config, launchProof),
+      stdio: 'ignore',
+    });
+  } catch (error) {
+    throw blocked(
+      'PRISMA_START_FAILED',
+      'Não foi possível iniciar Prisma migrate deploy.',
+      error,
+    );
+  }
 
+  if (
+    !child ||
+    typeof child.once !== 'function' ||
+    typeof child.kill !== 'function'
+  ) {
+    throw blocked(
+      'PRISMA_START_FAILED',
+      'O processo Prisma não retornou um handle de subprocesso válido.',
+    );
+  }
+
+  let childClosed = false;
+  let lockError;
+  let heartbeatRunning = false;
+  let heartbeatPromise = Promise.resolve();
+  let terminationTimer;
+  const completion = new Promise((resolve) => {
+    child.once('error', (error) => {
+      childClosed = true;
+      resolve({ error });
+    });
+    child.once('close', (status, signal) => {
+      childClosed = true;
+      resolve({ status, signal });
+    });
+  });
+  const stopChild = () => {
+    if (childClosed) {
+      return;
+    }
+    try {
+      if (!child.kill('SIGTERM')) {
+        child.kill('SIGKILL');
+      } else {
+        terminationTimer = setTimeout(() => {
+          if (!childClosed) {
+            try {
+              child.kill('SIGKILL');
+            } catch {
+              // The operation remains failed closed if termination is unavailable.
+            }
+          }
+        }, 5000);
+      }
+    } catch {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // The operation remains failed closed if termination is unavailable.
+      }
+    }
+  };
+  const heartbeat = setInterval(() => {
+    if (childClosed || heartbeatRunning || lockError) {
+      return;
+    }
+    heartbeatRunning = true;
+    heartbeatPromise = assertFirstInstallLockHeld(lockClient)
+      .catch(() => {
+        lockError = blocked(
+          'PRODUCTION_ADVISORY_LOCK_LOST',
+          'A sessão do runner perdeu a comprovação do advisory lock; Prisma será interrompido.',
+        );
+        stopChild();
+      })
+      .finally(() => {
+        heartbeatRunning = false;
+      });
+  }, lockHeartbeatIntervalMs);
+
+  let result;
+  try {
+    result = await completion;
+  } finally {
+    childClosed = true;
+    clearInterval(heartbeat);
+    if (terminationTimer) {
+      clearTimeout(terminationTimer);
+    }
+    await heartbeatPromise;
+  }
+
+  if (lockError) {
+    throw lockError;
+  }
   if (result.error) {
     throw blocked(
       'PRISMA_START_FAILED',
@@ -1148,8 +1434,9 @@ async function runProductionFirstInstall({
   env = process.env,
   argv = [],
   clientFactory,
-  spawn = spawnSync,
+  spawnProcess = spawn,
   authorizationStateDirectory,
+  lockHeartbeatIntervalMs = LOCK_HEARTBEAT_INTERVAL_MS,
   log = (message) => process.stdout.write(`${message}\n`),
 } = {}) {
   if (argv.length > 0) {
@@ -1178,12 +1465,21 @@ async function runProductionFirstInstall({
     await assertDatabaseIdentityAndTls(client, config);
     await acquireFirstInstallLock(client);
     lockAcquired = true;
+    await assertFirstInstallLockHeld(client);
     await assertTargetIsEmpty(client, config.schema);
     log('Preflight de primeira instalação concluído.');
 
     log('Iniciando Prisma migrate deploy.');
-    makeChildInvocation(config, env, spawn, safeAuthorizationStateDirectory);
+    await makeChildInvocation(
+      config,
+      env,
+      client,
+      spawnProcess,
+      safeAuthorizationStateDirectory,
+      lockHeartbeatIntervalMs,
+    );
     log('Prisma migrate deploy concluído.');
+    await assertFirstInstallLockHeld(client);
     await assertMigrationHistoryAndEmptyTables(
       client,
       migrations,
@@ -1262,7 +1558,9 @@ module.exports = {
   assertProductionConfigInvocation,
   assertTargetIsEmpty,
   consumeAuthorizationOnce,
+  createRunnerLaunchProof,
   createPostgresClient,
+  migrationSqlChecksum,
   readAndVerifyMigrationManifest,
   runProductionFirstInstall,
   safeDiagnosticCode,

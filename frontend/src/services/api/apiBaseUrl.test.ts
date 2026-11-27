@@ -49,6 +49,27 @@ describe('resolveApiBaseUrl', () => {
     )
   })
 
+  it('accepts app.localhost HTTP in development', () => {
+    assert.equal(
+      resolveApiBaseUrl('http://app.localhost:3000', false),
+      'http://app.localhost:3000',
+    )
+  })
+
+  it('accepts IPv6 loopback HTTP in development', () => {
+    assert.equal(
+      resolveApiBaseUrl('http://[::1]:3000', false),
+      'http://[::1]:3000',
+    )
+  })
+
+  it('accepts 192.168.1.11 HTTP in development', () => {
+    assert.equal(
+      resolveApiBaseUrl('http://192.168.1.11:3000', false),
+      'http://192.168.1.11:3000',
+    )
+  })
+
   for (const value of [
     'not-a-url',
     'ftp://api.invalid',

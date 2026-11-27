@@ -1238,6 +1238,58 @@ describe('UsersService', () => {
     ).rejects.toThrow('Este e-mail já está em uso por outra conta.');
   });
 
+  it('should create a CLIENTE user with its customer profile atomically', async () => {
+    prisma.usuario.create.mockResolvedValue({
+      id: 1,
+      nome: 'João',
+      telefone: '11999999999',
+      email: 'joao@example.com',
+      tipoUsuario: 'CLIENTE',
+      ativo: true,
+      dataCriacao: new Date(),
+      dataAtualizacao: new Date(),
+    });
+
+    await expect(
+      service.createUser({
+        nome: 'João',
+        telefone: '11999999999',
+        email: 'joao@example.com',
+        senhaHash: 'hash',
+        tipoUsuario: 'CLIENTE',
+        requireEmailVerification: true,
+      }),
+    ).resolves.toMatchObject({
+      id: 1,
+      tipoUsuario: 'CLIENTE',
+      ativo: true,
+    });
+    expect(prisma.usuario.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        tipoUsuario: 'CLIENTE',
+        emailConfirmacaoObrigatoria: true,
+        ativo: true,
+        cliente: { create: {} },
+      }),
+      select: expect.any(Object),
+    });
+  });
+
+  it('should reject a generic BARBEIRO creation before calling Prisma', async () => {
+    await expect(
+      service.createUser({
+        nome: 'Barbeiro',
+        telefone: '11999999998',
+        email: 'barbeiro@example.com',
+        senhaHash: 'hash',
+        tipoUsuario: 'BARBEIRO',
+      } as any),
+    ).rejects.toThrow(
+      'A criação genérica aceita apenas usuários do tipo CLIENTE.',
+    );
+    expect(prisma.usuario.create).not.toHaveBeenCalled();
+  });
+
   it('should fail closed when multiple accounts match the normalized e-mail', async () => {
     prisma.usuario.findMany.mockResolvedValue([
       { id: 3, email: 'Ana@Email.com', tipoUsuario: 'CLIENTE' },

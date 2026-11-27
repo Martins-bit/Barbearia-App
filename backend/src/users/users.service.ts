@@ -1307,33 +1307,17 @@ export class UsersService {
     nome: string;
     telefone: string;
     senhaHash: string;
-    tipoUsuario: 'CLIENTE' | 'BARBEIRO';
+    tipoUsuario: 'CLIENTE';
     email?: string | null;
     requireEmailVerification?: boolean;
   }) {
+    if (!data || data.tipoUsuario !== 'CLIENTE') {
+      throw new BadRequestException(
+        'A criação genérica aceita apenas usuários do tipo CLIENTE.',
+      );
+    }
+
     try {
-      // Para clients, criar usuário + cliente atomicamente
-      if (data.tipoUsuario === 'CLIENTE') {
-        const usuario = await this.prisma.usuario.create({
-          data: {
-            nome: data.nome,
-            telefone: data.telefone,
-            senhaHash: data.senhaHash,
-            tipoUsuario: data.tipoUsuario,
-            email: data.email || null,
-            emailConfirmacaoObrigatoria: data.requireEmailVerification ?? false,
-            ativo: true,
-            cliente: {
-              create: {},
-            },
-          },
-          select: this.publicUserSelect,
-        });
-
-        return this.sanitizeUser(usuario) as UserResponseDto;
-      }
-
-      // Para barbeiros ou outros tipos, criar apenas usuario
       const usuario = await this.prisma.usuario.create({
         data: {
           nome: data.nome,
@@ -1343,6 +1327,9 @@ export class UsersService {
           email: data.email || null,
           emailConfirmacaoObrigatoria: data.requireEmailVerification ?? false,
           ativo: true,
+          cliente: {
+            create: {},
+          },
         },
         select: this.publicUserSelect,
       });
